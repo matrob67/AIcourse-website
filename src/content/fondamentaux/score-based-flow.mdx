@@ -1,0 +1,155 @@
+---
+title: "Score-based generative models et flow matching"
+description: "Comment les modèles génératifs apprennent à transformer du bruit en données réelles : du score matching au flow matching."
+---
+
+## Une histoire : trouver votre chemin dans le brouillard
+
+Imaginez-vous égaré dans un brouillard épais. Vous ne voyez rien à plus de 3 mètres. Mais quelqu'un en haut d'une tour vous crie, chaque seconde : "Va plus à gauche ! Maintenant monte un peu ! Tourne à droite !" En suivant ces indications de direction, vous finissez par sortir du brouillard et atteindre la sortie du labyrinthe.
+
+C'est **exactement** ce que les modèles génératifs basés sur le **score** font avec les données. Sauf qu'au lieu d'un labyrinthe, c'est un espace complexe à très haute dimension, et au lieu d'une personne, c'est un réseau de neurones entraîné qui crie les directions.
+
+Le **score**, c'est ce cri : une flèche pointant vers où les vraies données sont plus denses. Mathématiquement, c'est le gradient (la pente) de la densité de probabilité :
+
+```
+score(x) = gradient log p(x)
+```
+
+Traduction : "Dans quel sens la densité de vraies données augmente-t-elle le plus ?"
+
+<Callout type="info" title="Pourquoi le score et pas directement la densité ?">
+Modéliser la densité p(x) en direct est un cauchemar mathématique : il faut calculer une constante magique de normalisation. Le score l'élimine naturellement, c'est pour ça que c'est si puissant pour la génération. C'est comme demander "quelle direction ?" au lieu de "quelle est la probabilité exacte ?". Beaucoup plus facile.
+</Callout>
+
+
+
+## Score matching : apprendre en voyant des photos floues
+
+L'idée est rusée : entraîner le réseau non pas directement sur des images claires, mais sur des versions **bruitées** à différents niveaux de flou.
+
+Prenez une belle photo (donnée réelle). Maintenant, ajoutez du bruit aléatoire. Légèrement. Puis beaucoup. Puis énormément. Vous obtenez des images de plus en plus floues.
+
+Pour chaque image floue, le **score** (la direction à suivre) est facile à calculer : c'est simplement "combien de pixels faudrait-il décaler pour revenir à l'image originale ?" Divisé par la quantité de bruit.
+
+Maintenant : entraînez le réseau sur tous ces cas flous. "Voici une image floue. Dis-moi dans quelle direction bouger les pixels pour la rendre moins floue."
+
+```
+1. Bruiter les donnees: image_floue = image_claire + bruit
+2. Le score est simple: score = -(image_floue - image_claire) / variance_du_bruit
+3. Entraîner le reseau: Loss = Erreur(prediction_du_reseau - score_reel)
+```
+
+L'astuce : le réseau apprend à **enlever du bruit** sans jamais voir une image totalement claire. Juste le pattern de "quelle direction nettoyer".
+
+<Callout type="tip" title="Multi-échelle : du brouillard au détail">
+Les vraies données ne sont jamais uniformément distribuées. Avec peu de bruit, le réseau apprend les détails fins (yeux dans une image). Avec beaucoup de bruit, il apprend les formes globales (c'est un visage ?). Le réseau apprend les deux simultanément.
+</Callout>
+
+## La génération : suivre la flèche du brouillard jusqu'à la clarté
+
+Après l'entraînement, comment générer une image ? Simples étapes :
+
+1. Commencez avec du **bruit pur** (une image aléatoire, un chaos blanc)
+2. À chaque pas, demandez au réseau : "Vers où je vais pour me rapprocher des vraies données ?"
+3. Bougez un petit peu dans cette direction
+4. Ajoutez un tout petit bruit aléatoire pour l'exploration
+5. Répétez des centaines de fois
+
+```
+image_nouvelle = image_ancienne + (petit_pas / 2) * score(image_ancienne) + bruit_alea
+```
+
+C'est comme marcher dans le brouillard en demandant la direction à chaque pas. Vous n'allez jamais en ligne droite, mais finalement, vous émergerez vers une vraie donnée.
+
+En pratique, pour les images (qui ont 3 millions de pixels), on commence avec **beaucoup** de bruit et on le **réduit progressivement** (comme décongeler doucement un cristal). D'abord, le réseau apprend les formes brutes. Puis, les détails. Puis, les textures.
+
+
+## Coin technique : les équations différentielles stochastiques (SDE)
+
+En 2021, Song et al. ont découvert quelque chose de fascinant : **tous** les modèles génératifs (DDPM, score matching, diffusion) sont des cas spéciaux d'un même cadre mathématique : les **équations différentielles stochastiques**.
+
+En français simple : comment transformer progressivement une chose en une autre en ajoutant/retirant du bruit ?
+
+```
+En avant (ajouter du bruit):  dx = drift(x, t) dt + variance(t) bruit_aleatoire
+En arrière (enlever du bruit): dx = [drift - variance^2 * score] dt + variance inverse_bruit
+```
+
+Rien que pour fun, voici ce que cela signifie : vous avez des **mouvements déterministes** (drift) + du **hasard** (le bruit aléatoire). En avant : vous partez d'une donnée réelle et ajoutez du bruit. En arrière : vous partez du bruit pur et enlevez le bruit en utilisant le score que vous avez appris.
+
+C'est magnifique parce que cela montre que **tous les modèles génératifs qu'on a inventés sont en réalité la même chose, juste des implémentations différentes**.
+
+<Callout type="paper" title="Song et al. 2021 - Generative Modeling by Estimating Gradients of the Data Distribution">
+Un papier révolutionnaire qui a unifié le domaine. Avant : les gens pensaient que DDPM, score matching et diffusion étaient des approches différentes. Après : on comprend qu'elles sont des variantes d'un même concept mathématique. Puissant.
+</Callout>
+
+## Flow matching : l'approche moderne et simple
+
+Après les SDE complexes, une idée plus simple a émergé : **oubliez les équations stochastiques, pensez juste à des trajets directs**.
+
+L'idée : prenez du bruit. Prenez une vraie donnée. Maintenant, imaginez une ligne droite les reliant. Demandez au réseau : "A chaque point sur cette ligne, quel est le vecteur de vitesse pour aller vers la donnée réelle ?"
+
+```
+trajectoire_interpolee = (1-t) * bruit_pur + t * donnee_reelle
+vitesse = donnee_reelle - bruit_pur
+
+L = Erreur(reseau_dit_vitesse - vraie_vitesse)
+```
+
+Incroyablement simple. Pas de bruit, pas de schedules complexes. Juste : "prédis la direction du déplacement".
+
+Les résultats ? **Excellents**. Stable Diffusion 3, les modèles génératifs modernes l'utilisent. Pourquoi ? Parce que :
+
+1. **Simple à implémenter** (10 lignes de code)
+2. **Facile à entraîner** (pas de hyperparamètres délicats)
+3. **Converge rapidement** (génération en 10-100 étapes au lieu de 1000)
+
+<Callout type="tip" title="La beauté du flow matching">
+C'est le type d'idée qu'on regarde après et on dit "pourquoi personne n'y avait pensé avant ?" Un réseau appprend une flèche de direction constante sur chaque trajet. C'est tout. Pas de bruit stochastique, pas de variance décroissante. Juste de la géométrie.
+</Callout>
+
+## Rectified flows : les trajets les plus courts possibles
+
+Voici un question : plutôt que des trajets courbes et sinueux du bruit à la donnée, qu'est-ce qu'on pourrait avoir des trajets **parfaitement droits** ?
+
+Si les trajets sont droits, vous pourriez générer en une seule étape. Un simple pas géant dans la bonne direction. Au lieu de 100 étapes, une seule. **100 fois plus rapide**.
+
+**Rectified flows** : il y a une astuce itérative pour redresser les trajets :
+
+```
+Iteration 1: Entraîner flow matching normal
+Iteration 2: Generer beaucoup de trajets avec ce modele
+Iteration 3: Les analyser - remarquer qu'ils sont courbes
+Iteration 4: Re-entraîner sur ces trajets pour les rendre droits
+Iteration 5: Recommencer - les trajets deviennent plus droits à chaque fois
+```
+
+Résultat après quelques itérations : **génération en une seule étape**. Vous partez du pur bruit, vous faites un énorme pas dans la direction que le réseau a apprise, et vous avez une image photorealiste. Une étape. Révolutionnaire.
+
+C'est l'avenir des modèles génératifs.
+
+## Comparaison pratique
+
+| Approche | Entraînement | Inférence | Qualité |
+|----------|-------------|-----------|---------|
+| DDPM | Simple, stable | Lent (1000 étapes) | Excellente |
+| Score SDE | Théorique riche | Flexible (10-1000 étapes) | Excellente |
+| Flow matching | Très simple | Rapide (10-100 étapes) | Excellente |
+| Rectified flows | Simple + rectification | Ultra-rapide (1-10 étapes) | Très bonne |
+
+<Callout type="info" title="Le consensus de 2025-2026">
+Le flow matching a gagné. Stable Diffusion 3 et les nouveaux modèles génératifs utilisent flow matching. C'est le cadre que vous verrez partout : simple, efficace, théoriquement propre. Les SDE et DDPM restent importants pour comprendre l'histoire, mais flow matching est la pratique d'aujourd'hui.
+</Callout>
+
+## Pourquoi c'est important
+
+Les modèles génératifs sont en train de révolutionner l'IA. Dall-E, Midjourney, Stable Diffusion : tous basés sur ces idées. Comprendre comment transformer du bruit en images réalistes, c'est comprendre comment fonctionne l'IA générative moderne.
+
+## Les points clés à retenir
+
+1. **Le score** = la direction vers les vraies données (gradient de la densité)
+2. **Score matching** = entraîner sur des images bruitées pour apprendre à nettoyer
+3. **Langevin dynamics** = suivre la direction du score itérativement pour générer
+4. **SDE** = le cadre mathématique qui unifie tous les modèles génératifs
+5. **Flow matching** = le mélange gagnant de simplicité + efficacité
+6. **Rectified flows** = les trajectoires super droites pour génération ultra-rapide en 1-10 étapes

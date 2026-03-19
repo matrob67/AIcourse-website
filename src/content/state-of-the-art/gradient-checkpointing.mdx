@@ -1,0 +1,123 @@
+---
+title: "Gradient Checkpointing"
+description: "Analyse du gradient checkpointing (activation checkpointing), technique de compromis mémoire-calcul qui réduit la mémoire des activations en les recalculant lors du backward pass."
+---
+
+## Le problème : les activations explosent ta mémoire GPU
+
+Pendant le backward pass, tu as besoin des activations du forward. Par exemple, pour une couche linéaire y = Wx + b, calculer dL/dW = (dL/dy) × x^T nécessite x (l'activation d'entrée).
+
+Avec un modèle de 7B en BF16, une séquence de 4K tokens, batch=1 : tes activations intermédiaires occupent **30-60 GB**. Tes paramètres ? 14 GB. Les activations sont souvent plus grandes que le modèle lui-même.
+
+Et tu dois les garder en mémoire du forward jusqu'à la fin du backward. C'est impossible à cause de la mémoire GPU.
+
+## La solution élégante : checkpointing
+
+Au lieu de stocker **toutes** les activations, tu ne stocks que quelques checkpoints. Lors du backward, tu recalcules les activations manquantes à partir du checkpoint le plus proche.
+
+C'est un compromis : un peu plus de calcul, beaucoup moins de mémoire.
+
+### Illustration du compromis
+
+Sans checkpointing (N couches) :
+- Mémoire : O(N)
+- Calcul : 1x forward
+
+Avec checkpointing tous les sqrt(N) couches :
+- Mémoire : O(sqrt(N))
+- Calcul : 1x forward + ~33% recalcul
+
+Pour N=96 couches (LLaMA 7B) :
+- Sans : garder 96 activations, 0% recalcul
+- Avec : garder ~10 checkpoints, ~33% recalcul
+
+Ça réduit la mémoire d'un facteur **sqrt(N) ≈ 10x** pour seulement +33% de calcul.
+
+<Callout type="paper" title="Mathématiquement optimal">
+Le checkpointing tous les sqrt(N) couches est provablement optimal pour le compromis mémoire-calcul. C'est rare en machine learning d'avoir une solution mathématiquement élégante comme celle-là.
+</Callout>
+
+
+
+## En pratique : checkpointing par bloc Transformer
+
+Au lieu de checkpointer individuellement, tu checkpointes par bloc Transformer (attention + MLP + normalisations).
+
+Pour chaque bloc Transformer :
+1. Forward : stocke seulement l'entrée du bloc [batch, séquence, dim]
+2. Backward : recalcule les activations internes du bloc
+3. Mémoire réduite : seulement l'entrée au lieu de toutes les activations internes
+
+Ça combine la simplicité et l'efficacité.
+
+## Checkpointing sélectif : cible les gros consommateurs
+
+Au lieu de tout checkpointer, tu peux cibler les opérations coûteuses :
+
+- **Checkpoint l'attention** : la matrice attention est énorme (L × L)
+- **Garde le MLP** : les activations du MLP sont plus petites à stocker
+
+Résultat : ~40% de réduction mémoire avec seulement ~15-20% de recalcul (vs 33%).
+
+<Callout type="tip" title="Flash Attention change la donne">
+Flash Attention ne matérialise jamais la matrice attention L×L. Il la recalcule bloc par bloc pendant le backward. Combiné avec le checkpointing par bloc Transformer, ça élimine le problème des activations attention. Avec Flash Attention + checkpointing, tu peux souvent entraîner des séquences très longues.
+</Callout>
+
+## Implémentation PyTorch
+
+PyTorch fournit `torch.utils.checkpoint.checkpoint()` qui fait ça automatiquement :
+
+```python
+def forward(self, x):
+    for block in self.transformer_blocks:
+        x = torch.utils.checkpoint.checkpoint(block, x)
+    return x
+```
+
+Le framework gère le stockage/recalcul automatiquement.
+
+## Quand l'activer ? (Important !)
+
+Le checkpointing n'est **pas** toujours bénéfique :
+
+- **Petit modèle / batch petit** : tu as assez de mémoire sans checkpointing. Le recalcul ralentit juste l'entraînement.
+- **Grande mémoire GPU** : pareil.
+- **Modèle énorme / batch énorme** : c'est là que checkpointing brille.
+
+<Callout type="warning" title="Évite le checkpointing si tu n'en as pas besoin">
+Mesure. Si ton GPU a assez de mémoire sans checkpointing, n'active pas. Si tu dois augmenter le batch ou la séquence, alors active. C'est un hyperparamètre comme un autre.
+</Callout>
+
+## Impact réel sur la vitesse
+
+| Stratégie | Mémoire activations | Surcoût calcul | Throughput perte |
+|-----------|-------------------|----------------|-----------------|
+| Pas de checkpointing | 100% | 0% | 0% |
+| Checkpointing complet | 15% | ~33% | ~10-25% |
+| Checkpointing sélectif | 40-50% | ~15-20% | ~5-10% |
+
+**Key insight** : le surcoût calcul de 33% se traduit souvent par seulement 10-25% de perte de throughput parce que le GPU était partiellement inactif pendant les communications. Tu gagnes du calcul utile sans perdre beaucoup en vitesse.
+
+## Combinaisons gagnantes
+
+### Checkpointing + FSDP/ZeRO
+
+Standard pour les grands modèles. FSDP/ZeRO réduit la mémoire des paramètres, checkpointing réduit la mémoire des activations. Ensemble : réductions multiplicatives.
+
+### Checkpointing + TP
+
+Avec Tensor Parallelism, le checkpointing réduit les activations sur chaque GPU, ce qui te permet d'augmenter le batch ou la séquence.
+
+## Techniques avancées
+
+### Couches réversibles
+
+Certaines architectures (Reformer, RevNet) permettent de recalculer les activations du forward à partir des activations du backward sans les stocker du tout. C'est checkpointing pris à l'extrême.
+
+### Checkpointing adaptatif
+
+Des techniques récentes ajustent dynamiquement le nombre de checkpoints en fonction de la mémoire disponible. Tu dis "cible 8 GB de mémoire activations" et le framework choisit le taux de checkpointing.
+
+## Résumé
+
+Le gradient checkpointing est activé par défaut dans 99% des entraînements de LLM. C'est indispensable pour maintenir des batch sizes et séquences raisonnables. Le surcoût de calcul (20-33%) est accepté universellement. C'est une des techniques les plus puissantes et les plus simples pour économiser la mémoire GPU.

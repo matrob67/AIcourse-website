@@ -1,0 +1,133 @@
+---
+title: "Pixtral : le multimodal de Mistral"
+description: "Pixtral est la famille de modèles vision-langage de Mistral AI, offrant une architecture native multimodale avec un encodeur visuel entraîné from scratch."
+---
+
+
+
+## L'approche de Mistral : construire le multimodal de zéro
+
+Beaucoup de VLM réutilisent des encodeurs visuels existants (CLIP, par exemple). Mistral a dit : **et si on entraînait notre propre encodeur visuel dès le départ, spécifiquement optimisé pour travailler avec nos modèles de langage ?** C'est plus de travail, mais ça donne une meilleure intégration.
+
+<Callout type="info" title="La philosophie Pixtral">
+Pixtral adopte une approche véritablement native : l'encodeur visuel est conçu et entraîné conjointement avec le modèle de langage, plutôt que "bolted-on" à côté. Comme une maison où la plomberie et l'électricité sont conçues ensemble, plutôt que juste l'électricité ajoutée à une maison pré-construite.
+</Callout>
+
+## Architecture : les détails
+
+### Pixtral 12B
+
+La version "standard" de Pixtral :
+
+- **Vision Encoder** : ViT avec 400 millions de paramètres, entraîné from scratch
+- **LLM** : Mistral NeMo 12B (le modèle de langage de base de Mistral)
+- **Résolution** : variables (pas de taille fixe unique)
+- **Contexte** : jusqu'à 128K tokens (incluant les tokens visuels)
+- **Licence** : Apache 2.0 (complètement open-source)
+
+### Pixtral Large
+
+Version plus puissante, basée sur Mistral Large :
+
+- **Vision Encoder** : ViT amélioré
+- **LLM** : Mistral Large avec 123 milliards de paramètres
+- **Performances** : compétitif avec GPT-4o et Claude 3.5 Sonnet sur les benchmarks
+
+### Gestion intelligente de la résolution variable
+
+C'est une grosse différence avec beaucoup d'autres VLM. Pixtral gère nativement des images de **taille et ratio d'aspect arbitraires** :
+
+- L'image est découpée en patches de taille fixe
+- Le nombre de patches varie selon la résolution
+- Des tokens spéciaux indiquent la structure 2D (fin de ligne, etc.)
+- Pas de redimensionnement forcé, pas de padding
+
+<Callout type="tip" title="Pourquoi la résolution variable c'est bien">
+Pour un document A4 vertical vs une image panoramique, Pixtral traite chacune dans son format natif sans déformation. Cela améliore drastiquement la qualité de l'OCR (reconnaissance de texte) et de la compréhension de mise en page. Les documents ne sont pas écrasés ou étirés.
+</Callout>
+
+## Performances : comment ça se compare
+
+### Sur les benchmarks standards
+
+| Benchmark | Pixtral 12B | Pixtral Large | GPT-4o |
+|---|---|---|---|
+| MMMU | 52.5% | 69.4% | 69.1% |
+| MathVista | 58.0% | 69.2% | 63.8% |
+| DocVQA | 90.7% | 93.3% | 92.8% |
+| ChartQA | 81.8% | 87.2% | 85.7% |
+
+<Callout type="paper" title="Pixtral 12B : petit mais puissant">
+Pixtral 12B, avec seulement 12 milliards de paramètres (100× plus petit que Pixtral Large), atteint des performances qui rivalisent avec des modèles beaucoup plus grands sur les tâches de compréhension de documents. C'est un excellent compromis coût/performance pour la production.
+</Callout>
+
+## Ce que Pixtral sait faire
+
+### Compréhension de documents
+
+- OCR de très haute qualité
+- Compréhension de tableaux et formulaires
+- Analyse de graphiques et diagrammes
+- Extraction structurée d'informations (lire une facture et en extraire l'adresse, le montant, etc.)
+
+### Multi-images
+
+Pixtral peut traiter **plusieurs images** dans une seule requête, permettant de les comparer, analyser leurs différences, et raisonner sur plusieurs documents.
+
+### Texte et images entrelacés
+
+Le modèle gère nativement les prompts avec du texte et des images mélangés, ce qui est naturel pour l'analyse de documents complexes.
+
+## Comment l'utiliser
+
+### Via l'API Mistral
+
+```python
+from mistralai import Mistral
+
+client = Mistral(api_key="...")
+
+response = client.chat.complete(
+    model="pixtral-large-latest",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Décris cette image en détail."},
+            {"type": "image_url", "image_url": {"url": "https://...image.jpg"}}
+        ]
+    }]
+)
+
+print(response.choices[0].message.content)
+```
+
+### En local avec vLLM (open-source)
+
+Pixtral 12B étant open-source, vous pouvez le déployer localement sur vos machines :
+
+```bash
+vllm serve mistralai/Pixtral-12B-2409 --tokenizer-mode mistral
+```
+
+Puis utilisez-le via une API locale. C'est parfait pour les données sensibles ou le contrôle total.
+
+## La place de Pixtral dans l'écosystème Mistral
+
+Mistral a développé une gamme complète :
+
+- **Mistral Small/7B** : texte léger, rapide
+- **Pixtral 12B** : multimodal open-source, léger
+- **Mistral Large** : texte haute performance
+- **Pixtral Large** : multimodal haute performance
+- **Codestral** : spécialisé code
+- **Magistral** : raisonnement long/complexe
+
+Vous choisissez en fonction de votre cas : besoin de vision ? Pixtral. Besoin de code ? Codestral. Besoin de raisonnement profond ? Magistral. Mistral couvre à peu près tous les cas d'usage.
+
+<Callout type="warning" title="Le domaine évolue très vite">
+Les VLM changent rapidement : nouveaux modèles tous les 2-3 mois, benchmarks qui changent, nouveaux leaders. Les chiffres dans cet article seront peut-être obsolètes dans 6 mois. Consultez le MMMU Leaderboard et VLMEvalKit pour les résultats les plus récents avant de choisir un modèle.
+</Callout>
+
+## Perspective
+
+Pixtral illustre la tendance actuelle : les entreprises d'IA sérieuses développent maintenant des modèles multimodaux **natifs** plutôt que d'assembler des composants séparés. L'intégration profonde de la vision et du langage semble donner de meilleurs résultats qu'une approche modulaire. C'est le futur.

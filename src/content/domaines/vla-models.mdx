@@ -1,0 +1,90 @@
+---
+title: "Architecture des modèles Vision-Language-Action (VLA)"
+description: "Les modèles VLA unifient perception visuelle, compréhension du langage et génération d'actions dans une seule architecture pour le contrôle robotique."
+---
+
+
+
+## Un paradigme nouveau : la trilogie vision-langage-action
+
+Pendant 50 ans : perception, planification, contrôle = trois modules séparés. **Vision-Language-Action models** (VLA) font le saut : **un seul modèle end-to-end** prenant image + instruction pour générer actions directement.
+
+Ce paradigme hérite de seq2seq (NLP) et VLM, étendu à génération d'actions physiques.
+
+<Callout type="info" title="VLA = VLM + Actions">
+Un VLA = modèle vision-langage augmenté de capacité génération actions. Actions = nouveau type de token, comme tokens texte ou visuels.
+</Callout>
+
+## Architecture générale
+
+### Les trois entrées
+
+1. **Vision** : images caméra robot (vue d'ensemble et/ou caméra poignet)
+2. **Langage** : instruction textuelle utilisateur
+3. **Proprioception** (optionnel) : état interne robot (positions articulaires, forces)
+
+### Encodage
+
+**Encodeur visuel** : image transformée en tokens visuels via encodeur pré-entraîné :
+- **ViT** (Vision Transformer) : découpe image en patches et encode
+- **SigLIP** : variante CLIP optimisée alignement vision-langage
+- **DinoV2** : features auto-supervisées riches info spatiale
+- Certains modèles combinent plusieurs (OpenVLA utilise SigLIP + DinoV2)
+
+**Encodeur textuel** : instruction tokenisée via tokenizer du LLM (SentencePiece, BPE).
+
+### Le backbone Transformer
+
+Tokens visuels et textuels concaténés, traités par **Transformer decoder-only** (architecture GPT/Llama) :
+- Apprend relations entre pixels et mots
+- Attention croisée implicite (via concaténation) connecte instructions et observations
+- Couches profondes apprennent planifier et raisonner
+
+<Callout type="tip" title="Pourquoi decoder-only ?">
+Architecture decoder-only (autoregressive) : génère actions token par token, comme LLM génère texte. Réutilise directement poids LLM pré-entraîné.
+</Callout>
+
+### Génération d'actions
+
+C'est ici que VLA se distingue d'un VLM :
+
+**Tokenisation discrète** : actions continues (positions x, y, z, rotations, gripper) **discrétisées** en bins (typiquement 256) et ajoutées vocabulaire.
+
+```
+Action = [x_bin_142, y_bin_87, z_bin_203, rx_bin_12, ry_bin_45, rz_bin_78, gripper_open]
+```
+
+**Tête régression continue** : alternativement, tête MLP projette dernière couche cachée Transformer vers espace action continu. Évite discrétisation mais perd modélisation autorégressive.
+
+## Variantes architecturales
+
+**RT-2** (Google) : fine-tune VLM existant (PaLI-X 55B ou PaLM-E 12B), actions tokenisées, co-fine-tuning web+robotique.
+
+**OpenVLA** (Stanford) : Prismatic-7B (Llama 2 + SigLIP + DinoV2), 7B params, open-source, actions 256 bins.
+
+**Octo** (Berkeley) : Transformer from scratch, tête diffusion pour distributions actions, petit (93M), modulaire.
+
+**Pi0** (Physical Intelligence) : flow-matching pour génération actions, VLM 3B pré-entraîné, actions continues débruitage itératif.
+
+<Callout type="paper" title="Action Chunking">
+Innovation : au lieu prédire une action, modèle prédit chunk de H actions futures (typiquement H=10-20). Réduit erreur compounding, lisse trajectoires. **ACT** (Action Chunking with Transformers) popularisé.
+</Callout>
+
+## Entraînement VLA
+
+**Pré-entraînement VLM** : vision-langage sur données web (paires image-texte, milliards).
+
+**Phase robotique** : fine-tuning sur données démo robotique (Open X-Embodiment).
+
+**Co-fine-tuning** : entraînement conjoint mélangeant web + robotique, évitant oubli catastrophique connaissances web.
+
+**Données robotiques** : typiquement collectées téléopération (humain contrôle robot via dispositif haptique pendant observation/action enregistrement).
+
+## Défis ouverts
+
+- **Temps réel** : modèles 7B+ trop lents contrôle haute fréquence
+- **Manipulation dextre** : espaces action haute dimension difficiles
+- **Généralisation cross-embodiment** : seul modèle pour tous robots
+- **Sécurité** : garantir modèle ne génère pas actions dangereuses
+
+Le **goulot principal** : quantité et diversité données robotiques. VLMs ont milliards images web. Meilleurs datasets robotiques : quelques millions trajectoires, souvent tâches limitées. La données robotiques = facteur limitant.

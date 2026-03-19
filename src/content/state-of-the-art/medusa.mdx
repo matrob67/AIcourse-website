@@ -1,0 +1,126 @@
+---
+title: "Medusa : multi-têtes de génération"
+description: "Ajouter des têtes supplémentaires au modèle pour générer plusieurs tokens à la fois."
+---
+
+## Le problème du speculative decoding classique
+
+Speculative decoding c'est cool mais ça demande un **deuxième modèle** en mémoire. C'est du surcoût, du management compliqué.
+
+Medusa propose une élégance : ajouter des **têtes supplémentaires** directement au modèle principal, sans modèle draft séparé.
+
+<ArxivLink id="2401.10774" title="Medusa: Simple LLM Inference Acceleration with Multiple Decoding Heads (Cai et al., 2024)" />
+
+<Callout type="info" title="L'idée">
+Au lieu de générer token-par-token avec une tête standard, ajouter K têtes qui prédisent les K tokens **suivants en parallèle**. Un vérificateur par arbre sélectionne la meilleure branche.
+</Callout>
+
+## Architecture de Medusa
+
+### Les têtes supplémentaires
+
+Au lieu d'une tête de sortie classique, ajouter des têtes parallèles :
+
+```
+Couche cachée (d=4096)
+↓
+Tête 0 (standard) → token t+1
+Tête Medusa 1 → token t+2
+Tête Medusa 2 → token t+3
+...
+Tête Medusa K → token t+K
+```
+
+Chaque tête = petit MLP (2 couches) qui prédit le token suivant.
+
+### Coût en paramètres
+
+Pour un modèle 7B avec 5 têtes Medusa : environ **750M paramètres supplémentaires**. Peu par rapport aux 7B du modèle, mais ça s'ajoute.
+
+## Entraînement
+
+### Medusa-1 : Têtes seules entraînées
+
+Le modèle principal est **gelé**, seules les têtes Medusa apprennent :
+
+```
+Loss = somme des cross-entropy de chaque tête
+     = CE(head_0(h)) + CE(head_1(h)) + ... + CE(head_K(h))
+```
+
+- Entraînement rapide (2-4 heures sur un GPU)
+- Résultats très compétitifs
+- **Approche recommandée**
+
+### Medusa-2 : Fine-tuning conjoint
+
+Entraîner le modèle **et** les têtes ensemble. Meilleure qualité mais beaucoup plus lent.
+
+<Callout type="tip" title="Medusa-1 suffit">
+En pratique, Medusa-1 (têtes seules) donne des résultats presque aussi bons. 10-20K exemples suffisent à entraîner les têtes. C'est l'approche par défaut.
+</Callout>
+
+## Vérification par arbre (Tree Attention)
+
+### Le défi combinatoire
+
+Si chaque tête propose ses top-5 candidats, il y a 5^K = 5^5 = 3125 séquences possibles. Vérifier toutes par brute force = infaisable.
+
+### Tree attention : la solution
+
+- Construire un **arbre des candidats** (élaguer pour limiter)
+- Utiliser un **masque d'attention en arbre** spécial
+- Vérifier toutes les branches en **une seule passe forward**
+- Sélectionner la branche la plus longue acceptée
+
+C'est très clever : on économise d'énormes calculs en structurant intelligemment.
+
+## Résultats
+
+### Speedup
+
+| Modèle | Heads | Speedup (greedy) | Speedup (sampling) |
+|---|---|---|---|
+| Vicuna-7B | 3 | 2.2× | 1.8× |
+| Vicuna-13B | 3 | 2.3× | 1.9× |
+| Vicuna-33B | 5 | 2.8× | 2.3× |
+
+Plus le modèle est gros, plus le speedup est important (les têtes deviennent négligeables).
+
+## Avantages vs speculative decoding
+
+1. **Pas de modèle draft** → économie mémoire
+2. **Meilleur taux acceptation** → têtes entraînées spécifiquement
+3. **Un seul modèle à déployer** → simplicité
+4. **Adaptable** → réentraîner les têtes pour un domaine spécifique
+
+## Limitations
+
+### Les têtes ne voient pas le futur
+
+Chaque tête Medusa prédit **sans voir les tokens précédents** dans la même batch. La tête k prédit le token t+k aveuglément. C'est une limitation fondamentale : moins précis que le speculative decoding avec un vrai petit modèle.
+
+### Coût d'entraînement
+
+Les têtes doivent être **entraînées pour chaque modèle**. Ce n'est pas un plugin universel.
+
+<Callout type="warning" title="Têtes = spécifiques au modèle">
+Si vous fine-tunez le modèle principal (LoRA ou autre), les têtes Medusa doivent être re-entraînées car la distribution des couches cachées change.
+</Callout>
+
+## Évolutions : EAGLE
+
+**EAGLE** (Extrapolation Algorithm for Greater Language-model Efficiency) améliore Medusa :
+
+- Utiliser un **petit auto-régresseur** au-dessus des couches cachées
+- Chaque prédiction **conditionne la suivante** (contrairement à Medusa où elles sont indépendantes)
+- Taux d'acceptation nettement meilleur
+- **EAGLE-2** ajuste dynamiquement la profondeur de spéculation selon la confiance
+
+EAGLE est la vraie évolution de Medusa.
+
+## Impact pratique
+
+Medusa et EAGLE représentent une direction intéressante : enrichir le modèle lui-même au lieu de multiplier les modèles. C'est plus simple à déployer que le speculative decoding classique, même si le gain peut être légèrement inférieur.
+
+

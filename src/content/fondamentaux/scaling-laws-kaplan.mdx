@@ -1,0 +1,288 @@
+---
+title: "Lois de Scaling : les lois de Kaplan"
+description: "Les relations mathématiques qui gouvernent la performance des LLM en fonction de la taille, des données et du compute. Comment prédire le futur en IA."
+---
+
+## Janvier 2020: le papier qui a changé le jeu
+
+Jared Kaplan et son équipe chez OpenAI publient un résultat mundain mais monumental. Les performances des LLM **ne sont pas chaotiques**. Elles suivent des **lois mathématiques précises** (lois de puissance / power laws).
+
+Idée: augmenter paramètres, données, ou calcul → amélioration **prévisible et régulière**.
+
+<ArxivLink id="2001.08361" title="Scaling Laws for Neural Language Models (Kaplan et al., 2020)" />
+
+**Impact majeur**: avant ce papier, "scale it up et espère" était la stratégie. Après: "D'après la formule, je vais faire X. Et ça marchera."
+
+Les lois de Kaplan ont lancé la course aux GPU qu'on vit encore aujourd'hui. Si la performance suit une courbe, investir des milliards dans le compute devient rationnel.
+
+
+
+
+## La formule: comprendre les lois de puissance
+
+Une **loi de puissance** (power law) décrit une relation simple mais puissante:
+
+```
+Loss = a × x^(-b)
+
+Où:
+- Loss = erreur du modèle (Lower = mieux)
+- x = variable d'intérêt (paramètres, tokens, compute)
+- a = constante (dépend du domaine)
+- b = exposant (typi 0.05 à 0.1 pour LLM, >0, donc Loss diminue)
+```
+
+### Visualisation: échelle log-log
+
+Si tu plottes Loss vs x en **log-log**, c'est une droite! Linéaire sur échelle log.
+
+```
+Droite en log-log = loi de puissance dans l'espace normal
+```
+
+### Implication: prévisibilité
+
+Multiplier x par 10:
+
+```
+Loss_nouveau = a × (10x)^(-b) = a × 10^(-b) × x^(-b) = 10^(-b) × Loss_ancien
+```
+
+Loss diminue d'un facteur **10^(-b)**. Si b=0.07, Loss diminue de ~55%.
+
+**Clé**: c'est **proportionnel**. Tu peux prédire.
+
+Exemple réel (données Kaplan):
+
+```
+GPT-1 (117M params): Loss = 3.5
+GPT-2 (1.5B params): Loss = 2.3 (extrapolé: 2.1, réel proche!)
+GPT-3 (175B params): Loss = 1.8 (extrapolé: 1.7, réel proche!)
+```
+
+Les prédictions marche! Kaplan peut dire: "Avec X GPU pendant Y jours, vous aurez une Loss de Z." Et c'est vrai.
+
+<Callout type="tip" title="Pourquoi c'est monumental pour l'industrie">
+Avant Kaplan: "Augmentons la taille et voyons ce qui se passe."
+Après Kaplan: "Nous savons exactement quel modèle construire pour atteindre notre performance cible."
+
+C'est comme passer de l'exploration au calcul d'ingénierie. Les laboratoires peuvent maintenant planifier avec confiance.
+</Callout>
+
+## Les trois axes du scaling: où investir?
+
+Kaplan et al. testent trois variables **indépendamment**. Pour chacune, ils mesurent la **cross-entropy loss** (erreur statistique du modèle sur un test set).
+
+### Axe 1: Paramètres (N) — taille du réseau
+
+```
+Loss ∝ N^(-0.076)
+```
+
+Multiplier paramètres par 10 → Loss diminue de ~16%.
+
+Exemple:
+```
+100M params: Loss = 2.5
+1B params:  Loss = 2.1 (10x params = 16% mieux)
+10B params: Loss = 1.8 (100x params = 28% mieux)
+```
+
+**Insight**: ajouter des paramètres aide, mais avec rendements décroissants. Chaque doublement aide moins que le précédent.
+
+### Axe 2: Données (D) — volume d'entraînement
+
+```
+Loss ∝ D^(-0.095)
+```
+
+Multiplier les données par 10 → Loss diminue de ~19%.
+
+```
+1B tokens: Loss = 2.5
+10B tokens: Loss = 2.1 (10x données = 19% mieux)
+100B tokens: Loss = 1.8 (100x données = 36% mieux)
+```
+
+**Insight**: les données aident **plus que les paramètres** (0.095 > 0.076). Mais même pattern: rendements décroissants.
+
+### Axe 3: Compute (C) — puissance GPU combinée
+
+Quand tu augmentes **à la fois** paramètres ET données (en gardant leur ratio optimal):
+
+```
+Loss ∝ C^(-0.050)
+```
+
+C (compute) = paramètres × données (très simplifié).
+
+Multiplier compute par 10 → Loss diminue d'environ 13%.
+
+**Insight**: le compute suit une loi de puissance aussi, mais l'exposant est plus petit (0.050 < 0.076). C'est parce que les deux autres variables "se battent" contre les rendements décroissants.
+
+<Callout type="info" title="Lissé et prévisible">
+La beauté: ces lois tiennent sur **plusieurs ordres de grandeur**. De 1M à 1B paramètres. De 1B à 500B tokens. Pas de points de basculement soudain, pas de "plateaux" magiques. Juste une courbe lisse.
+
+C'est rare en machine learning. Habituellement, à grande échelle, les choses deviennent chaotiques.
+</Callout>
+
+## La recommandation pratique: comment allouer le budget GPU
+
+Tu as X GPU heures. Comment les diviser entre plus de paramètres vs. plus de données?
+
+Kaplan dérive une recommandation d'allocation **optimal**:
+
+```
+Si tu multiplies le compute par 10:
+→ Augmente les paramètres par ~5.5x
+→ Augmente les données par ~1.8x
+```
+
+Exemple concret:
+
+```
+Budget GPT-3: 3.6 × 10^23 opérations
+
+Option A (MAUVAISE): Énorme modèle, peu de données
+  - 1T paramètres (wow!)
+  - Données insuffisantes
+  - Résultat: sous-entraîné, médiocre
+
+Option B (BONNE, selon Kaplan):
+  - ~200B paramètres (gros, mais pas fou)
+  - Données ultra massives
+  - Résultat: mieux entraîné, meilleures perfs
+
+Conclusion: 200B params avec beaucoup de données > 1T params avec peu de données
+```
+
+### L'insight clé: paramètres vs données
+
+Kaplan montre: **augmenter les paramètres compte plus que augmenter les données** (exposants 0.076 vs 0.095).
+
+Donc: plutôt "modèle un peu plus gros, moins bien entraîné" que "modèle petit, entraîné à mort".
+
+Ça a changé la pratique. Avant: "Entraîne le modèle jusqu'à convergence." Après: "Entraîne un modèle plus gros pour moins longtemps."
+
+<Callout type="warning" title="Attention: limites des lois de Kaplan">
+Ces lois supposent:
+1. **Architecture fixée**: tous les tests utilisent Transformer decoder-only avec même design
+2. **Qualité constante**: le texte a la même qualité peu importe la source
+
+Dans la réalité:
+- Une meilleure architecture (DeBERTa, etc.) peut changer les exposants
+- Un meilleur filtrage de données (RoBERTa) peut changer les exposants
+- Les "derniers tokens" (données nouvelles) peut être plus efficaces que "premiers tokens" (web public)
+
+Kaplan donne une baseline, pas la vérité universelle.
+</Callout>
+
+## Les observations subtiles qui changent la pratique
+
+### 1. Architecture presque invisible
+
+Les scaling laws tiennent quelle que soit la **topologie** du Transformer:
+- 12 couches × 768 dim
+- 24 couches × 1024 dim
+- 6 couches × 2048 dim
+- ...
+
+Tant que **le nombre total de paramètres** reste identique, la performance est presque identique.
+
+**Implication**: l'architecture fine-tuning ne compte pas beaucoup. C'est l'**échelle** qui compte.
+
+(Caveat: DeBERTa montre que certains raffinements architecturaux aident. Mais l'effet est petit comparé au scaling.)
+
+### 2. Sous-entraînement est optimal
+
+Résultat contre-intuitif: les **meilleurs modèles en performance par GPU** sont souvent **sous-entraînés** (pas convergés à 0 loss).
+
+```
+Modèle A: 100B params, entraîné sur 10B tokens
+Modèle B: 1B params, entraîné sur 1000B tokens (convergé)
+
+Modèle A gagne en performance par token!
+
+Pourquoi? A utilise plus de compute efficacement (plus de paramètres pour apprendre).
+```
+
+**Implication**: arrête de pousser les petits modèles jusqu'à convergence. C'est inefficace. Fais un modèle plus gros et entraîne le moins longtemps.
+
+DeepMind (Chinchilla, 2022) raffine ça avec une formule plus exacte.
+
+
+### 3. Transfer des scaling laws
+
+Les lois de puissance sur **loss de pré-entraînement** se transferent aux **tâches en aval** (downstream):
+
+```
+Bon pré-entraînement (Loss bas) → Bon fine-tuning (Score haut)
+```
+
+Meilleure métrique statistique globale = mieux sur classification, extraction, etc. Pas toujours parfait, mais corrélé.
+
+## Impact: la transformation du champ
+
+Les lois de Kaplan ont **radicalement changé** le paysage de l'IA en 2020-2024:
+
+### 1. La course aux GPU (et au $)
+
+Avant: "Faisons un modèle cool et hopons."
+Après: "La formule dit que nous avons besoin de X GPU-ans. Levons le capital."
+
+Les labos deviennent des équipes d'ingénierie d'infrastructure. OpenAI, DeepMind, Meta, Anthropic: tous construisent des fermes GPU massives pour exploiter les lois.
+
+### 2. L'ère "compute-optimal"
+
+Terme: un modèle entraîné de manière **optimale pour un budget GPU donné**.
+
+DeepMind (Chinchilla, 2022) raffine les lois de Kaplan:
+
+```
+Kaplan:    Paramètres × 5.5, Données × 1.8 pour compute × 10
+Chinchilla: Paramètres × 4, Données × 4 pour compute × 10
+(ratio 1:1 entre paramètres et données, vs 3:1 selon Kaplan)
+```
+
+Différence subtile, mais elle change les recommandations d'allocation.
+
+### 3. La centralisation du pouvoir
+
+Les modèles efficaces = modèles gros = beaucoup de compute = beaucoup d'argent.
+
+**Conséquence**: seules quelques orga (OpenAI, DeepMind, Meta, Anthropic, Alibaba, etc.) peuvent jouer à la frontier. L'IA become concentrée.
+
+Débat: c'est bon pour la performance, mauvais pour la diversité.
+
+<Callout type="warning" title="Les lois s'appliqueront-elles toujours?">
+Kaplan décrivait 2013-2019. En 2026, trainons-nous encore sur ces courbes?
+
+Possible qu'il y ait des plateaux (pas d'amélioration au-delà d'une certaine taille). Possible que architecture ou données filtrées changent les exposants. Débat ouvert.
+</Callout>
+
+## Pourquoi c'est important
+
+Les lois de Kaplan révèlent une vérité fondamentale: **la performance n'est pas chaotique, elle suit des courbes mathématiques prévisibles**. C'est pas une surprise, c'est une loi.
+
+Cela a des conséquences majeures:
+
+### Pour la science
+Avant Kaplan: empirique, exploration. Après: ingénierie prévisible. Tu peux planifier les expériences.
+
+### Pour l'industrie
+Scaling fonctionne. Investir en GPU = investir en intelligence. La formule garantit le ROI.
+
+### Pour la société
+Cela a lancé une course colossale aux GPUs. Concentration du pouvoir en IA. Débat éthique sur qui contrôle l'IA.
+
+### Questions ouvertes
+- Les lois continuent-elles à tenir à 10T paramètres?
+- Y a-t-il des plateaux biologiquement imposés?
+- Peut-on améliorer les exposants avec meilleure architecture/données?
+
+Débat actif. Personne ne sait la réponse.
+
+---
+
+Les lois de Kaplan sont la colonne vertébrale théorique de l'IA moderne. Sans elles, on aurait pensé que scaling ne servait à rien. Avec elles, le chemin est clair: plus gros, mieux. Et ça continue.
+

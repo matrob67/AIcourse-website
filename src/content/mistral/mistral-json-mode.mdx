@@ -1,0 +1,140 @@
+---
+title: "Mode JSON et sortie structurée"
+description: "Génération de sorties structurées avec Mistral : mode json_object, json_schema, format garanti et intégration dans les pipelines de données."
+---
+
+
+
+## Mode JSON : forcer l'IA à parler format
+
+Vous demandez à Mistral d'extraire des données d'un email. Il répond avec 3 paragraphes de bla bla, puis du JSON avec des virgules mal placées. Votre code crash. Ça arrive 500 fois par jour.
+
+La solution? Le mode JSON. C'est une chaîne de sécurité qui force le modèle à parler UNIQUEMENT en JSON valide. Pas d'excuses, pas d'explications, juste de la data propre.
+
+### Le chaos sans structure
+
+Par défaut, un LLM génère du texte libre—c'est pas son problème si c'est parsable.
+
+**JSON cassé.** Des virgules manquantes, des guillemets mal fermés. Genre: `{"name": "Alice", "age" 30}` (pas de `:` avant 30). Votre parser pleure.
+
+**Chaos structural.** Une requête retourne 5 champs, la suivante en retourne 10, avec des noms différents. Impossible de faire confiance au format.
+
+**Texte parasite.** Le modèle enveloppe le JSON: "Voici les données: ```json {...}```". Votre code doit faire du regex pour l'extraire.
+
+**Champs fantômes.** Des champs que vous attendiez ne sont pas là. Null, undefined, crash.
+
+<Callout type="info" title="En production c'est vital">
+En production, les LLM sont des rouages dans une machine. Si un rouage retourne des données mal formatées, toute la chaîne se casse. Pas d'exceptions tolérées. D'où la nécessité d'une sortie GARANTIE structurée.
+</Callout>
+
+### Mode json_object : "C'est JSON ou rien"
+
+C'est le plus simple. Vous dites "donne-moi du JSON", et Mistral dit "d'accord, c'est du JSON garanti".
+
+```json
+{
+  "response_format": { "type": "json_object" }
+}
+```
+
+**Garanties :**
+- Le résultat est du JSON valide. `JSON.parse()` marche toujours.
+- Pas de texte autour (pas de "Voici vos données:")
+- Le modèle suit la structure que vous décrivez dans le prompt
+
+**Les limites :**
+- Le schéma exact n'est pas appliqué (vous dites "donne-moi name et age", mais il peut ajouter d'autres champs)
+- Les types ne sont pas garantis (age peut être un string au lieu d'un nombre)
+- Les champs peuvent varier d'une réponse à l'autre
+
+<Callout type="tip" title="Le prompt est le schéma">
+Avec json_object, tout dépend de ce que vous demandez. Mettez un exemple dans votre prompt: "Retourne un JSON comme ceci: `{"name": "Alice", "age": 30}`". Le modèle copiera ce pattern. Soyez précis sur les types (nombre, string, booléen), les champs obligatoires, tout.
+</Callout>
+
+### Mode json_schema : "Voici le plan, tu dois le suivre exactement"
+
+C'est l'arme lourde. Vous passez un JSON Schema complet (le plan exact de ce que vous voulez), et Mistral le suit à la lettre.
+
+```json
+{
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "extraction_result",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "age": { "type": "integer" },
+          "email": { "type": "string", "format": "email" }
+        },
+        "required": ["name", "age"]
+      }
+    }
+  }
+}
+```
+
+**Ce qui est garanti :**
+- La sortie RESPECTE LE SCHEMA. Pas de déviations.
+- Les champs marqués `required` sont TOUJOURS là.
+- Les types sont respectés : "age" est un nombre, pas un string.
+- Les contraintes `enum` (énumération de choix) sont respectées.
+- Les objets imbriqués sont au bon endroit.
+
+### Comment Mistral force le format (la magie technique)
+
+C'est appelé **constrained decoding** (décodage contraint). Imaginez que vous écrivez une phrase. À chaque lettre, on vous dit "tu peux taper quoi?". Au lieu de laisser tapez N'IMPORTE QUOI, on vous dit "tu peux taper que des lettres qui font du sens".
+
+Pareil ici. Mistral génère un token à la fois. À chaque étape, on lui dit : "Tu es à `"age":`, tu peux écrire quoi? Uniquement des chiffres (parce que le schéma dit que age est un entier)."
+
+Le token "vingt-cinq"? Bloqué. Le token "true"? Bloqué. Le token "3"? Autorisé.
+
+Technique : une automate à états finis (FSM) suit où vous êtes dans le JSON et décide les tokens valides. C'est comme avoir un policier qui vérifie chaque mot qu'il génère.
+
+<Callout type="paper" title="La technique: Constrained decoding">
+C'est pas une magie noire. Des bibliothèques open-source (Outlines, Guidance) font ça. Mistral utilise une FSM qui suit votre position dans le schéma et valide chaque token généré. Zéro modification du modèle—c'est du post-processing intelligent.
+</Callout>
+
+### Quand l'utiliser : les cas réels
+
+**Extraction d'infos à partir de texte**
+Vous avez 1000 emails. Mistral doit en extraire : expéditeur, date, montant (si c'est une facture). Format garanti → pas d'erreurs de parsing.
+
+**Classification de produits**
+Un utilisateur poste une description de produit floue. Mistral doit dire : "C'est une chaise, catégorie "meubles", prix estimé 50-200 euros, couleur orange". JSON structuré, pas d'improvisation.
+
+**Conversion de formats**
+CSV → JSON. Email → Ticket support. Formulaire papier → Base de données. Le JSON mode garantit que la sortie est compatible avec votre système suivant.
+
+**Pipelines de data (ETL)**
+Votre pipeline ETL prend des données, les transforme, les charge dans une DB. Si Mistral produit du JSON invalide, tout le pipeline casse. JSON mode = zéro crash.
+
+**API qui retourne du JSON**
+Votre backend API utilise Mistral pour générer une réponse. Les clients attendent du JSON valide. Mode JSON = promesse tenue.
+
+### Les règles d'or
+
+**Utilise json_schema dès que possible.** Si tu connais la structure à l'avance (ce qui est souvent le cas), utilise json_schema. C'est plus strict, zéro improvisation du modèle.
+
+**Garde les schémas simples.** Un schéma trop complexe (10 niveaux d'imbrication, types union) va ralentir les choses. Schémas plats = mieux.
+
+**Ajoute des descriptions.** Dans ton schéma, décris chaque champ: "name: description du champ 'name'". Ça aide Mistral à comprendre ce qu'il doit faire.
+
+**Gère les champs optionnels en code.** Si un champ est optionnel, ajoute une valeur par défaut dans ton code plutôt que de le laisser vide ou de compter sur Mistral.
+
+<Callout type="warning" title="Format oui, contenu non">
+JSON mode = format GARANTI valide. Mais les DONNÉES peuvent être fausses ou inventées. Mistral peut retourner un JSON parfait avec un age de "9999" ou un nom qui n'existe pas. Valide le contenu aussi (est-ce que les données ont du sens?).
+</Callout>
+
+### Comparaison rapide
+
+| | Texte libre | json_object | json_schema |
+|---|---|---|---|
+| JSON valide | Non | Oui | Oui |
+| Structure prévisible | Non | Non | Oui |
+| Types garantis | Non | Non | Oui |
+| Champs requis | Non | Non | Oui |
+| Vitesse | Rapide | Rapide | Normale |
+
+**Conclusion:** JSON mode c'est ton ami. En production, utilise json_schema. Plus jamais de parsing errors, plus jamais de "pourquoi est-ce que ce champ n'est pas là?". Juste du JSON propre et valide.

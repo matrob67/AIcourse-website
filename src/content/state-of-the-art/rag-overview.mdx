@@ -1,0 +1,100 @@
+---
+title: "RAG : Retrieval-Augmented Generation"
+description: "Le RAG combine la recherche d'information avec la génération de texte pour ancrer les LLM dans des connaissances factuelles et à jour, réduisant les hallucinations."
+---
+
+## Le problème : un LLM hallucine
+
+Un LLM dit des choses convaincantes qui sont totalement fausses. Pourquoi ? Ses connaissances **figent** à la date de sa dernière donne d'entraînement. GPT-4 s'arrête en avril 2024. Vous demandez les nouvelles d'aujourd'hui ? Hallucination.
+
+Ou vous demandez des infos sur vos documents privés ? Le modèle n'en a jamais vu. Hallucination.
+
+Le RAG (Retrieval-Augmented Generation) résout ça : vous **retrouvez** les documents pertinents et vous les donnez au LLM comme contexte. Fini : "je sais pas, invente quelque chose". À la place : "voici le contexte, réponds en t'appuyant dessus".
+
+<ArxivLink id="2005.11401" title="Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (Lewis et al., 2020)" />
+
+<Callout type="info" title="L'idée simple du RAG">
+Au lieu de s'appuyer uniquement sur ses poids, le LLM reçoit les documents pertinents dans le prompt. Il peut **citer ses sources**, utiliser des **données à jour**, et répondre sur vos **documents privés**. Simple mais révolutionnaire.
+</Callout>
+
+
+
+## Pipeline RAG : 3 étapes
+
+### 1. Indexation (offline, une seule fois)
+- Découpez les documents en chunks (200-500 mots chacun)
+- Générez des embeddings vectoriels pour chaque chunk
+- Stockez les embeddings dans une base vectorielle
+
+### 2. Retrieval (online, quand l'utilisateur demande)
+- L'utilisateur pose une question
+- Convertissez la question en embedding
+- Retrouvez les K chunks les plus similaires (5-10 typiquement)
+
+### 3. Generation (online)
+- Construisez un prompt : contexte (les chunks) + question
+- Le LLM génère une réponse basée sur le contexte
+
+```
+Contexte :
+[Document 1 : ...]
+[Document 2 : ...]
+
+Question : votre question
+
+Réponds en t'appuyant UNIQUEMENT sur le contexte.
+```
+
+
+
+## Pourquoi ça marche
+
+### Moins de hallucinations
+En fournissant les sources, le LLM n'a plus besoin de **deviner**. Il synthétise. Études : 30-50% moins d'hallucinations avec un bon RAG.
+
+### Données à jour
+La base vectorielle se met à jour en temps réel. Pas besoin de ré-entraîner le modèle. Les nouvelles infos sont disponibles immédiatement.
+
+### Données propriétaires
+Vos documents internes (emails, rapports, code) **jamais** n'entraînent le modèle. Juste indexés et retrouvés. Confidentialité garantie.
+
+<Callout type="tip" title="RAG vs fine-tuning ?">
+RAG : quand les données changent souvent ou vous avez besoin de traçabilité.
+Fine-tuning : quand vous voulez changer le comportement/style du modèle.
+Réalité : vous faites probablement les deux.
+</Callout>
+
+## Composants clés
+
+### Embeddings
+Transformez le texte en vecteurs. La qualité des embeddings = la qualité du retrieval.
+
+Choix : all-MiniLM (gratuit, rapide, 384 dims), BGE-M3 (multilingue, 1024 dims), ou OpenAI text-embedding-3 (payant, performant).
+
+### Base vectorielle
+Stocke les embeddings, cherche les plus proches par similarité cosinus.
+
+Options : Chroma (en mémoire, prototypage), Qdrant (production, open-source), Pinecone (SaaS, zéro ops).
+
+### Chunking
+Comment découper les documents. Trop petit : perte de contexte. Trop gros : bruit. Idéal : 256-512 tokens.
+
+## Pièges du RAG naïf
+
+<Callout type="warning" title="Le RAG n'est pas magique">
+1. **Garbage in, garbage out** : si les bons documents ne sont pas retrouvés, le LLM ne peut pas bien répondre
+2. **Lost in the middle** : le LLM ignore souvent les infos au milieu d'un long contexte
+3. **Conflits** : quand les documents retrouvés se contredisent
+4. **Complex reasoning** : les questions multi-étapes réclament du retrieval itératif
+
+Le RAG réduit les hallucinations mais ne les élimine pas. Validation humaine pour les cas critiques.
+</Callout>
+
+## Évaluation
+
+Métriques clés :
+- **Recall@K** : % de documents pertinents retrouvés dans le top K
+- **Faithfulness** : la réponse suit-elle les documents ?
+- **Answer relevancy** : répond-elle à la question ?
+
+La suite de sections explore chaque composant en détail et les techniques avancées pour monter la qualité au-delà du RAG basique.

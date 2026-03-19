@@ -1,0 +1,110 @@
+---
+title: "RNN : séquences et mémoire"
+description: "Les réseaux de neurones récurrents (RNN), leur capacité à traiter des données séquentielles grâce à un état caché, et le problème du gradient évanescent."
+---
+
+## Le problème : les données qui changent d'ordre
+
+"Le chat mange la souris" vs "La souris mange le chat". Mêmes mots. Sens **opposé**. Un réseau classique (connecté dense) ne comprend pas l'ordre : il voit juste une liste de nombres, pas une séquence.
+
+Les données réelles adorent l'ordre : texte (mots), parole (sons), séries temporelles (mesures), vidéos (images). Les CNN gèrent bien les images (structure spatiale). Mais pour "cette image, puis celle-ci, puis celle-ci" ? Zéro. C'est là qu'arrivent les **RNN** : réseaux avec mémoire.
+
+
+
+## Comment fonctionne un RNN
+
+### L'état caché = la mémoire
+
+Un RNN traite la séquence **élément par élément**, en gardant un résumé du passé : l'**état caché** h.
+
+À chaque pas de temps t, le RNN prend :
+- L'élément courant x(t)
+- L'état caché du pas avant h(t-1)
+
+Et calcule :
+```
+h(t) = tanh(W_hh * h(t-1) + W_xh * x(t) + b_h)
+y(t) = W_hy * h(t) + b_y
+```
+
+Les matrices W_hh, W_xh, W_hy sont **partagées** à chaque pas. C'est ça qui magique : mêmes poids, peu importe la longueur de la séquence.
+
+<Callout type="info" title="L'état caché : un compresseur">
+h(t) = un résumé "ce qui importait dans tout ce qu'on a vu jusqu'à maintenant". Pas parfait (mémoire limitée), mais c'est la vie.
+</Callout>
+
+### Déroulement dans le temps
+
+Imaginez le RNN "déployé" : une copie du même module pour chaque pas de temps. Chaque copie partage les poids, chaque copie gère un élément.
+
+Visuellement : chaîne d'or longue = réseau très profond. Ce réseau profond ? On l'entraîne par rétropropagation : **Backpropagation Through Time (BPTT)**.
+
+
+
+## Types de RNN selon la tâche
+
+**Many-to-one** : séquence → sortie unique. Exemple : sentiment d'un texte
+**One-to-many** : une entrée → séquence. Exemple : légende d'image
+**Many-to-many sync** : élément → élément. Exemple : étiquetage grammatical
+**Many-to-many async** : séquence → séquence différente longueur. Exemple : traduction
+
+## Le problème qui tue : vanishing gradient
+
+### Pourquoi ça disparaît ?
+
+Dans BPTT, le gradient doit remonter à travers **tous les pas de temps**. À chaque pas, il est multiplié par W_hh et la dérivée d'activation. Si ces nombres < 1, le gradient devient microscopique après 20-30 pas. Après ? Zéro du point de vue du gradient. Le réseau n'apprend pas les dépendances lointaines.
+
+### Conséquences réelles
+
+Un RNN vanilla "oublie" après ~10-20 mots. Impossible de :
+- Relier un pronom à un nom 5 phrases plus tôt
+- Capturer les cycles longs d'une série temporelle
+- Maintenir le contexte d'un long document
+
+<Callout type="info" title="Gradient explosif aussi existe">
+Inverse : si les multiplicateurs > 1, le gradient **explose**. On résout ça avec gradient clipping (limiter sa norme). Le gradient qui s'évanouit ? Ça demande une refonte architecturale.
+</Callout>
+
+
+
+## Entraîner un RNN
+
+### BPTT simple
+
+1. Dérouler le réseau sur la séquence entière
+2. Calculer la perte à chaque pas (ou juste à la fin)
+3. Gradient retro à travers tous les pas
+4. Mettre à jour les poids partagés
+
+### Truncated BPTT
+
+Pour les très longues séquences, calculer sur toute la longueur explose la mémoire. On découpe en chunks et rétropropage seulement au sein du chunk. Tradeoff : on perd les dépendances plus longues que la chunk.
+
+<Callout type="tip" title="Teacher forcing">
+Pendant l'entraînement, donnez au RNN la vraie sortie du pas avant (données d'entraînement), pas sa propre prédiction. Ça accélère. Mais crée une discordance "entraînement vs test" (exposure bias). Les modèles modernes mixent les deux.
+</Callout>
+
+## RNN bidirectionnels
+
+Un RNN classique : passé → futur. Parfois, les deux directions aident. Exemple : classifier un texte complet, le contexte futur importe.
+
+Un **BiRNN** : deux RNN, un avant (←) un arrière (→). Concaténer les h de chaque côté. Résultat : contexte passé + futur.
+
+Vous ne pouvez pas faire BiRNN en génération temps réel (pas encore vu le futur). Mais pour classification, analyse où la séquence est **complète à l'avance** ? Magic.
+
+## Applications historiques
+
+Avant les Transformers (2017), les RNN-LSTM-GRU dominaient :
+- Traduction (seq2seq)
+- Reconnaissance vocale
+- Génération de texte
+- Sentiment analysis
+- Prédiction météo/finance
+
+<Callout type="paper" title="Les RNN aujourd'hui">
+Transformers les ont remplacés pour NLP. Mais State Space Models (Mamba) et RWKV émergent : elles retrouvent les avantages RNN (inférence O(1), mémoire constante) tout en résolvant le vanishing gradient par des maths différentes. Les RNN ne sont pas morts, juste endormis.
+</Callout>
+
+## Intuition finale
+
+RNN = machine avec mémoire court-terme. Elle lit la séquence, met à jour sa mémoire, prédite. Le truc : le gradient s'évanouit, la mémoire est faible. C'est ce qu'on résout avec LSTM/GRU. Mais d'abord, comprendre le vanilla RNN ? C'est comprendre le cœur du problème.

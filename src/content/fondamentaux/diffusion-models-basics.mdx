@@ -1,0 +1,159 @@
+---
+title: "Diffusion Models : principes fondamentaux"
+description: "Les modèles de diffusion (DDPM), le processus de bruitage progressif, le processus de débruitage inverse, et la connexion avec le score matching."
+---
+
+## L'idée simple et élégante
+
+Prendre une image → ajouter **progressivement du bruit** jusqu'à c'est du pur bruit gaussien. Puis apprendre à **inverser** ce processus : partir de bruit, enlever bruit étape par étape, reconstruire l'image.
+
+C'est simple. C'est stable. Ça fonctionne TRÈS bien. En 2022, Stable Diffusion et DALL-E utilisent ça. Qualité > GAN. Stabilité > VAE. Révolution 2022.
+
+<ArxivLink id="2006.11239" title="Denoising Diffusion Probabilistic Models" />
+
+
+
+
+## Processus forward : du signal au bruit
+
+### La progression
+
+À chaque pas t (de 1 à T, typiquement T = 1000) :
+
+```
+x_t = sqrt(alpha_t) * x_{t-1} + sqrt(1 - alpha_t) * epsilon_t
+```
+
+où epsilon ~ N(0, I) = bruit gaussien pur.
+
+alpha_t ∈ (0, 1) contrôle la proportion signal vs bruit à chaque étape. alpha petit = beaucoup bruit, alpha gros = beaucoup signal.
+
+### Le schedule de bruit
+
+Quelle quantité de bruit ajouter à chaque pas ? Défini par beta_t = 1 - alpha_t.
+
+**Linéaire** (original DDPM) : beta augmente linéairement, 0.0001 → 0.02. Progressif.
+
+**Cosinus** : progression plus douce, bénéfique haute résolution.
+
+### Sauter directement
+
+Propriété magique : tu peux calculer **directement** x_t à partir de x_0 sans passer par tous les pas intermédiaires :
+
+```
+x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * epsilon
+```
+
+où alpha_bar_t = produit de alpha_1 à alpha_t, epsilon ~ N(0, I).
+
+**Crucial pour entraînement** : échappe le coût quadratique, peux sampler n'importe quel t uniformément.
+
+<Callout type="info" title="Destruction progressive">
+t petit : x_t ≈ x_0 avec bruit léger. t = T : x_T est bruit pur, indistinguable de N(0, I). Chaque étape = petite perturbation, donc **potentiellement réversible**. C'est là où la magie arrive.
+</Callout>
+
+## Processus reverse : débruitage
+
+### L'objectif
+
+Inverser le forward. Partir de bruit, enlever bruit étape par étape.
+
+Mathématiquement : apprendre `p(x_{t-1} | x_t)`. "Vu cette image bruitée, comment était-elle 1 étape moins bruitée ?"
+
+### Le réseau débruitage
+
+**U-Net** entraîné pour prédire le **bruit** :
+
+```
+epsilon_theta(x_t, t) ≈ epsilon
+```
+
+Input : image bruitée x_t + encoding du pas de temps t (sinusoids positionnels). Output : prédiction du bruit gaussian ajouté.
+
+### Pourquoi prédire le bruit ?
+
+On pourrait prédire x_0 ou `x_{t-1}`. Prédire le bruit est plus stable, avec une variance uniforme à travers les pas de temps. Mathématiquement équivalent (on dérive x_0 de x_t et epsilon), mais c'est une meilleure paramétrisation.
+
+## Entraînement DDPM : simplicité de rêve
+
+L'entraînement ? **Remarquablement simple** :
+
+1. Sampler x_0 du dataset
+2. Sampler t aléatoirement dans `{1, ..., T}`
+3. Sampler bruit epsilon ~ N(0, I)
+4. Calculer x_t via forward
+5. Minimiser : **L = ||epsilon - epsilon_theta(x_t, t)||^2**
+
+C'est tout. MSE brute entre bruit réel et bruit prédit.
+
+Stabilité ? Pas d'adversarial training. Mode collapse ? Zéro. Chaque étape = tâche de débruitage supervisée classique. Convergence ? Guaranteed. C'est pourquoi diffusion a **explosé** en popularité.
+
+<Callout type="tip" title="La beaute de la simplicite">
+C'est la beauté des modèles de diffusion : un seul réseau, une seule loss, pas de jeux complexes. Compare aux GAN (équilibre délicat) ou VAE (KL vs recon). Diffusion = straightforward.
+</Callout>
+
+### Architecture U-Net
+
+Standard : **encodeur → goulot → décodeur**
+
+- Encodeur : convolutions, réduction résolution, augmentation canaux
+- Décodeur : augmentation résolution
+- Skip connections entre encodeur ↔ décodeur (même résolution)
+- **Attention blocks** aux résolutions intermédiaires (self-attention pour dépendances globales)
+- **Conditioning temporel** : pas de temps t encodé via sinusoids + injecté par adaptive layer norm
+
+## Inférence : générer des images
+
+Processus de génération :
+
+1. Sampler x_T ~ N(0, I) (bruit pur)
+2. Pour t = T, T-1, ..., 1 :
+   - Prédire le bruit : epsilon_hat = epsilon_theta(x_t, t)
+   - Calculer `x_{t-1}` en utilisant epsilon_hat et les paramètres du schedule
+   - Ajouter bruit stochastique (sauf t = 1)
+
+Résultat : image synthétique réaliste, progressive du bruit.
+
+### Le tradeoff : lenteur
+
+**Inconvénient** : 1000 étapes séquentielles. Chaque étape nécessite un passage complet dans le réseau U-Net. C'est 1000× plus lent qu'un GAN qui génère en un seul passage. En pratique : plusieurs secondes sur GPU pour une image, contre quelques millisecondes pour un GAN.
+
+### Accélération
+
+Plusieurs approches ont été développées pour réduire ce coût :
+
+**DDIM (Denoising Diffusion Implicit Models)** : reformulation déterministe du processus de débruitage qui permet de sauter des étapes. On peut descendre à 50-100 étapes avec très peu de perte de qualité.
+
+**DPM-Solver** : utilise des solveurs d'équations différentielles ordinaires (ODE) d'ordre supérieur. Permet d'atteindre 10-20 étapes avec une qualité comparable aux 1000 étapes originales.
+
+**Distillation de consistance** : on entraîne un modèle "étudiant" à imiter en 1-4 étapes ce que le modèle "enseignant" fait en 1000. Le modèle étudiant apprend à sauter directement du bruit vers l'image finale.
+
+<Callout type="info" title="Connexion score matching">
+Prédire le bruit epsilon = estimer le **score** (gradient du log-densité) de la distribution bruitée. Song et al. unifient diffusion, score matching, et SDEs dans un cadre théorique. Ouvre voies vers flow matching, score-based models. Mathématiques profondes sous-jacentes.
+</Callout>
+
+## Guidance : contrôler la génération
+
+### Classifier guidance
+
+Ajouter le gradient d'un classifieur pré-entraîné au débruitage. Pousse vers une classe spécifique.
+
+Trade-off : fidélité vs diversité.
+
+### Classifier-free guidance (le standard actuel)
+
+Entraîner le diffusion model à débruiter avec ET sans conditioning. À l'inférence :
+
+```
+epsilon_guided = epsilon_uncond + w * (epsilon_cond - epsilon_uncond)
+```
+
+où w > 1 amplifie l'effet du conditioning. C'est comment Stable Diffusion et DALL-E font text-to-image. Pas besoin de classifieur séparé.
+
+<Callout type="paper" title="Diffusion latente">
+Stable Diffusion : diffusion dans l'espace latent d'un VAE, pas l'espace pixel. Encodeur VAE compress image → petit vecteur latent. Diffusion opère là-dedans (100× moins coûteux). Décodeur reconstruit final. Rend diffusion pratique haute-res.
+</Callout>
+
+## Résumé
+
+Les modèles de diffusion reposent sur une idée remarquablement simple : bruiter progressivement les données jusqu'au bruit pur, puis apprendre à inverser ce processus. Le processus forward est fixe et ne s'apprend pas. Le processus reverse est appris par un réseau de débruitage (U-Net). L'entraînement est stable et simple (une seule loss MSE), contrairement aux GANs. La génération est lente (1000 étapes), mais des techniques comme DDIM ou DPM-Solver ramènent cela à 10-50 étapes. En termes de qualité, les modèles de diffusion surpassent les GANs et les VAEs sur la plupart des benchmarks depuis 2022 — c'est pourquoi Stable Diffusion, DALL-E 2 et Midjourney les utilisent tous.

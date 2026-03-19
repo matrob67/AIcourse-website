@@ -1,0 +1,136 @@
+---
+title: "Normalisation : BatchNorm, LayerNorm, GroupNorm"
+description: "Pourquoi normaliser les activations ? BatchNorm pour les CNN, LayerNorm pour les Transformers, et quand les utiliser."
+---
+
+## Introduction : Le chaos des distributions qui dansent
+
+Pendant l'entraînement, les poids changent **constamment**. Ça signifie que les **entrées de chaque couche** changent aussi : leur moyenne, leur variance, tout.
+
+C'est le **internal covariate shift**. Problématique : chaque couche doit s'adapter en permanence à une distribution différente. C'est comme apprendre à conduire quand la route change de direction chaque jour.
+
+La **normalisation** stabilise ça en gardant les activations dans une distribution cohérente. Les couches peuvent se concentrer sur l'apprentissage, pas sur l'adaptation constante.
+
+
+
+<Callout type="info" title="Le débat scientifique">
+Pourquoi la normalisation marche vraiment ? Personne n'est d'accord. L'explication originale (internal covariate shift) a été remise en question. D'autres disent que ça "lisse" le paysage d'erreur. Peu importe la raison : ça marche empiriquement super bien.
+</Callout>
+
+## BatchNorm : normaliser sur le batch
+
+<ArxivLink id="1502.03167" title="Batch Normalization: Accelerating Deep Network Training" />
+
+BatchNorm normalise chaque **feature** sur tous les exemples du batch.
+
+Exemple : batch de 64 images, 128 features (canaux). Tu calcules 128 paires (moyenne, variance) : une par feature.
+
+**Processus** :
+
+1. Calcule la moyenne du batch : μ = moyenne des 64 valeurs pour ce channel
+2. Calcule la variance : σ² = variance des 64 valeurs
+3. Normalise : x_norm = (x - μ) / racine(σ² + epsilon)
+4. Scale et shift : y = gamma * x_norm + beta
+
+Où gamma et beta sont appris pendant l'entraînement. Ils permettent au réseau de "défaire" la normalisation si c'est utile.
+
+### À l'inférence
+
+Pas de batch. BatchNorm utilise des **running statistics** (moyennes mobiles) accumulées pendant l'entraînement.
+
+<Callout type="tip" title="BatchNorm a changé la vie">
+Permet un learning rate 5-10x plus élevé. Réduit les problèmes d'initialisation des poids. Petit effet régularisant (le bruit du batch aide). C'est pourquoi on peut entraîner des réseaux très profonds aujourd'hui.
+</Callout>
+
+**Limitation clé** : BatchNorm dépend du batch. Avec un batch trop petit (taille 2), les statistiques sont bruyantes. Problématique avec les RNNs (longueurs variables) et l'entraînement distribué.
+
+## LayerNorm : normaliser sur les features
+
+<ArxivLink id="1607.06450" title="Layer Normalization" />
+
+LayerNorm normalise sur les **features** de chaque exemple séparément, indépendamment du batch.
+
+Exemple : batch de 64 images, 128 features. Tu calcules 64 paires (moyenne, variance) : une par **image**.
+
+```
+Pour chaque image i :
+  μ_i = moyenne de ses 128 features
+  σ²_i = variance de ses 128 features
+  normalize : x_norm = (x - μ_i) / racine(σ²_i + epsilon)
+  y = gamma * x_norm + beta
+```
+
+**Différence fondamentale** : LayerNorm est **identique** à l'entraînement et l'inférence. Pas d'accumulation de running statistics.
+
+
+
+**Avantages** :
+- Marche avec n'importe quelle taille de batch (même batch = 1)
+- Stable pour les séquences de longueur variable
+- Pas de dépendances bizarres au batch size
+
+<Callout type="warning" title="LayerNorm est le standard pour les Transformers">
+Tous les Transformers (BERT, GPT, etc.) utilisent LayerNorm. Généralement en **Pre-LN** : normalise avant les couches d'attention, pas après. Pre-LN stabilise les réseaux très profonds mieux que Post-LN.
+</Callout>
+
+## GroupNorm : le compromis
+
+GroupNorm divise les canaux en **groupes** et normalise au sein de chaque groupe, indépendamment du batch.
+
+Exemple : 128 canaux, 32 groupes. Crée 4 groupes de 32 canaux chacun. Normalise chaque groupe.
+
+**Cas extrêmes** :
+- 1 groupe = LayerNorm (normalise tout ensemble)
+- Autant de groupes que de canaux = InstanceNorm
+
+**Quand l'utiliser** : vision avec petits batchs (mémoire GPU limitée, images très haute résolution). U-Nets pour la génération d'images l'utilisent.
+
+## RMSNorm : LayerNorm mais plus rapide
+
+RMSNorm simplifie LayerNorm en **supprimant le recentrage** (soustraction de la moyenne) :
+
+```
+x_norm = x / RMS(x)
+où RMS(x) = racine(moyenne de x²)
+y = gamma * x_norm
+```
+
+**Pourquoi supprimer la moyenne ?** Des études empiriques montrent que le recentrage n'apporte pas toujours du gain mais **ralentit** le calcul. RMSNorm est 10-15% plus rapide que LayerNorm.
+
+<Callout type="tip" title="RMSNorm devient le standard">
+LLaMA, Mistral, Gemma et les LLMs récents utilisent RMSNorm au lieu de LayerNorm. Plus efficace à très grande échelle.
+</Callout>
+
+## Tableau comparatif
+
+| Technique | Normalise sur | Dépend du batch | Pour quoi |
+|---|---|---|---|
+| BatchNorm | Le batch entier | Oui | CNN, vision classique |
+| LayerNorm | Les features (par exemple) | Non | Transformers, RNN |
+| GroupNorm | Groupes de features | Non | Vision avec petits batchs |
+| RMSNorm | Features (magnitude seulement) | Non | LLMs modernes |
+
+## Où placer la normalisation ?
+
+### Post-norm (après la couche principale)
+
+Formulation originale des Transformers. Peut devenir instable dans très profonds.
+
+### Pre-norm (avant la couche principale)
+
+Plus stable, meilleur pour réseaux profonds. Le gradient circule plus directement. **Devenu le standard**.
+
+## Guide pratique
+
+| Architecture | Choix | Notes |
+|---|---|---|
+| CNN classique (ResNet, VGG) | BatchNorm | Validé par années |
+| Transformer (NLP, vision) | LayerNorm Pre-LN | Standard |
+| Petits batchs en vision | GroupNorm (G=32) | Pas de dépendance au batch |
+| LLM très grande échelle | RMSNorm Pre-LN | Efficacité |
+
+La normalisation paraît anodine mais c'est **ce qui permet d'entraîner les réseaux profonds modernes**. Savoir quelle variante utiliser = compétence fondamentale.
+
+## Pourquoi c'est important
+
+Sans normalisation, les réseaux profonds divergent ou convergent très lentement. C'est un des outils les plus importants en deep learning moderne. Savoir quand et comment l'utiliser te fait gagner des semaines d'entraînement.

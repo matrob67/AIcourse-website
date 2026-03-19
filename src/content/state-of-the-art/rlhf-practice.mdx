@@ -1,0 +1,160 @@
+---
+title: "RLHF en pratique : TRL, OpenRLHF"
+description: "Implémentation pratique du Reinforcement Learning from Human Feedback pour l'alignement des LLM. Outils, frameworks et bonnes pratiques avec TRL et OpenRLHF."
+---
+
+
+
+## De ChatGPT à votre LLM: transformer instruction en alignement
+
+OpenAI a utilisé RLHF pour passer de GPT-3.5 brut à ChatGPT. Anthropic l'a utilisé pour Claude. C'est le processus qui transforme un modèle instruit en un modèle **aligné** avec ce que les humains veulent vraiment.
+
+<Callout type="info" title="Les trois étapes du RLHF">
+1. **SFT** (Supervised Fine-Tuning): entraîner sur des bonnes réponses
+2. **Reward Model**: apprendre ce que les humains préfèrent
+3. **RL (PPO)**: optimiser le modèle pour maximiser les récompenses
+
+Chaque étape affine le comportement. À la fin: un modèle utile, harmless, honnête.
+</Callout>
+
+## Étape 1: SFT (Supervised Fine-Tuning)
+
+C'est de l'instruction tuning classique. Vous fine-tunez sur des **bonnes réponses** à des instructions. Point de départ pour la suite.
+
+Avec TRL (Transformer Reinforcement Learning) de Hugging Face:
+
+```python
+from trl import SFTTrainer, SFTConfig
+
+config = SFTConfig(
+    output_dir="./sft_model",
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=4,
+    learning_rate=2e-5,
+    num_train_epochs=3,
+)
+
+trainer = SFTTrainer(
+    model=model,
+    args=config,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+Résultat: un modèle capable de suivre des instructions.
+
+## Étape 2: Entraînement du Reward Model
+
+Problème: qu'est-ce qui est une "bonne" réponse? Les humains le savent, pas le modèle.
+
+Solution: **reward model**. Entraîné sur des **paires de comparaison**: deux réponses, l'humain dit laquelle il préfère.
+
+### Format des données
+
+```json
+{
+  "prompt": "Explique la relativité générale simplement.",
+  "chosen": "La relativité générale est la théorie d'Einstein...",
+  "rejected": "E=mc2 est une équation de physique..."
+}
+```
+
+### La loss: Bradley-Terry
+
+```
+L = -log(sigmoid(r(chosen) - r(rejected)))
+```
+
+Le modèle apprend: si r(chosen) > r(rejected), la loss baisse. Simple.
+
+<Callout type="paper" title="Qualité des annotations = tout">
+Si l'accord entre annotateurs < 70%, le reward model est pourri. L'annotation est le goulot. Coûteux, biaisé, mais essentiel.
+</Callout>
+
+## Étape 3: Optimisation PPO
+
+Maintenant vous avez:
+- Un modèle SFT (policy)
+- Un reward model (juge)
+
+PPO (Proximal Policy Optimization) les combine: le modèle génère des réponses, le reward model les évalue, PPO ajuste les poids pour augmenter les récompenses.
+
+### La pénalité KL (critique!)
+
+Sans contrôle, le modèle "hack" le reward model. Génère des réponses absurdement longues parce que ça reçoit des points.
+
+Solution:
+
+```
+objective = E[reward] - β × KL(π_θ || π_ref)
+```
+
+La pénalité KL empêche le modèle de s'éloigner trop du modèle de référence. β = force du contrôle.
+
+<Callout type="warning" title="Reward hacking est réel">
+Sans KL, le modèle devient stupide rapidement. Il apprend à exploiter les failles du reward model au lieu de vraiment s'améliorer. Réglez β soigneusement.
+</Callout>
+
+## TRL: le framework Hugging Face
+
+TRL rend le RLHF accessible:
+
+- **SFTTrainer**: instruction tuning facile
+- **RewardTrainer**: entraînement du reward model
+- **PPOTrainer**: optimisation RL complète
+- Intégration PEFT (LoRA, QLoRA)
+- Multi-GPU, DeepSpeed support
+
+C'est l'outil de référence pour l'expérimentation.
+
+## OpenRLHF: scaling massivement
+
+TRL fonctionne bien pour 7-13B. Mais les super-modèles (34-70B+) ont besoin de quelque chose de plus sophistiqué.
+
+**OpenRLHF**: architecture distribuée avec Ray.
+
+Avantages:
+- Rôles séparés: Actor, Critic, Reward Model, Reference Model sur GPU différents
+- Support massif (jusqu'à 70B+ modèles)
+- Optimisations mémoire avancées
+- PPO, DPO, GRPO, etc.
+
+<Callout type="tip" title="TRL vs OpenRLHF">
+**TRL**: pour expérimenter, 7-13B models. Facile à utiliser, intégration Hugging Face.
+**OpenRLHF**: pour production, 34B-70B+. Plus complexe, plus performant.
+</Callout>
+
+## Défis pratiques
+
+### Instabilité PPO
+PPO sur LLM est fameux pour être **finicky**. Hyperparamètres (learning rate, β KL, clip ratio, PPO epochs) demandent tuning soigneux. LR trop élevé = catastrophe en quelques steps.
+
+### Coût mémoire brutal
+Vous avez besoin de **4 modèles** en mémoire simultanément:
+1. Policy (entraînable)
+2. Reference SFT (gelé)
+3. Reward model
+4. Value head (critiqué)
+
+Pour un 7B en FP16: ~56 Go avant activations et gradients.
+
+### Génération lente
+PPO demande de **générer** des réponses complètes (pas juste forward pass). La génération auto-régressive est lente. Chaque step PPO = beaucoup plus coûteux qu'un step SFT.
+
+## Alternatives au PPO: les challenger
+
+Le RLHF classique est complexe. Des alternatives emergent:
+
+- **DPO** (Direct Preference Optimization): élimine le reward model ET le RL
+- **GRPO** (Group Relative Policy Optimization): utilisé par DeepSeek
+- **KTO** (Kahneman-Tversky Optimization): juste besoin labels bon/mauvais
+- **ORPO** (Odds Ratio Preference Optimization): combine SFT et alignement en une pass
+
+<Callout type="warning" title="DPO gagne en popularité">
+DPO est plus simple, plus stable, moins de mémoire. De plus en plus de praticiens l'utilisent. Le RLHF théorique avec PPO reste la référence, mais DPO gagne en pratique.
+</Callout>
+
+---
+
+**Essence**: RLHF c'est le processus qui transforme un modèle instruit en un modèle aligné. C'est complexe, coûteux, mais c'est ça qui rend les LLM utiles et sûrs.

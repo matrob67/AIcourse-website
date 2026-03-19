@@ -1,0 +1,163 @@
+---
+title: "Scheduling du learning rate : warmup, cosine, WSD"
+description: "Guide complet sur les stratégies de scheduling du learning rate pour l'entraînement des LLM : warmup linéaire, décroissance cosinus, WSD et leurs impacts sur la convergence."
+---
+
+## Le problème : quel learning rate à chaque étape ?
+
+Au début de l'entraînement, les poids sont aléatoires. Les gradients sont bruyants et imprévisibles. Un learning rate élevé à cet instant peut faire des mises à jour catastrophiques et faire diverger le modèle complètement.
+
+En fin d'entraînement, tu es près d'un minimum. Un learning rate élevé saute par-dessus et oscille. Tu dois réduire le learning rate pour converger finement.
+
+Le scheduling du learning rate adapte le LR au cours de l'entraînement pour naviguer ces deux régimes.
+
+## Warmup linéaire : laisser l'optimiseur se calibrer
+
+### Idée simple
+
+Commence avec un LR de zéro (ou très petit) et augmente linéairement pendant les premières itérations :
+
+```
+lr(t) = lr_max × (t / T_warmup)
+```
+
+Exemple : avec lr_max=3e-4 et warmup de 1000 itérations :
+- Itération 0 : lr = 0
+- Itération 500 : lr = 1.5e-4
+- Itération 1000 : lr = 3e-4 (on passe au cosinus)
+
+### Pourquoi c'est nécessaire
+
+<Callout type="info" title="Calibration de l'optimiseur">
+Adam maintient des statistiques (momentum, variance) des gradients. Au début, ces statistiques sont incorrectes (tu n'as qu'un batch pour estimer la variance d'une distribution). Un warmup permet aux statistiques de se calibrer graduellement tout en gardant les mises à jour à jour petites et sûres.
+</Callout>
+
+### Durée typique
+
+| Taille modèle | Warmup |
+|--------------|--------|
+| < 1B | 500-1000 itérations |
+| 1-10B | 1000-2000 itérations |
+| > 10B | 2000-5000 itérations |
+| Batch énorme | Warmup plus long |
+
+Règle empirique : warmup ≈ 0.5% à 2% du nombre total d'itérations.
+
+
+
+## Décroissance cosinus : la courbe élégante
+
+Après le warmup, le LR suit une forme cosinus :
+
+```
+lr(t) = lr_min + 0.5 × (lr_max - lr_min) × (1 + cos(π × (t - T_warmup) / T_total))
+```
+
+Elle diminue lentement au début, s'accélère au milieu, puis ralentit en fin d'entraînement.
+
+### Pourquoi cette forme ?
+
+- **Début lent** : garde un LR élevé pour avancer vite dans l'espace des paramètres
+- **Milieu rapide** : réduit le LR quand la loss diminue moins rapidement
+- **Fin douce** : converge finement vers un minimum local plus plat (meilleure généralisation)
+
+<Callout type="tip" title="Le standard de facto">
+Warmup + cosinus est utilisé par **LLaMA, GPT-3, Chinchilla, Mistral**, la quasi-totalité des grands LLM. C'est la baseline d'or.
+</Callout>
+
+## WSD : Warmup-Stable-Decay
+
+Une alternative qui divise l'entraînement en trois phases :
+
+1. **Warmup** : augmentation linéaire (comme avant)
+2. **Stable** : LR constant pendant la majorité de l'entraînement
+3. **Decay** : décroissance rapide (linéaire ou exponentielle) en fin
+
+### Avantage majeur : flexibilité
+
+Avec le cosinus, tu dois déclarer T_total à l'avance. Si tu veux étendre l'entraînement, tout le schedule change.
+
+Avec WSD, la phase stable a une durée arbitraire. Tu peux entraîner 100K itérations ou 500K dans la phase stable, puis faire la décroissance.
+
+<Callout type="paper" title="WSD pour la continuation">
+Si tu veux continuer un entraînement terminé : avec cosinus, le LR est déjà au minimum. Avec WSD, tu es dans la phase stable, tu peux simplement relancer la phase decay. C'est beaucoup plus simple.
+</Callout>
+
+### Comparaison
+
+| Aspect | Cosinus | WSD |
+|--------|---------|-----|
+| Durée totale requise à l'avance | Oui | Non |
+| Continuation d'entraînement | Difficile | Facile |
+| Adoption | Dominante (70%) | Croissante (30%) |
+| Performance | Référence | Comparable |
+
+DeepSeek, MiniCPM et les modèles récents choisissent de plus en plus WSD pour cette flexibilité.
+
+## Autres stratégies moins utilisées
+
+### Décroissance linéaire
+
+LR décroît linéairement : simple, mais légèrement sous-optimal en comparaison au cosinus.
+
+### Inverse square root
+
+```
+lr(t) = lr_max × sqrt(T_warmup / t)
+```
+
+Utilisé dans le Transformer original et T5. Le LR décroît rapidement au début, puis très lentement. Pas besoin de déclarer T_total.
+
+Moins populaire pour les LLM modernes, mais intéressant pour les projets sans durée fixe.
+
+### Cosinus avec restarts
+
+Le LR oscille en cosinus avec des redémarrages périodiques. Rarement utilisé pour les LLM (instabilité à grande échelle).
+
+## Choix du learning rate maximum : dépend fortement du modèle
+
+| Taille modèle | LR typique (Adam) |
+|--------------|-------------------|
+| 100M | 5e-4 à 1e-3 |
+| 1B | 3e-4 à 5e-4 |
+| 7B | 1e-4 à 3e-4 |
+| 70B | 1e-5 à 3e-5 |
+
+**Tendance** : les modèles plus grands nécessitent des learning rates plus bas. C'est contre-intuitif mais empiriquement vrai.
+
+### Scaling avec le batch size
+
+Quand tu augmentes le batch size, tu dois augmenter le LR. La **linear scaling rule** :
+
+```
+lr_new = lr_base × (new_batch / base_batch)
+```
+
+Exemple : batch × 8 => LR × 8. Avec un warmup plus long.
+
+<Callout type="warning" title="Le LR est l'hyperparamètre le plus sensible">
+2x trop haut = divergence catastrophique.
+2x trop bas = entraînement 2x plus lent.
+
+Des grid searches de LR sur des petits modèles (1-3B) avant de lancer des entraînements coûteux sont essentiels.
+</Callout>
+
+## Pratiques avancées
+
+### Batch size ramp-up avec LR adjustment
+
+Commence avec un petit batch (2M tokens) et lr élevé, puis augmente le batch progressivement (2M → 4M → 8M) et le LR en conséquence. Ça combine l'apprentissage rapide initial et l'efficacité de calcul du batch grand.
+
+### Fine-tuning : LR beaucoup plus bas
+
+Le fine-tuning utilise des LR **10-100x plus bas** que le pré-entraînement. Exemple : si le pré-entraînement utilise 1e-4, le fine-tuning utilise 1e-5 à 1e-6. Peu ou pas de warmup.
+
+### Continuation : WSD > cosinus
+
+Si tu reprends un entraînement, WSD rend la continuation triviale. Cosinus est plus compliqué à adapter.
+
+## Résumé
+
+**Warmup + cosinus** = la combinaison standard et fiable pour le pré-entraînement. **WSD** = alternative pour la flexibilité. Le **LR maximum** est l'hyperparamètre clé—il dépend fortement de la taille du modèle et du batch. Grid search avant d'investir.
+
+Les grandes règles : toujours warmup, ajuste le LR avec le batch, plus grand modèle = LR plus petit.

@@ -1,0 +1,197 @@
+---
+title: "Génération de données synthétiques"
+description: "Utiliser des LLM pour générer des données d'entraînement synthétiques : techniques, frameworks (distilabel, Bonito), avantages, limites et bonnes pratiques."
+---
+
+## L'idée radicale : pourquoi collecter des données si vous pouvez les inventer ?
+
+L'annotation de données coûte cher. Si vous avez besoin de 100 000 exemples labelisés, ça fait des mois et des millions de dollars. Mais que se passe-t-il si vous demandez à un **LLM puissant de les générer** ? En une semaine ? Pour 1% du coût ?
+
+Voilà l'idée des **données synthétiques**.
+
+Au lieu de :
+- Montrer les données du monde réel à des humains
+- Les humains les labelisent
+- Vous entraînez votre modèle
+
+Vous faites :
+- Un LLM puissant génère les données
+- Vous entraînez votre modèle sur les données générées
+- Boom, ça marche
+
+C'est fou que ça marche. Mais ça marche.
+
+
+
+## Pourquoi ce n'est pas de la triche
+
+Vous pourriez penser "mais c'est juste les données du modèle générateur. Mon modèle apprend juste l'imitation."
+
+Oui et non. Le modèle générateur est **bien meilleur** que votre modèle cible (par exemple, GPT-4 pour générer, vous pour entraîner un petit modèle Mistral). GPT-4 génère des données de haute qualité. Votre petit modèle apprend de ces données. C'est de la **distillation** : vous versez les connaissances d'un big modèle dans un petit modèle.
+
+Les petits modèles qui font des choses incroyables ? Beaucoup sont entraînés comme ça. Alpaca (Stanford), Vicuna, Orca, tous utilisent des données synthétiques d'un modèle puissant.
+
+<Callout type="info" title="La révolution de la distillation de modèles">
+Avant : pour avoir un bon modèle, vous aviez besoin des moyens de créer un gros dataset de haute qualité.
+Après : vous demandez à GPT-4 de générer le dataset. Vous entraînez un petit modèle (Mistral 7B) dessus. Boom, vous avez un bon modèle.
+
+Ça démocratise l'IA. Les petites équipes avec peu de données peuvent maintenant créer des modèles bons.
+</Callout>
+
+## Techniques de génération : simple à complexe
+
+### Technique 1 : génération par instruction simple
+
+Vous décrivez le type de données et le modèle génère :
+
+**Exemple** : "Génère 100 reviews de restaurants en Français, avec une variété de sentiments (positifs, négatifs, neutres). Les reviews doivent être entre 50 et 200 mots."
+
+ChatGPT génère 100 reviews. Boom. Données synthétiques.
+
+Simple mais efficace pour beaucoup de cas.
+
+### Technique 2 : Self-Instruct
+
+**Self-Instruct** est plus clever. L'idée :
+1. Vous avez 50 bonnes instructions initiales (seed)
+2. Vous demandez au modèle : "génère 50 nouvelles instructions similaires mais diversifiées"
+3. Pour chaque nouvelle instruction, demandez une réponse
+4. Filtrez les mauvaises réponses
+5. Recommencez
+
+C'est l'approche utilisée par Alpaca (Stanford) : 175 instructions seed -> 52 000 paires instruction-réponse en une semaine.
+
+La beauté : ça crée de la **diversité**. Le modèle invente de nouvelles questions, ne juste pas copie-colle les anciennes.
+
+### Technique 3 : Evol-Instruct (WizardLM)
+
+**Evol-Instruct** est un niveau au-dessus. L'idée : progressivement compliquer les instructions.
+
+- **Départ** : "Que mange un chat ?" (trivial)
+- **Deepening** : "Comparé à d'autres carnivores, quelles sont les caractéristiques uniques du régime alimentaire des chats ?" (ajout de complexité)
+- **Broadening** : "Décris l'évolution du régime alimentaire des chats, des ancêtres sauvages à la domestication" (élargissement du scope)
+- **Concretizing** : "Avec des exemples spécifiques de races et d'environnements, montre comment..."
+- **Reasoning** : "Fournis une analyse critiques des mythes courants sur le régime chat et explique pourquoi c'est faux"
+
+Vous construisez une **pyramide de complexité**. Des données triviales ne sont pas utiles. Des données trop dures le modèle ne peut pas répondre correctement. Evol-Instruct crée une distribution équilibrée de facile à très difficile.
+
+### Technique 4 : Générer des données de préférence
+
+Pour DPO/RLHF, vous avez besoin de paires "bonne réponse vs mauvaise réponse". Vous pouvez les générer :
+
+1. Générez une instruction
+2. Générez la "bonne" réponse avec un prompt minutieux ("Réponds de manière complète, exacte, helpful...")
+3. Générez la "mauvaise" réponse en demandant explicitement ("Donne une réponse vague et incomplète")
+4. La paire (bonne, mauvaise) est un exemple de préférence
+
+Ça permet d'entraîner des modèles avec DPO sans avoir des humains qui comparent.
+
+## Frameworks : les outils du métier
+
+### distilabel (HuggingFace)
+
+**distilabel** est l'outil open source de HuggingFace pour la génération de données.
+
+Features :
+- **Pipelines modulaires** : vous définissez les étapes (générer, filtrer, évaluer)
+- **Multi-LLM** : utilisez plusieurs modèles dans le même pipeline (un pour générer, un pour évaluer)
+- **Intégration Argilla** : les données brutes vont en Argilla pour validation humaine
+- **Techniques intégrées** : Self-Instruct, Evol-Instruct, UltraFeedback déjà disponibles
+- **Scalable** : fonctionnne sur Ray pour la parallélisation
+
+Un workflow typique :
+```
+distilabel génère 10 000 données
+→ LLM-as-judge les score
+→ les 2 000 meilleures vont à Argilla
+→ les humains valident 20% de ces 2 000
+→ tout ça finit en HuggingFace Hub
+```
+
+### Bonito
+
+**Bonito** est un modèle spécialisé dans la génération de paires instruction-réponse à partir de texte brut.
+
+Vous donnez un texte : "The photosynthesis process converts light energy into chemical energy..."
+
+Bonito génère automatiquement des questions et réponses pertinentes basées sur ce texte.
+
+Utile pour transformer un corpus non-structuré (emails, documents, pages web) en données d'entraînement.
+
+### Autres outils
+
+- **Genstruct** (Nous Research) : génère des instructions structurées
+- **Textbooks Are All You Need** : génère des données structurées comme des manuels scolaires
+
+## Le risque : model collapse
+
+Entraîner un modèle **uniquement** sur des données synthétiques peut mener au **model collapse**.
+
+Imaginez : GPT-4 génère des données. Vous entraînez Mistral 7B dessus. Ensuite, vous décidez d'utiliser Mistral pour générer des données et entraîner un modèle plus petit. Oups.
+
+Chaque génération perd un peu de diversité et de richesse. Après 3-4 générations, le modèle devient dégénéré : il parle comme un robot, peu de nuance, peu de créativité.
+
+**La solution** : mélanger données synthétiques et données réelles. 70% synthétiques, 30% réelles. Ça marche très bien.
+
+<Callout type="warning" title="Le piège du mélange synthétique">
+Si votre dataset est 100% synthétique généré par un LLM, vous avez tous les biais et limitations du modèle générateur. Aucune nouvelles diversité, nouvelles perspectives. Le petit modèle devient une photocopie d'une photocopie.
+
+Utilisez les synthétiques pour augmenter vos données réelles, pas pour les remplacer complètement.
+</Callout>
+
+## Filtrage et qualité : on ne garde que les bonnes données
+
+### Filtrage automatique
+
+Les données synthétiques brutes contiennent de la poubelle. Vous avez besoin de filtrer :
+
+**LLM-as-judge** : un LLM évalue chaque exemple :
+- "Cette réponse est-elle pertinente ?" → score 0-100
+- "Cette réponse est-elle factuelle ?" → score 0-100
+- Vous gardez les scores > 80
+
+**Déduplication** : supprimer les exemples quasi-identiques (deux réponses qui disent la même chose)
+
+**Heuristiques** :
+- Longueur : pas trop court, pas trop long
+- Diversité lexicale : pas juste "good good good"
+- Format : structure minimale
+
+### Validation humaine
+
+Même avec le filtrage automatique, vérifiez avec des humains :
+- **Échantillonnage** : prenez 5% des données, faites évaluer par des humains
+- **Validation ciblée** : les données avec scores ambigus (borderline) vont en validation
+- **Feedback itératif** : si les humains trouvent beaucoup d'erreurs, modifiez le prompt de génération
+
+## Considérations juridiques et éthiques
+
+### Droits d'auteur
+
+C'est compliqué légalement. Les données générées par un LLM sont-elles des œuvres dérivées des données d'entraînement ?
+
+Différents labos ont des positions différentes :
+- OpenAI interdit l'utilisation des outputs pour concurrencer OpenAI
+- Meta (Llama) : vous pouvez utiliser les outputs comme vous voulez
+- Anthropic : utilisation académique OK, commerciale, ça dépend
+
+Consultez vos termes d'utilisation.
+
+### Biais
+
+Les données synthétiques héritent des biais du modèle générateur. Un LLM qui sous-représente les femmes dans les rôles de leadership généreras des données biaisées.
+
+Vérifiez la **diversité et l'équité** de vos données synthétiques.
+
+### Transparence
+
+Bonne pratique : documenter dans votre modèle "X% des données d'entraînement sont synthétiques, générées par [modèle], avec [technique]".
+
+## Les bonnes pratiques
+
+- **Combiner synthétique et réel**. Les meilleurs datasets mélangent 70% synthétiques, 30% réels.
+- **Utiliser le meilleur modèle pour générer**. GPT-4 > GPT-3.5 > Mistral. Qualité in = qualité out.
+- **Filtrer agressivement**. 50 000 bonnes données > 500 000 données avec de la poubelle.
+- **Diversifier les prompts de génération**. Pas le même prompt 50 000 fois.
+- **Valider avec des humains**. Au moins 10% échantillonnage.
+- **Documenter**. Quel modèle, quelle technique, quels filtres, combien de synthétique vs réel.

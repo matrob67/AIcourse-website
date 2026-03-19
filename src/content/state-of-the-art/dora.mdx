@@ -1,0 +1,100 @@
+---
+title: "DoRA : Weight-Decomposed Low-Rank Adaptation"
+description: "DoRA améliore LoRA en décomposant les poids en magnitude et direction, comblant l'écart avec le fine-tuning complet tout en conservant l'efficacité paramétrique."
+---
+
+## Le problème: LoRA se rapproche mais ne vaut pas le fine-tuning complet
+
+LoRA est cool et efficace. Mais quand vous le comparez au fine-tuning complet, il y a toujours un petit écart de performance. Particulièrement sur des tâches compliquées ou quand vous changez complètement de domaine.
+
+Pourquoi? Les chercheurs qui ont créé DoRA ont découvert quelque chose: **le fine-tuning complet et LoRA changent les poids de manière fondamentalement différente**.
+
+<ArxivLink id="2402.09353" title="DoRA: Weight-Decomposed Low-Rank Adaptation (Liu et al., 2024)" />
+
+## L'insight clé: magnitude vs direction
+
+Voici l'analogie: imaginez une flèche représentant un poids. Elle a deux propriétés:
+1. **Magnitude**: la longueur de la flèche (son importance)
+2. **Direction**: vers où elle pointe (son rôle dans le modèle)
+
+Le fine-tuning complet change ces deux choses de manière **indépendante**. On peut augmenter la longueur sans vraiment tourner la flèche. Ou tourner la flèche sans changer sa longueur.
+
+LoRA change les deux à la fois, ce qui le limite.
+
+<Callout type="paper" title="L'observation clé">
+Le fine-tuning complet montre une corrélation **négative** entre les changements de magnitude et de direction. Quand la magnitude augmente, la direction reste stable. Quand la direction change, la magnitude bouge peu. LoRA n'arrive pas à faire ça. DoRA, si.
+</Callout>
+
+
+
+## Comment fonctionne DoRA
+
+DoRA décompose chaque poids en deux parties:
+
+```
+W = m × (V / ||V||)
+```
+
+- **m**: un vecteur de magnitude (combien important?)
+- **V**: une matrice de direction (normalisée, pour rester "unitaire")
+
+La magnitude est entraînable directement. La direction passe par LoRA classique.
+
+**Résultat**: vous avez deux chemins indépendants pour apprendre. La magnitude peut changer sans que la direction bouge. Ça donne bien plus de flexibilité.
+
+<Callout type="info" title="Surcoût minuscule">
+DoRA n'ajoute que le vecteur de magnitude (quelques milliers de paramètres). Comparé à LoRA, c'est négligeable. Pour une couche de 4096 dimensions, seulement 4096 paramètres supplémentaires.
+</Callout>
+
+## Pourquoi ça fonctionne en pratique
+
+Les auteurs montrent que DoRA reproduit exactement le pattern du fine-tuning complet: magnitude et direction se changent indépendamment. C'est plus riche, plus expressif.
+
+Résultats réels:
+
+| Tâche | LoRA | DoRA | Full tuning |
+|---|---|---|---|
+| Commonsense (LLaMA-7B) | 68.9 | 71.2 | 72.1 |
+| Instruction (LLaMA-7B) | 73.4 | 75.1 | 75.8 |
+| VQA (LLaVA-7B) | 79.1 | 80.3 | — |
+
+<Callout type="tip" title="DoRA comble l'écart">
+Avec DoRA et rang 16, vous approchez le full fine-tuning. Avec LoRA et rang 16, vous êtes souvent 2-3% en dessous. Mais DoRA est aussi rapide que LoRA.
+</Callout>
+
+## Utiliser DoRA en pratique
+
+C'est ultra simple avec Hugging Face:
+
+```python
+from peft import LoraConfig, get_peft_model
+
+config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    use_dora=True,  # Active DoRA au lieu de LoRA
+    lora_dropout=0.05,
+)
+
+model = get_peft_model(base_model, config)
+```
+
+Un simple `use_dora=True` et c'est parti. Le surcoût de calcul vient surtout de la normalisation colonne par colonne, ce qui est rapide.
+
+## Quand utiliser DoRA vs LoRA?
+
+- **LoRA suffit** si: vous faites une simple adaptation, ou la vitesse d'entraînement est critique
+- **DoRA préférable** si: vous voulez la meilleure qualité avec peu de paramètres, ou vous voyez un écart significant entre LoRA et full tuning
+
+<Callout type="warning" title="Surcoût: 20-30%">
+DoRA coûte 20-30% plus lent que LoRA. Pas énorme, mais à savoir si vous entraînez massivement. Si speed compte plus que qualité, restez sur LoRA avec rang plus élevé.
+</Callout>
+
+## Combinaisons puissantes
+
+DoRA marche avec **QLoRA** (quantification 4-bit). Combinée, c'est une des meilleures approches pour fine-tuner sur GPU consumer: efficace en mémoire ET en qualité.
+
+---
+
+**TL;DR**: DoRA = LoRA amélioré en séparant magnitude et direction. Meilleure qualité, surcoût minimal. Essayez-le si le fine-tuning compte pour vous.

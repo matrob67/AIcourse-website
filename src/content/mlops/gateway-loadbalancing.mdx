@@ -1,0 +1,157 @@
+---
+title: "Gateway LLM : LiteLLM et Portkey"
+description: "Unifiez l'accès à 100+ modèles LLM. Load balancing, fallback, cache, observabilité. Une API pour tous les providers."
+---
+
+## Le problème : trop de providers, trop d'APIs différentes
+
+Vous utilisez GPT-4 pour les requêtes complexes, Claude pour l'analyse, un open source pour les basiques. Chaque provider = API différente, formats différents, limites différentes, pricing différent.
+
+Votre code : rempli de `if provider == "openai"` et `if provider == "anthropic"`. Maintenance = cauchemar.
+
+Un **gateway LLM** = proxy centralisé. Votre app parle à UNE API unifiée, le gateway route vers les providers.
+
+<Callout type="info" title="Le gateway comme point de contrôle">
+Le gateway c'est là où vous mettez les politiques transversales : caching, rate limiting, fallback, monitoring, budgets. Plutôt que de les répéter dans chaque app, centralisez.
+</Callout>
+
+
+
+## LiteLLM : l'unification par API
+
+**LiteLLM** = bibliothèque + proxy qui expose 100+ modèles derrière une API compatible OpenAI.
+
+### L'idée simple
+
+Peu importe le provider. Vous appelez `completion()` comme OpenAI, et LiteLLM fait la traduction.
+
+```python
+# Même API pour OpenAI, Anthropic, Google, Mistral...
+response = completion(
+    model="claude-3.5-sonnet",  # ou "gpt-4", "gemini-pro"...
+    messages=[...],
+    temperature=0.7
+)
+```
+
+### Fonctionnalités du proxy
+
+- **Load balancing** : distribuer les requêtes entre plusieurs déploiements
+- **Fallback** : si OpenAI plante, basculer vers Anthropic
+- **Rate limiting** : limiter les requêtes par provider/clé/utilisateur
+- **Budget management** : limites de dépenses
+- **Logging** : intégration avec LangSmith, Langfuse, Helicone
+
+### Architecture
+
+```
+Application → LiteLLM Proxy → Provider APIs (OpenAI, Anthropic, etc.)
+```
+
+Le proxy gère les clés, les budgets, les fallbacks. Les apps ne savent même pas qu'il existe.
+
+<Callout type="tip" title="LiteLLM pour les organisations">
+Perfect pour les boîtes avec plusieurs équipes. Chaque équipe appelle le proxy avec une clé interne. Le proxy gère les clés réelles, les budgets par équipe, les fallbacks. Zéro duplication.
+</Callout>
+
+### Stratégies de load balancing
+
+- **Round-robin** : distribution uniforme
+- **Least busy** : route vers le moins surchargé
+- **Latency-based** : vers le plus rapide
+- **Cost-based** : vers le moins cher
+
+### Fallback et retries
+
+```
+Tentative 1 : OpenAI
+Erreur 429 (rate limit)
+→ Tentative 2 : Anthropic (fallback)
+Si succès, merci. Si erreur à nouveau :
+→ Tentative 3 : Mistral
+```
+
+## Portkey : le gateway avancé
+
+**Portkey** = plateforme SaaS gateway avec features avancées.
+
+### Ce qu'il ajoute
+
+- **Routing conditionnel** : utilisateur premium → GPT-4, utilisateur free → open source
+- **A/B testing** : répartissez le trafic entre modèles pour comparer
+- **Canary deployment** : déployez progressivement un nouveau modèle
+- **Prompt management** : versioning et déploiement de prompts
+- **Guardrails** : validations sur entrées/sorties
+- **Caching** : sémantique intégré
+- **Virtual keys** : abstraction des clés réelles
+
+### Routing avancé
+
+Au lieu de "toujours utiliser GPT-4", vous pouvez :
+- Utilisateur premium + requête complexe → GPT-4
+- Utilisateur premium + requête simple → GPT-4o-mini
+- Utilisateur free → Llama
+- Et tester deux modèles en parallèle (A/B)
+
+<Callout type="paper" title="Le gateway pour la gouvernance">
+Le gateway permet aux organizations d'imposer des politiques : "pas d'OpenAI", "budget max $100/jour", "tous les LLM appels logués". C'est le point de contrôle central.
+</Callout>
+
+## Autres solutions intéressantes
+
+### Helicone
+- Proxy + observabilité
+- Focus sur analytics de coûts
+- Intégration simple (changez la base URL)
+
+### Martian
+- Router intelligent basé sur la prédiction de qualité
+- Route automatiquement au modèle optimal (qualité/coût)
+- Pas de config manuelle
+
+### OpenRouter
+- Marketplace de modèles
+- Une seule clé API pour des dizaines de modèles
+- Pricing unifié et transparent
+
+## Comparaison rapide
+
+| Critère | LiteLLM | Portkey | Helicone |
+|---|---|---|---|
+| **Type** | OSS + Cloud | SaaS | SaaS |
+| **Self-hosted** | Oui | Non | Non |
+| **Load balancing** | Basique | Avancé | Basique |
+| **Fallback** | Oui | Oui | Non |
+| **Caching** | Simple | Sémantique | Oui |
+| **Prompt management** | Non | Oui | Non |
+| **Observabilité** | Via intégrations | Intégrée | Excellent |
+| **Coût** | Gratuit | Freemium | Freemium |
+
+<Callout type="warning" title="Latence ajoutée">
+Le gateway ajoute un hop réseau. Typiquement 5-20 ms. Négligeable vs le temps de génération du LLM (100ms - secondes). Pour les apps ultra-sensibles à la latence, mesurez l'impact.
+</Callout>
+
+## Architecture en production
+
+```
+Application
+    ↓
+Gateway (LiteLLM ou Portkey)
+    ↓
+Providers (OpenAI, Anthropic, self-hosted)
+    ↓
+Observabilité (LangSmith, Langfuse)
+    ↓
+Monitoring (alertes coûts, latence, erreurs)
+```
+
+## Bonnes pratiques
+
+- **Fallbacks toujours** : aucun provider n'a 100% uptime
+- **Monitor les coûts** : les surprises de facturation arrivent vite
+- **Utiliser le cache** : même simple, réduit les coûts
+- **Clés centralisées** : le gateway gère les clés, pas les apps
+- **Config en version** : la config du gateway = du code, versionner
+- **Tester le failover** : simulez des pannes régulièrement
+
+Un gateway bien configuré c'est la différence entre "on paie n'importe quoi" et "on paie optimalement".

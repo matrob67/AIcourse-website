@@ -1,0 +1,120 @@
+---
+title: "Dense, Sparse et Hybrid Retrieval"
+description: "Comparaison des méthodes de retrieval pour le RAG : recherche dense (embeddings), sparse (BM25), et hybride. Comprendre quand utiliser chaque approche."
+---
+
+
+
+## Trois mondes de retrieval
+
+Dense capture le **sens** (synonymes, paraphrases). Sparse capture les **termes exacts** (noms, codes). Hybride combine les deux. C'est la trinité du retrieval.
+
+<Callout type="info" title="Les forces opposées">
+Dense : "automobile" match "voiture". Sparse : "automobile" ne match "voiture" jamais.
+Dense : "erreur 404" match "gestion des erreurs HTTP". Sparse : "erreur 404" match **exactement** "erreur 404".
+</Callout>
+
+## Sparse (BM25) : l'ancien qui marche
+
+BM25 compte les mots : quels documents contiennent les termes de votre query ? Les termes **rares** comptent plus (via IDF).
+
+```python
+from rank_bm25 import BM25Okapi
+
+bm25 = BM25Okapi([doc.split() for doc in documents])
+scores = bm25.get_scores(query.split())
+```
+
+**Forces** :
+- Noms propres, codes, chiffres : retrouvez-les toujours
+- Zéro GPU, zéro modèle
+- Scalable : index inversé très efficace
+
+**Faiblesses** :
+- Pas de sémantique
+- "voiture" ≠ "automobile"
+
+### Quand BM25 suffit
+Corpus technique : code, APIs, documentation. Questions par mots-clés. Budget zero-compute.
+
+## Dense (Embeddings) : la sémantique
+
+Un modèle transforme le texte en vecteur. Deux textes similaires = vecteurs proches.
+
+**Forces** :
+- Compréhension sémantique
+- Synonymes, paraphrases
+- Multilingue avec les bons modèles
+
+**Faiblesses** :
+- Termes rares : peut les manquer
+- Coûteux (GPU + modèle)
+
+<Callout type="tip" title="Le piège du dense-only">
+Dense seul manque les évidents. Utilisateur cherche "erreur 404" ? Dense retourne "gestion des erreurs HTTP". BM25 trouve "erreur 404" direct. Vous préférez lequel ?
+</Callout>
+
+## Hybride : le best of both
+
+Combinez les scores dense et sparse :
+
+```
+score_final = alpha × score_dense + (1 - alpha) × score_sparse
+```
+
+### Reciprocal Rank Fusion (RRF)
+Fusion smarte : au lieu de fusionner les scores (qui sont à différentes échelles), fusionnez les **ranks** :
+
+```
+RRF(doc) = sum(1 / (k + rank_i(doc)))
+```
+
+Avantage : pas besoin de normaliser les scores entre systèmes différents.
+
+```python
+dense_results = vector_db.search(query_embedding, top_k=20)
+sparse_results = bm25.get_top_k(query, k=20)
+final = reciprocal_rank_fusion(dense_results, sparse_results, k=60)
+```
+
+<Callout type="paper" title="Résultats empiriques">
+Hybride surpasse systématiquement dense-only et sparse-only. Amélioration : 5-15 points de recall@10 selon le dataset. Surtout performant sur queries techniques.
+</Callout>
+
+## SPLADE : sparse mais sémantique
+
+SPLADE est un Transformer qui produit des vecteurs **sparse** (comme BM25) mais avec **compréhension sémantique**.
+
+Résultat : un vecteur sparse où chaque dimension = terme du vocabulaire. Le modèle peut "activer" des termes qui ne sont pas dans le texte original (expansion de termes intelligente).
+
+C'est un sweet spot entre dense et sparse, mais moins populaire que l'hybride classique.
+
+## Tableau comparatif
+
+| Aspect | BM25 | Dense | Hybride | SPLADE |
+|---|---|---|---|---|
+| Sémantique | Non | Oui | Oui | Oui |
+| Termes exacts | Excellent | Moyen | Excellent | Bon |
+| Coût | Minimal | Modèle | Les deux | Modèle |
+| Latence | Très rapide | Rapide | Modérée | Rapide |
+
+## Quand utiliser quoi
+
+### BM25 seul
+- Corpus technique (code, API docs)
+- Recherche par mots-clés
+- Budget compute = 0
+
+### Dense seul
+- Questions en langage naturel
+- Multilingual matching
+- Vous avez des GPUs
+
+### Hybride (recommandé)
+- **Toujours quand c'est possible.** BM25 coûte quasi rien (index inversé sur disque), et l'hybride améliore presque systématiquement les résultats.
+
+<Callout type="warning" title="Évaluer sur VOS données">
+Les performances varient énormément selon le domaine. Buildez un petit set de test (50 queries, docs attendus). Comparez dense, sparse, hybride sur **vos données**. C'est la seule façon de savoir.
+</Callout>
+
+Recommandation : démarrez avec hybride (dense + BM25 via RRF). C'est simple, robuste, et marche pour 95% des cas. Si ça marche pas, vous saurez exactement pourquoi (dense = mauvais embeddings, sparse = termes manquants) et pourrez affiner.

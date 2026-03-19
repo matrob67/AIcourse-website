@@ -1,0 +1,130 @@
+---
+title: "Chain-of-thought prompting"
+description: "Le raisonnement étape par étape dans les LLM : chain-of-thought, zero-shot CoT, self-consistency et leurs fondements théoriques."
+---
+
+## Faire raisonner un LLM
+
+Les LLM sont entraînés à prédire le prochain token. Cette mécanique fonctionne bien pour la génération de texte fluide, mais elle pose un problème pour le **raisonnement** : le modèle doit produire sa réponse en un seul "passage", sans étape intermédiaire de réflexion. C'est comme demander à quelqu'un de résoudre un problème de mathématiques de tête, sans papier brouillon.
+
+Le **chain-of-thought** (CoT) prompting résout ce problème en donnant au modèle un "papier brouillon" : on lui demande de montrer son raisonnement étape par étape avant de donner sa réponse finale.
+
+<ArxivLink id="2201.11903" title="Chain-of-Thought Prompting Elicits Reasoning in Large Language Models (Wei et al., 2022)" />
+
+
+
+## Le paper fondateur
+
+En janvier 2022, Wei et al. de Google Brain publient un article simple mais aux implications profondes. Leur découverte : en ajoutant quelques exemples de raisonnement étape par étape dans le prompt (few-shot CoT), les performances des LLM sur les tâches de raisonnement augmentent de façon spectaculaire.
+
+### L'exemple classique
+
+**Sans chain-of-thought :**
+```
+Q : Roger a 5 balles de tennis. Il achète 2 boîtes de 3 balles.
+Combien a-t-il de balles maintenant ?
+R : La réponse est 11.
+```
+
+**Avec chain-of-thought :**
+```
+Q : Roger a 5 balles de tennis. Il achète 2 boîtes de 3 balles.
+Combien a-t-il de balles maintenant ?
+R : Roger commence avec 5 balles. 2 boîtes de 3 balles font 2 × 3 = 6 balles.
+5 + 6 = 11. La réponse est 11.
+```
+
+En fournissant des exemples avec le raisonnement détaillé, le modèle apprend à produire ses propres chaînes de raisonnement pour les nouvelles questions.
+
+<Callout type="paper" title="Les résultats de Wei et al.">
+Sur le benchmark GSM8K (problèmes de mathématiques de niveau primaire), le CoT augmente les performances de PaLM-540B de 18% à 57%. Sur d'autres tâches de raisonnement (logique, déduction, stratégie), les améliorations sont tout aussi significatives. L'effet est d'autant plus fort que la tâche nécessite plusieurs étapes de raisonnement.
+</Callout>
+
+
+## Pourquoi ça fonctionne
+
+### Plus de compute à l'inférence
+
+Chaque token généré correspond à un passage à travers toutes les couches du Transformer — c'est du **compute**. En générant une chaîne de raisonnement de 50 tokens avant la réponse, le modèle effectue 50× plus de calcul qu'en donnant directement la réponse. Le CoT convertit du **temps d'inférence** en **qualité de raisonnement**.
+
+### Décomposition en sous-problèmes
+
+Les étapes intermédiaires décomposent un problème complexe en sous-problèmes plus simples. Chaque étape ne nécessite qu'un raisonnement élémentaire que le modèle maîtrise.
+
+### Réduction des erreurs d'accumulation
+
+Sans CoT, le modèle doit effectuer tous les calculs "en interne" dans un seul forward pass. Les résultats intermédiaires sont stockés dans les activations, où ils peuvent se dégrader. Avec le CoT, les résultats intermédiaires sont **externalisés** dans le texte et relus par le modèle à l'étape suivante.
+
+<Callout type="info" title="La mémoire de travail du Transformer">
+Un Transformer a une "mémoire de travail" limitée : les informations doivent être représentées dans les vecteurs d'activation et propagées à travers les couches. Le CoT utilise le texte généré comme une **mémoire externe** : le modèle écrit ses résultats intermédiaires, puis les relit pour continuer le raisonnement.
+</Callout>
+
+## Zero-shot chain-of-thought
+
+Peu après le paper de Wei et al., Kojima et al. (2022) font une découverte surprenante : il suffit d'ajouter la phrase **"Let's think step by step"** (ou sa traduction) à la fin du prompt pour déclencher le raisonnement en chaîne, sans aucun exemple.
+
+```
+Q : Un magasin vend des pommes à 2€ la pièce et des oranges à 3€.
+Marie achète 4 pommes et 3 oranges. Combien dépense-t-elle ?
+Réfléchissons étape par étape.
+```
+
+Le modèle génère alors spontanément un raisonnement détaillé. Cette approche **zero-shot CoT** est remarquable car elle ne nécessite aucun exemple — une simple instruction suffit.
+
+<Callout type="tip" title="Variantes de la phrase magique">
+Plusieurs formulations fonctionnent : "Réfléchissons étape par étape", "Raisonnons de manière méthodique", "Détaillons le raisonnement", "Avant de répondre, analysons le problème". L'important est de signaler au modèle qu'il doit expliciter sa réflexion. L'efficacité varie selon les modèles et les langues.
+</Callout>
+
+## Self-consistency
+
+Le **self-consistency** (Wang et al., 2022) améliore encore le CoT en exploitant la diversité des chemins de raisonnement. Le principe :
+
+1. Générer **N chaînes de raisonnement** différentes pour le même problème (en utilisant un sampling avec température > 0)
+2. Extraire la réponse finale de chaque chaîne
+3. Prendre la réponse **majoritaire** (vote à la majorité)
+
+L'intuition est simple : si plusieurs chemins de raisonnement indépendants arrivent à la même réponse, cette réponse est probablement correcte. Les erreurs de raisonnement, étant typiquement différentes d'une chaîne à l'autre, sont "noyées" par le vote.
+
+Le self-consistency apporte des améliorations significatives par rapport au CoT simple, mais au prix d'un coût d'inférence multiplié par N (typiquement N = 5 à 40).
+
+## Les limites du chain-of-thought
+
+### La taille du modèle
+
+Le CoT n'est efficace qu'avec des modèles suffisamment grands. En dessous de ~10 milliards de paramètres, les chaînes de raisonnement générées sont souvent incohérentes ou incorrectes, et le CoT peut même dégrader les performances par rapport au direct prompting. C'est l'une des capacités considérées comme émergentes.
+
+### Les erreurs de raisonnement
+
+Le CoT améliore le raisonnement mais ne l'élimine pas. Les modèles peuvent :
+- Faire des erreurs de calcul au milieu de la chaîne
+- Suivre un raisonnement logiquement valide mais basé sur des prémisses fausses
+- Se "perdre" dans des chaînes de raisonnement longues
+- Produire des raisonnements qui semblent corrects mais qui sont subtilement erronés (**hallucinations de raisonnement**)
+
+<Callout type="warning" title="Le raisonnement plausible mais faux">
+Un des risques du CoT est qu'il rend les erreurs plus convaincantes. Un raisonnement étape par étape qui aboutit à une mauvaise réponse peut sembler très plausible à un lecteur humain. La présence d'un raisonnement détaillé ne garantit pas la justesse de la conclusion.
+</Callout>
+
+### Les tâches non-décomposables
+
+Certaines tâches ne se prêtent pas naturellement à un raisonnement séquentiel. L'intuition, la reconnaissance de patterns complexes, ou les jugements esthétiques ne bénéficient pas forcément du CoT.
+
+## Les évolutions récentes
+
+### Tree-of-thought et Graph-of-thought
+
+Le **Tree-of-Thought** (Yao et al., 2023) généralise le CoT en explorant plusieurs branches de raisonnement simultanément, avec la possibilité de revenir en arrière (backtrack) quand une branche s'avère non productive. Le Graph-of-Thought va encore plus loin en permettant des connexions entre différentes branches.
+
+### Le test-time compute
+
+Les modèles comme o1 (OpenAI) et les approches de "thinking" intègrent le raisonnement en chaîne directement dans le processus d'inférence du modèle, plutôt que comme une technique de prompting. Le modèle alloue automatiquement plus de tokens de réflexion pour les problèmes plus difficiles, sans instruction explicite.
+
+### Process reward models
+
+Au lieu de juger uniquement la réponse finale, les **process reward models** évaluent chaque étape du raisonnement individuellement. Cela permet d'identifier et de corriger les erreurs à l'étape où elles se produisent, plutôt que de compter sur le self-consistency pour les filtrer.
+
+## Le CoT dans la pratique quotidienne
+
+Pour un praticien, le chain-of-thought est l'un des outils les plus puissants du prompt engineering. Ses applications incluent la résolution de problèmes mathématiques, l'analyse logique, le débogage de code, la prise de décision structurée, et toute tâche nécessitant un raisonnement multi-étapes.
+
+La recommandation est simple : pour toute tâche impliquant du raisonnement, demandez au modèle de montrer ses étapes. Le coût en tokens supplémentaires est largement compensé par l'amélioration de la qualité et de la fiabilité des réponses.

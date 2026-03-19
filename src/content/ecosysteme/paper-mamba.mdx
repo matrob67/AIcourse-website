@@ -1,0 +1,93 @@
+---
+title: "Paper : Mamba - L'alternative linéaire au Transformer"
+description: "Décembre 2023. Mamba propose complexité O(n) au lieu de O(n^2). State Space Models avec sélectivité. Rivalise Transformer. Débat : qui gagne ?"
+---
+
+
+
+## Le problème : O(n^2) tue
+
+Transformer attention : quadratique. 1M tokens ? 1T éléments matrice attention. Impossible.
+
+**Mamba** : linéaire. O(n). Context illimité. Théoriquement.
+
+<Callout type="info" title="La promesse : attention sans attention">
+Mamba rivalise Transformer en perfs. Linéaire complaisance. Le débat change : Transformer n'est pas obligatoire.
+</Callout>
+
+## State Space Models (SSM) : la base
+
+Inspiré par théorie du contrôle.
+
+État caché h(t) résume l'historique. Évolue selon :
+
+```
+h'(t) = A*h(t) + B*x(t)
+y(t) = C*h(t) + D*x(t)
+```
+
+A, B, C, D : paramètres.
+
+S4 (Gu 2021) : l'ancêtre. Montrait SSM compétitif. Mais limités.
+
+## L'innovation de Mamba : sélectivité
+
+SSM classique : A, B, C fixes. Même traitement pour chaque token.
+
+**Mamba** : paramètres **input-dependent**.
+
+B(x), C(x), delta(x) : fonctions de l'input.
+
+Modèle peut sélectivement retenir/oublier infos. Comme gating dans LSTM. Mais SSM.
+
+C'est l'attention implicite.
+
+## Architecture
+
+Chaque couche :
+
+1. Expansion linéaire
+2. Convolution 1D causale
+3. SSM sélectif
+4. Multiplication par gate
+5. Projection de sortie
+
+Propriétés :
+
+- **O(n)** complexité
+- Pas KV-cache croissant
+- Inférence constante par token
+
+<Callout type="tip" title="Hardware-aware">
+Le défi : input-dependent params cassent la propriété convolution de S4. Mamba résout avec algorithme scan parallèle CUDA. IO-aware comme Flash Attention.
+</Callout>
+
+## Résultats
+
+**Performances** :
+
+- Mamba-3B surpasse Transformers même taille
+- Rivalise avec Transformers 2x plus gros
+- Bon sur séquences longues (expected)
+
+**Vitesse** :
+
+- 5x throughput que Transformer même taille
+- Inférence : constante avec contexte (Transformer : ralentit avec KV-cache)
+
+## Débat : Mamba vs Transformer
+
+**Arguments Mamba** :
+- Linéaire
+- Pas KV-cache
+- Inférence fast
+
+**Arguments Transformer** :
+- Attention simple, bien compris
+- Flash Attention optimized à mort
+- In-context learning meilleur ? (débat)
+- Scaling > 70B  validation moins forte
+
+<Callout type="warning" title="Le verdict : pas encore">
+Mamba prometteur. Pas remplacé Transformer pour gros modèles. > 70B ? Quasi-tous Transformers. Futur : architectures hybrides ? Mamba pour long contexte. Attention pour précision.
+</Callout>

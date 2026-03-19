@@ -1,0 +1,119 @@
+---
+title: "GPTQ : compression optimale des gros modèles"
+description: "La méthode qui a permis de faire tourner 175 milliards de paramètres sur un seul GPU."
+---
+
+## La révolution GPTQ
+
+En 2022, l'équipe IST Austria a présenté GPTQ : comment compresser un modèle **sans le réentraîner**. C'était révolutionnaire. Soudain, vous pouviez faire tourner GPT-3 (175B) sur un GPU à 80 Go, du jamais vu.
+
+<ArxivLink id="2210.17323" title="GPTQ: Accurate Post-Training Quantization (Frantar et al., 2022)" />
+
+## L'idée brillante
+
+Au lieu de simplement arrondir les poids (méthode idiote), GPTQ utilise les **mathématiques de second ordre** pour minimiser l'erreur.
+
+**L'analogie :** imaginez que vous compressez une photo en fusionnant des pixels. La méthode idiote : fusionner les pixels au hasard. La méthode smart : fusionner en sachant que certains pixels sont importants pour le résultat.
+
+GPTQ identifie quels poids sont importants (via la **matrice Hessienne**, une notion mathématique de sensibilité) et les protège pendant la quantification.
+
+```
+Erreur = ||Résultat original - Résultat quantifié||²
+↓
+Minimiser cette erreur en utilisant la structure de la Hessienne
+```
+
+## Comment ça fonctionne (simplifié)
+
+### Étape 1 : Mesurer l'importance
+
+Passer 128-256 exemples à travers le modèle pour calculer la **matrice Hessienne** : elle dit "ce poids affecte énormément les résultats, le protégez".
+
+### Étape 2 : Quantifier intelligemment
+
+Pour chaque bloc de colonnes (128 colonnes à la fois) :
+1. Quantifier les poids
+2. Calculer l'erreur introduite
+3. **Compenser cette erreur** sur les poids non encore quantifiés (utiliser la Hessienne inverse)
+
+C'est comme peindre une maison en ordonnant les pièces : en finissant chaque pièce, vous corrigez les murs des pièces suivantes.
+
+<Callout type="paper" title="L'innovation clé">
+GPTQ quantifie par **blocs** de 128 colonnes, pas poids par poids. Cela réduit la complexité mathématique de énorme à faisable : un modèle 175B peut être quantifié en quelques heures sur un GPU.
+</Callout>
+
+
+
+## Les paramètres importants
+
+### Nombre de bits
+- **4 bits** : le standard (bon compromis taille/qualité)
+- **3 bits** : possible mais perdez 10% de qualité
+- **8 bits** : peu d'intérêt (INT8 sans calibration suffit)
+
+### Taille du groupe (group_size)
+- **128** : le sweet spot (valeur par défaut)
+- **32** : plus précis mais 10% plus grand
+- **-1** : par canal (pas de groupes, trop coûteux)
+
+<Callout type="tip" title="128 c'est magique">
+Un group_size de 128 offre le meilleur compromis : presque aussi bon que 32 mais bien plus petit. Ne changez pas cette valeur sans raison.
+</Callout>
+
+### Dataset de calibration
+- C4 ou Wikitext-2 (datasets standards)
+- 128-256 exemples de 2000 tokens
+- Le choix affecte peu le résultat final
+
+## En pratique
+
+```python
+from auto_gptq import AutoGPTQForCausalLM
+
+model = AutoGPTQForCausalLM.from_pretrained(
+    "mistralai/Mistral-7B",
+    quantize_config=BaseQuantizeConfig(
+        bits=4,
+        group_size=128,
+    ),
+)
+model.quantize(calibration_dataset)
+model.save_quantized("mistral-7b-gptq")
+```
+
+Beaucoup de modèles GPTQ sont déjà disponibles sur Hugging Face, prêts à l'emploi.
+
+## Résultats réels
+
+Sur Mistral-7B (test de perplexité) :
+
+| Format | Perplexité | Taille |
+|---|---|---|
+| FP16 | 5.25 | 14.5 Go |
+| GPTQ 4-bit | 5.41 | 4.1 Go |
+| GPTQ 3-bit | 5.98 | 3.2 Go |
+
+La perte est très faible (3%) en quantifiant à 4 bits.
+
+### Vitesse d'inférence
+
+GPTQ utilise des **kernels CUDA spécialisés** (ExLlama v2) pour reconvertir les INT4 en FP16 à la volée, très rapidement. Jusqu'à **3× plus rapide** qu'une déquantification naïve.
+
+<Callout type="info" title="GPTQ = GPU only">
+GPTQ est optimisé pour GPU NVIDIA. Pour CPU, utilisez GGUF (llama.cpp). Les deux formats sont complémentaires selon votre matériel cible.
+</Callout>
+
+## Comparaison GPTQ vs AWQ vs GGUF
+
+| Aspect | GPTQ | AWQ | GGUF |
+|---|---|---|---|
+| Temps quantification | Heures | Minutes | Minutes |
+| Qualité 4-bit | Très bonne | Excellente | Bonne |
+| Inférence GPU | Excellent | Excellent | Bon |
+| Inférence CPU | Non | Non | Excellent |
+
+GPTQ a inspiré toute une génération de méthodes. AWQ l'a supplanté pour les nouvelles quantifications, mais des milliers de modèles GPTQ restent populaires.
+
+<Callout type="warning" title="Le kernel est crucial">
+Un modèle GPTQ sans bon kernel peut être plus lent que FP16. Vérifiez que votre framework (vLLM, TGI) supporte ExLlama v2 ou Marlin pour bénéficier de l'accélération.
+</Callout>

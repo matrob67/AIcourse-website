@@ -1,0 +1,166 @@
+---
+title: "Optimizers modernes : Adam, AdamW, et LAMB"
+description: "De SGD à Adam : les optimizers qui s'adaptent à chaque poids. Comment Adam a révolutionné l'entraînement et pourquoi AdamW le rend encore meilleur."
+---
+
+## Introduction : Pourquoi un optimiseur universel ne suffit pas
+
+Avec SGD classique, **tous** les poids utilisent le même learning rate. Mais ça n'a aucun sens.
+
+Certains poids reçoivent des gradients énormes à chaque étape (utilisés constamment). D'autres reçoivent des gradients minuscules (utilisés rarement, ou spécifiques).
+
+Le même learning rate ne peut pas convenir aux deux. C'est comme donner la même dose de médicament à un enfant de 10 kg et un adulte de 100 kg. Catastrophe.
+
+**Les optimiseurs adaptatifs** résolvent ça : chaque poids reçoit un learning rate personnalisé basé sur son historique.
+
+
+
+
+
+## Adam : l'optimiseur révolutionnaire
+
+<ArxivLink id="1412.6980" title="Adam: A Method for Stochastic Optimization" />
+
+L'idée centrale d'Adam : au lieu d'utiliser le gradient brut d'une étape pour mettre à jour un poids, Adam construit une vue d'ensemble de l'historique de ce poids. Il maintient **deux mémoires** exponentielles pour chaque poids — deux statistiques qui résument le passé récent.
+
+### Mémoire 1 : le momentum (m)
+
+Moyenne lissée des anciens gradients.
+
+```
+m = 0.9 * m + 0.1 * gradient_actuel
+```
+
+C'est le momentum qu'on connaît. Accumule de l'élan.
+
+### Mémoire 2 : la volatilité (v)
+
+Moyenne lissée des **carrés** des gradients.
+
+```
+v = 0.999 * v + 0.001 * gradient²
+```
+
+Mesure la variabilité des gradients passés. Si v est grand, ce poids reçoit des gradients qui changent beaucoup d'une étape à l'autre — il est "agité" et mérite d'être traité avec prudence.
+
+### La mise à jour
+
+```
+poids = poids - eta * (m / (racine(v) + petit_epsilon))
+```
+
+**L'intuition clé** :
+
+Un poids qui reçoit habituellement de gros gradients (v grand) est divisé par un grand nombre : il avance prudemment, car il est dans une zone chaotique de la surface de perte où de grands pas risquent de dépasser l'optimum.
+
+Un poids qui reçoit habituellement de petits gradients (v petit) est divisé par un petit nombre : il peut avancer plus vite, car il est dans une zone plate où il faut pousser plus fort pour progresser.
+
+C'est ce qui rend Adam tellement plus robuste que SGD : il calibre automatiquement la vitesse d'apprentissage pour chaque poids individuellement, sans que tu aies à trouver un seul learning rate qui convienne à tout le modèle en même temps.
+
+<Callout type="info" title="Les nombres magiques d'Adam">
+Beta_1 = 0.9 (mémoire du momentum)
+Beta_2 = 0.999 (mémoire de la volatilité)
+Learning rate = 0.001 ou 0.0001 généralement
+
+Ces valeurs sont bizarrement bien choisies. Les chercheurs les ont empiriquement trouvées optimales. Utilise-les, pas besoin de les tweaker.
+</Callout>
+
+## Le piège d'Adam : weight decay
+
+La **régularisation L2** (weight decay) c'est dire "garde tes poids petits" pour éviter le surapprentissage. On ajoute une pénalité :
+
+```
+erreur_totale = erreur + lambda * somme(poids²)
+```
+
+Avec SGD, ça marche parfaitement. Avec Adam, il y a un problème subtil :
+
+Le terme de régularisation se divise aussi par racine(v). Pour les poids très actifs (v grand), la pénalité devient minuscule. La régularisation devient inefficace.
+
+Résultat : tu crois régulariser mais tu ne fais rien.
+
+### AdamW : la correction simple
+
+<ArxivLink id="1711.05101" title="Decoupled Weight Decay Regularization" />
+
+AdamW découple le weight decay. Au lieu d'ajouter la pénalité au gradient (qui se divise par v), tu l'ajoutes **après** la mise à jour Adam :
+
+```
+poids = poids - eta * (m / racine(v)) - lambda * poids
+```
+
+Comme ça, la régularisation ne subit pas l'effet de divisé par v. Elle fonctionne comme prévu pour **tous** les poids.
+
+<Callout type="tip" title="AdamW est maintenant le standard">
+C'est l'optimiseur par défaut pour les Transformers, les LLMs, la majorité du deep learning moderne. Si tu dois retenir UN optimiseur, c'est AdamW. Weight decay typique : 0.01-0.1.
+</Callout>
+
+## LAMB : pour l'entraînement massif distribué
+
+Pour l'entraînement sur **milliers de GPUs** (entrainement industriel), on utilise des batchs énormes : 8000, 16000, 32000 exemples.
+
+Problème : avec Adam, augmenter la taille du batch au-delà d'un seuil **dégrade la qualité finale du modèle**, même en ajustant le learning rate. C'est contre-intuitif mais bien documenté.
+
+**LAMB** (Layer-wise Adaptive Moments Optimizer) normalise chaque couche indépendamment :
+
+```
+poids = poids - eta * (norm(poids) / norm(mise_a_jour)) * mise_a_jour_Adam
+```
+
+Chaque couche maintient une "échelle" appropriée même avec un batch énorme.
+
+Résultat : BERT entraîné en **76 minutes** au lieu de 3 jours sur plusieurs milliers de TPUs.
+
+<Callout type="warning" title="LAMB n'est pas pour toi">
+LAMB est conçu pour l'entraînement distribué massif. Si tu entraînes sur 1-4 GPU avec des batchs de 32-512, tu n'en as pas besoin. AdamW est meilleur pour toi.
+</Callout>
+
+## Tableau comparatif rapide
+
+| Optimiser | Quand l'utiliser | Avantage | Piège |
+|---|---|---|---|
+| SGD + Momentum | Vision classique (ResNet) | Généralise parfois mieux | Sensible au learning rate |
+| Adam | Prototypage rapide | Converge vite, peu de réglage | Weight decay cassé |
+| AdamW | 90% des cas (Transformers, LLM) | Tout marche bien | Très légèrement plus lent qu'Adam |
+| LAMB | Entraînement distribué massif | Scaling énorme | Très complexe |
+
+## L'importance du learning rate schedule
+
+Peu importe l'optimiseur, tu devrais **varier le learning rate** pendant l'entraînement.
+
+Stratégie courante : **Warmup + Cosine Decay**
+
+```
+Epochs 0-10 (warmup) : learning rate monte de 0 à 0.001
+Epochs 10-100 (cosine) : learning rate redescend progressivement jusqu'à presque 0
+```
+
+Au début tu cherches (pas large), à la fin tu affines (pas petits).
+
+C'est une petite chose mais elle améliore **presque toujours** la qualité finale du modèle.
+
+## Détails pratiques
+
+### Mémoire
+
+Adam stocke deux états supplémentaires (m et v) pour chaque poids. Pour un modèle de 7 milliards de poids, c'est :
+
+```
+Poids : 7B * 4 bytes = 28 Go
+m : 7B * 4 bytes = 28 Go
+v : 7B * 4 bytes = 28 Go
+Total : 84 Go RAM au lieu de 28 Go
+```
+
+C'est **3x plus de RAM**. Des variantes comme **Adafactor** réduisent ça en ne stockant que des statistiques, pas des états complets. Mais AdamW reste le standard.
+
+## Résumé pratique
+
+Pour 99% de tes projets :
+- **Utilise AdamW**
+- Learning rate initial : 0.001 ou 0.0001
+- Weight decay : 0.01-0.1
+- Learning rate schedule : warmup linéaire + cosine decay
+- Batch size : 32-256 (ajuste selon ta mémoire GPU)
+
+C'est robuste et tu bats rarement en changeant les optimiseurs.

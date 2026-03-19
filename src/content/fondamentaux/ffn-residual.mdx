@@ -1,0 +1,181 @@
+---
+title: "Feed-forward networks et residual connections"
+description: "Les composants discrets mais essentiels : où se cache la connaissance du Transformer ?"
+---
+
+## L'histoire : la connaissance cachée des FFN
+
+Tout le monde parle de l'attention du Transformer. C'est sexy, c'est médiatisé. Mais voici un secret : **les FFN contiennent probablement plus de connaissance que l'attention elle-même**.
+
+L'attention, c'est comme les **connexions** (les routes entre villes).
+Les FFN, c'est comme la **mémoire** (les ressources et usines dans les villes).
+
+Sans routes, les villes ne communiquent pas. Sans usines, elles n'ont rien à offrir. Les deux sont essentiels. Et pourtant, on oublie les FFN.
+
+
+
+## Les FFN : les petits réseaux qui stockent la mémoire
+
+### Structure simple mais puissante
+
+Après chaque bloc d'attention, chaque token passe indépendamment par un petit réseau neuaral :
+
+```
+Etape 1 : projeter vers une dimension plus grande
+  intermediaire = ReLU(token × W_1 + b_1)
+  (token de taille 512 devient 2048)
+
+Etape 2 : projeter de retour vers la taille originale
+  output = intermediaire × W_2 + b_2
+  (2048 redevient 512)
+```
+
+C'est appliqué à **chaque token indépendamment**. Pas d'interaction entre tokens, juste une transformation locale.
+
+Simple ? Oui. Mais mystérieusement puissant.
+
+<Callout type="info" title="Où le modele stocke ses connaissances">
+Des chercheurs ont découvert que les FFN sont une **mémoire associative** cachée. Les poids W_1 et W_2 forment des paires clé-valeur : "Quand tu vois ce pattern (W_1), produis cette réponse (W_2)".
+
+Exemple : "Quand tu vois 'Capital de la France', produis 'Paris'". C'est ici que les faits vivent, pas dans l'attention.
+</Callout>
+
+### L'évolution des activations
+
+La fonction **σ** (activation) a changé au fil du temps :
+
+| Année | Activation | Comment ca marche |
+|---|---|---|
+| 2017 | ReLU | simplement max(0, x) |
+| 2023+ | SwiGLU | deux branches : une qui se transforme, une qui sert de "porte" |
+| Alternatif | GeGLU | variante douce de SwiGLU |
+
+**SwiGLU** (LLaMA, Mistral, tous les modèles modernes) est meilleur : au lieu d'une seule branche, deux branches :
+- Branche 1 : transformation du token (W_1)
+- Branche 2 : "porte" qui décide quoi laisser passer (W_3)
+
+Résultat : une meilleure sélection de l'information. Les performances augmentent sans surcoût.
+
+
+
+### Le secret du coût : 2 tiers du modèle
+
+Les FFN paraissent simples, mais occupent l'**énorme majorité** des paramètres.
+
+Exemple : LLaMA 7B (7 milliards de paramètres)
+
+```
+Attention totale: 500M parametres
+FFN totale: 3 milliards parametres
+```
+
+**3 miliards sur 7 = 43%** des poids ! Et ce n'est que pour les FFN. Si vous ajoutez les embeddings, normalisation, etc., les FFN dominent largement.
+
+L'attention ? Seulement **7%** des paramètres totaux, mais elle fait tout le travail de communication. C'est un design astucieux.
+
+## Les skip connections : comment empiler sans s'écrouler
+
+### Le cauchemar sans skip connections
+
+Imaginez empiler 10 couches de réseaux de neurones les uns sur les autres. Pendant l'entraînement, vous rétropropagez le gradient d'erreur vers l'arrière à travers 10 couches.
+
+Problème : à chaque couche, vous passez par une activation non-linéaire (ReLU, tanh). Les gradients **rétrécissent ou explosent** à chaque passage. Après 10 passages = gradient mort (0) ou infini.
+
+Résultat : les premières couches n'apprennent rien. L'entraînement s'effondre.
+
+### La solution : les skip connections (autoroutes)
+
+Idée simple et géniale : ajouter l'entrée directement à la sortie :
+
+```
+output = input + Transformation(input)
+```
+
+Maintenant, le gradient a deux chemins :
+1. À travers la transformation (lent, sujet aux problèmes)
+2. Directement via le "+" (autoroute, rapide, sans non-linéarité)
+
+L'autoroute laisse les gradients **circuler librement**. Problème résolu.
+
+<Callout type="tip" title="Coin technique : pourquoi ca marche">
+La dérivée du "+", c'est simplement 1. Pas d'amplification ni d'amortissement. Le gradient passe intouché. C'est ce qui permet au Transformer d'avoir 80+ couches sans exploser ou s'évanouir.
+</Callout>
+
+### Le flux dans une couche
+
+```
+input (x)
+  |
+  ├─→ Self-Attention
+  |       |
+  |       v
+  +------(+)------→ Normalisation → intermediate (y)
+  |
+  ├─→ FFN
+  |       |
+  |       v
+  +------(+)------→ Normalisation → output (z)
+```
+
+À chaque étape :
+1. Transformez via Attention ou FFN
+2. Ajoutez l'input original (skip connection)
+3. Normalisez
+
+La skip connection garantit que l'input "sait toujours qui il était", même après transformation.
+
+## Normalisation : réguler les valeurs
+
+Après chaque opération, les vecteurs peuvent avoir des valeurs géantes ou minuscules. On **normalise** pour stabiliser l'entraînement.
+
+### LayerNorm : la version classique
+
+Recentre et rééchelonne chaque vecteur à moyenne 0, variance 1 :
+
+```
+LayerNorm(x) = gamma × (x - moyenne(x)) / racine(variance(x) + epsilon) + beta
+```
+
+Les gamma et beta sont apprenables.
+
+### RMSNorm : la version moderne
+
+LLaMA, Mistral, et tous les modèles récents utilisent **RMSNorm**, plus simple et rapide :
+
+```
+RMSNorm(x) = gamma × x / racine(moyenne(x²) + epsilon)
+```
+
+Pas de recentrage, juste une renormalisation par la RMS (Root Mean Square).
+
+<Callout type="info" title="Pourquoi RMSNorm gagne">
+Théoriquement plus simple et élégante, pratiquement plus rapide (une seule opération au lieu de deux), et les performances sont identiques. C'est devenu le standard nouveau.
+</Callout>
+
+## Pre-norm vs Post-norm : où placer la normalisation ?
+
+**Detail mineur qui change tout** : faut-il normaliser avant ou après la skip connection ?
+
+```
+Post-norm:  output = Normalisation(input + Transformation(input))
+Pre-norm:   output = input + Transformation(Normalisation(input))
+```
+
+Pre-norm (moderne) est bien meilleur pour l'entraînement stable. Section dédiée plus bas.
+
+## Pourquoi c'est important
+
+Les FFN et les skip connections sont les **véritables chevilles ouvrières** du Transformer. Sans elles :
+- Les FFN n'ont pas de place pour stocker les connaissances
+- Les skip connections empêchent l'entraînement d'80+ couches
+
+On parle toujours de l'attention (sexy), mais ces composants sont tout aussi critiques.
+
+## Les points clés à retenir
+
+1. **Les FFN** stockent la mémoire factuelle (clé-valeur)
+2. **SwiGLU** = activation moderne (LLaMA, Mistral)
+3. Les FFN occupent **~40%** des paramètres totaux
+4. **Les skip connections** laissent les gradients circuler
+5. **RMSNorm** = normalisation standard actuelle
+6. **Pre-norm** = placement moderne (stable, scalable)

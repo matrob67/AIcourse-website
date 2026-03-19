@@ -1,0 +1,114 @@
+---
+title: "Speculative Decoding : générer plus vite"
+description: "Utiliser un petit modèle pour prédire et un gros pour vérifier. Le meilleur des deux mondes."
+---
+
+## Le problème de vitesse
+
+Générer du texte, c'est **token par token**, c'est lent et séquentiel. Chaque token demande un forward pass complet du modèle. Pour 70B paramètres, c'est charger 140 Go de poids depuis la mémoire.
+
+Le GPU doit attendre les données (memory-bound), pas calculer (compute-bound).
+
+<Callout type="info" title="Le paradoxe du batch unitaire">
+Un seul token à générer utilise **autant de bande passante mémoire** qu'un batch de tokens. Le GPU est vide à 99%. C'est du gaspillage énorme. Le speculative decoding exploite ce vide.
+</Callout>
+
+## L'idée du speculative decoding
+
+
+
+### Le trick
+
+1. Un **petit modèle rapide** propose K tokens candidats (ex: 5-10)
+2. Le **grand modèle** les **vérifie tous en une seule passe parallèle**
+3. On accepte les bons, on rejette les mauvais
+4. On recommence
+
+### Pourquoi ça marche
+
+Vérifier K tokens en parallèle coûte à peine plus cher que d'en vérifier 1. La bande passante mémoire l'autorise. Donc : K forward du petit (rapides) + 1 forward du grand = net win.
+
+### La garantie de qualité
+
+C'est mathématique : le schéma de rejet garantit que chaque token final suit **exactement** la distribution du grand modèle. Pas d'approximation, pas de triche.
+
+```
+Si le petit propose token X avec probabilité q(X)
+Le grand accepte avec probabilité min(1, p(X)/q(X))
+En cas de rejet, on sample selon p (la vraie distribution)
+→ Résultat final = exactement p(X)
+```
+
+<ArxivLink id="2302.01318" title="Fast Inference from Transformers via Speculative Decoding (Leviathan et al., 2023)" />
+
+
+
+## Résultats pratiques
+
+### Speedup selon les modèles
+
+| Petit modèle | Grand modèle | Taux acceptation | Speedup |
+|---|---|---|---|
+| 160M | 7B | 60% | 1.8-2.2× |
+| 1B | 13B | 70% | 2.0-2.5× |
+| 7B | 70B | 75% | 2.5-3.0× |
+
+Plus le petit modèle est proche du grand, mieux c'est.
+
+<Callout type="tip" title="Choix du petit modèle">
+Prenez un petit modèle **de la même famille**. Ex: Mistral-0.5B pour Mistral-7B. Les distributions sont proches, meilleur taux d'acceptation. Un modèle complètement différent sera moins accepté.
+</Callout>
+
+## Variantes
+
+### Self-Speculative
+Utiliser les **couches intermédiaires** du modèle comme draft. Pas besoin de charger un second modèle en mémoire. Speedup : 1.5-2×.
+
+### Lookahead Decoding
+Pas de petit modèle du tout. Au lieu de ça, regarder les **n-grams** passés du texte généré pour prédire la suite. Zéro surcoût mémoire.
+
+## Implémentation
+
+### Avec vLLM
+
+```python
+from vllm import LLM
+
+llm = LLM(
+    model="mistralai/Mistral-7B",
+    speculative_model="mistralai/Mistral-0.5B",
+    num_speculative_tokens=5,
+)
+
+outputs = llm.generate(["Explique les trous noirs"])
+```
+
+### TGI et TensorRT-LLM
+
+Supportent via options de configuration.
+
+## Considérations pratiques
+
+### Mémoire supplémentaire
+
+Le petit modèle occupe de la RAM. Mistral-0.5B en FP16 = ~1 Go. Généralement acceptable.
+
+### Quand ça aide
+
+- Génération single-token (batch=1)
+- Texte prévisible (prompt, templates, code)
+- Faible température (moins d'incertitude)
+
+### Quand ça ne sert à rien
+
+- Batch size élevé (GPU déjà bien utilisé)
+- Texte créatif/imprévisible (taux d'acceptation faible)
+- Mémoire GPU serrée (pas de place pour le petit modèle)
+
+<Callout type="warning" title="Mesurez toujours">
+Le speculative decoding peut **ralentir** dans certains cas. Testez sur votre cas d'usage réel. Un mauvais petit modèle est contre-productif.
+</Callout>
+
+## Impact réel
+
+Le speculative decoding est devenu standard dans les systèmes de production (vLLM, TGI). Son avantage : accélération sans perte de qualité. C'est facile d'activer et ça marche vraiment.

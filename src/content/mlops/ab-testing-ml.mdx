@@ -1,0 +1,114 @@
+---
+title: "A/B Testing et déploiements progressifs pour les modèles ML"
+description: "Pourquoi votre modèle est nul en production : A/B testing, canary deployments, shadow mode. Validez vos modèles avec de vrais utilisateurs."
+---
+
+## Le grand décalage : ce que dit le lab vs ce que dit la réalité
+
+Imaginez un modèle de recommandation. En labo, il atteint 95% d'accuracy. En production ? Les clics s'effondrent. Pourquoi ? Parce que **l'accuracy n'a rien à voir avec l'argent que vous gagnez**.
+
+Ce décalage entre les métriques offline (accuracy, F1, perplexity) et les résultats business réels est le problème fondamental du ML. Deployer un modèle, c'est comme lancer un parachute : vous ne savez pas si ça marche vraiment qu'une fois que vous l'avez ouvert.
+
+<Callout type="info" title="Le vrai test : les vraies gens">
+C'est facile de mesurer : "notre modèle prédit correctement 95% des cas". C'est dur de mesurer : "notre modèle génère plus d'argent" ou "les utilisateurs aiment vraiment ça". Mais c'est la deuxième question qui compte en production.
+</Callout>
+
+
+
+## A/B Testing : confrontez deux versions côte à côte
+
+L'idée est simple : coupez vos utilisateurs en deux groupes aléatoires.
+
+- **Groupe A (contrôle)** : reçoit le modèle actuel
+- **Groupe B (test)** : reçoit votre nouveau modèle
+
+Mesurez une **métrique qui vous intéresse vraiment** (taux de clic, revenu, satisfaction). Après assez de données, vous pouvez dire : "B est vraiment meilleur que A, avec statistiquement parlant une vraie différence".
+
+### Comment faire ça correctement
+
+Avant de lancer un test, définissez :
+
+**L'hypothèse** : "Notre nouveau modèle augmente le taux de clic de 2%"
+
+**La métrique qui compte** : généralement pas accuracy, mais quelque chose de business (conversion, engagement, revenu)
+
+**Les métriques de garde** : les choses qui **ne doivent pas** se casser (latence, erreurs, retention)
+
+**La taille du test** : combien d'utilisateurs faut-il pour être sûr ? (Dépend de la variabilité et de l'effet attendu)
+
+**La durée** : une semaine ? Un mois ? (Attention aux cycles saisonniers)
+
+<Callout type="tip" title="Le piège du peeking">
+Ne regardez pas les résultats avant d'avoir les chiffres qu'il faut. Si vous arrêtez tôt parce que vous voyez déjà un truc cool, vous biaisez les stats. Les "tests séquentiels" permettent de vérifier progressivement sans tricher.
+</Callout>
+
+### Le problème du timing
+
+Un modèle de recommandation peut avoir besoin de jours avant de vraiment fonctionner (il apprend les préférences). Tester seulement 2 heures, c'est vous tromper. Prévoyez du temps pour la "réaction" du système.
+
+## Canary Deployment : allez-y doucement
+
+Au lieu de balancer 50% du trafic d'un coup sur le nouveau modèle, faites :
+
+1. Livrez le nouveau modèle. Mais seulement **1-5%** du trafic le reçoit
+2. **Regardez le monitoring attentivement** : est-ce que la latence monte ? Les erreurs ?
+3. Si tout va bien, augmentez progressivement (10% → 25% → 50% → 100%)
+4. Si un problème survient, roues vers l'ancien modèle immédiatement
+
+C'est l'équivalent en production du "test sur un groupe limité" avant le vrai lancement.
+
+| Aspect | A/B Testing | Canary |
+|---|---|---|
+| **Objectif** | Valider que ça marche business | Valider que ça ne casse rien techniquement |
+| **Durée** | Jours/semaines | Quelques heures |
+| **Trafic initial** | 50/50 | 1-5% |
+| **Décision** | Basée sur les stats | Automatique (seuils d'alerte) |
+
+<Callout type="warning" title="Les deux ensemble">
+En vrai, vous faites d'abord le canary (valider la stabilité tech), puis l'A/B test (valider le business). Le canary vous protège contre les bugs. L'A/B test vous dit si ça vaut vraiment le coup.
+</Callout>
+
+## Shadow Mode : testez sans risque
+
+Le nouveau modèle **tourne en parallèle** mais ne sert pas les réponses. Vous loggez les deux prédictions et les comparez après.
+
+**Avantage** : zéro risque pour les utilisateurs. Vous voyez clairement où le nouveau modèle échoue.
+
+**Problème** : vous coûtez le double en compute. Et vous n'apprenez rien sur l'engagement réel. Le nouveau modèle peut prédire parfaitement en labo et échouer en vrai interaction.
+
+## Blue/Green : basculez d'un coup
+
+Vous maintiennez deux environnements identiques (blue et green). Le trafic bascule instantanément de l'un à l'autre via un load balancer. Si ça va mal, vous revenez au bleu immédiatement.
+
+**Avantage** : rollback instantané.
+
+**Problème** : pas de validation progressive. Et vous coûtez l'infrastructure du double tant qu'on teste.
+
+## Résumé des stratégies
+
+```
+Shadow Mode      : Aucun risque, zéro signal business
+Canary Deployment: Validation tech progressive
+A/B Testing      : Validation business rigide
+Blue/Green       : Basculement rapide, rollback immédiat
+```
+
+<Callout type="paper" title="Comment on a mesuré tout ça">
+Des boîtes comme Uber et LinkedIn font des centaines d'A/B tests en parallèle avec une infra dédiée. Les frameworks comme Statsig ou LaunchDarkly gèrent le routing du trafic et la stat automatiquement. Les metriques ne se calculent pas à la main.
+</Callout>
+
+## Outils du métier
+
+- **Routing** : Istio, Envoy, AWS ALB pour diriger 5% vers le nouveau modèle
+- **Feature flags** : LaunchDarkly, Unleash pour activer/désactiver sans déployer
+- **Stat** : tout bon test nécessite une vraie analyse
+
+## Bonnes pratiques
+
+- **Jamais 100% d'un coup** : progressif, toujours
+- **Les critères de rollback** : définissez à l'avance quand vous arrêtez (latence > X, erreurs > Y)
+- **Monitor constamment** : pas de "déploie et oublie"
+- **Automatisez le rollback** : si ça se casse, revenir au modèle précédent sans attendre
+- **Documentez** : chaque test doit laisser des traces (hypothèse, résultat, décision)
+
+Le meilleur modèle du monde vaut rien s'il casse la production. Le rollout progressif, c'est du bon sense engineering.

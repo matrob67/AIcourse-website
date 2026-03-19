@@ -1,0 +1,91 @@
+---
+title: "Paper : Flash Attention - Faire fonctionner l'attention vite"
+description: "L'attention c'est lent. Flash Attention la fait 2-4x plus rapide en optimisant la hiérarchie mémoire. Aujourd'hui incorporée partout. Pas une amélioration, une révolution d'implémentation."
+---
+
+
+
+## Le goulot d'étranglement invisible
+
+Vous avez une GPU. Hyper-puissante. Mais l'attention ne l'utilise qu'à 25% de sa capacité.
+
+Pourquoi ? Pas parce qu'il y a pas assez de calcul. Parce qu'il faut trop transférer de données en mémoire.
+
+**Flash Attention** (Tri Dao et al., Stanford, 2022) résout ça. 2-4x plus rapide. Même calcul, mieux organisé.
+
+<Callout type="info" title="Memory-bound vs Compute-bound">
+Attention standard : memory-bound (limitée par la vitesse de la mémoire, pas la puissance de calcul). Flash Attention : réorganise le calcul pour utiliser la mémoire rapide (SRAM) au lieu de la mémoire lente (HBM).
+</Callout>
+
+## La hiérarchie mémoire GPU
+
+Un GPU A100 a deux mémoires :
+
+- **SRAM (on-chip)** : 20 MB, ultra-rapide (19 TB/s)
+- **HBM (off-chip)** : 80 GB, plus lente (2 TB/s)
+
+C'est 10x plus rapide, mais 4 000x plus petit.
+
+## Le problème de l'attention standard
+
+Attention standard fait des va-et-vient entre la lente HBM et la rapide SRAM :
+
+1. Lire Q, K, V depuis HBM → SRAM
+2. Calculer S = Q * K^T
+3. Écrire S en HBM
+4. Lire S, appliquer softmax
+5. Écrire en HBM
+6. Lire pour calculer O = softmax(S) * V
+7. Écrire O en HBM
+
+Transferts partout. La mémoire devient le goulot.
+
+## La solution : Tiling et Online Softmax
+
+**Tiling** : découper Q, K, V en petits blocs qui tiennent dans la SRAM.
+
+Traiter un bloc entièrement dans la SRAM. Une seule écriture en HBM du résultat final.
+
+**Online Softmax** : calculer le softmax de manière incrémentale, bloc par bloc. Classique : vous besoin de voir toute la ligne. Online ? Non, vous pouvez faire progressivement.
+
+Résultat : même calcul, beaucoup moins de transferts mémoire.
+
+<Callout type="tip" title="IO-awareness : le paradigme nouveau">
+Avant Flash Attention : optimiser les FLOPs (floating-point operations). Après : optimiser les IO (entrée-sortie mémoire). Les FLOPs c'est gratuit. Les IO c'est cher. Ça a changé l'optimisation GPU.
+</Callout>
+
+## Résultats
+
+- **2-4x plus rapide** que PyTorch standard
+- **5-7x moins de mémoire**
+- **Contextes 4-16x plus longs** pour même budget mémoire
+
+## Pourquoi c'est révolutionnaire
+
+Avant Flash Attention : fenêtres de contexte limitées. 4K tokens, max.
+
+Après Flash Attention : 128K tokens (GPT-4), 200K (Claude), 1M (Gemini).
+
+**Ce progrès de contexte ? Flash Attention l'a rendu possible.**
+
+## Flash Attention 2 et 3
+
+**FA2** (2023) : 2x plus rapide que FA1. Better parallelism.
+
+**FA3** (2024) : optimisé pour H100. 1.5-2x plus rapide que FA2.
+
+Chaque génération de GPU = nouvelle optimisation Flash Attention.
+
+<Callout type="paper" title="L'adoption universelle">
+Flash Attention est *partout* maintenant. PyTorch officiel. Hugging Face Transformers. vLLM. TensorRT-LLM. Tous l'utilisent. C'est l'une des contributions techniques les plus universellement adoptées en IA.
+</Callout>
+
+## Ce qu'il ne change pas
+
+Flash Attention : O(n^2) toujours. Complexité théorique inchangée. Pour très long contexte (>1M tokens), vous avez besoin d'attention linéaire (Mamba, RWKV) ou sparse.
+
+Flash Attention optimise les constantes, pas la complexité asymptotique.
+
+<Callout type="warning" title="Attention linéaire : le suivant">
+Flash Attention résout l'implémentation. Mais O(n^2) reste quadratique. Les futures architectures ? Probably attention linéaire. Mamba shows le chemin.
+</Callout>

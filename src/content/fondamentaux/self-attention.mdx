@@ -1,0 +1,179 @@
+---
+title: "Self-attention : query, key, value en détail"
+description: "Le cœur du Transformer expliqué simplement : comment chaque mot regarde tous les autres."
+---
+
+## L'histoire : comprendre qui fait quoi dans une phrase
+
+Lisez cette phrase : *"Le chat qui dormait sur le canapé s'est réveillé."*
+
+Votre cerveau, en lisant "s'est", doit répondre à une question cruciale : "Qui s'est réveillé ?" Instantanément, vous savez que c'est le **chat**, pas le canapé, même si "canapé" est le mot juste avant "s'est".
+
+Comment ? Votre cerveau regarde **tous les mots de la phrase** et calcule : "Quel mot a le plus de relation avec 's'est réveillé' ?" C'est le "chat".
+
+Le **self-attention** fait exactement ça. Chaque mot regarde **tous les autres mots** de la phrase et décide : "Lequel me concerne le plus ? Lequel m'aide à comprendre mon sens ?"
+
+C'est révolutionnaire comparé aux anciennes architectures (les RNN) qui lisaient la phrase **mot par mot**, séquentiellement, sans jamais avoir une vue d'ensemble.
+
+
+
+## Q, K, V : trois vues du même texte
+
+Prenez un simple exemple : le mot "chat" dans la phrase. Vous voulez savoir sur quoi il devrait se concentrer.
+
+L'idée est d'avoir **trois perspectives différentes** du même mot :
+
+1. **Query (Q) - La question du mot** : "Que cherche ce mot ? De quoi a-t-il besoin ?"
+2. **Key (K) - Ce que chaque mot offre** : "Je suis le mot 'chat', voici ce que j'offre"
+3. **Value (V) - L'information à partager** : "Voici ma vraie information"
+
+C'est comme si chaque mot posait une question (Q), regardait ce que tous les autres offrent (K), et récoltait les réponses (V) de ceux qui correspondent le mieux.
+
+Dans le code du Transformer :
+
+```
+Query (Q) = projection lineaire du mot (W_Q)
+Key (K) = projection lineaire du mot (W_K)
+Value (V) = projection lineaire du mot (W_V)
+```
+
+Même mot, trois représentations différentes. C'est le génie du truc.
+
+
+
+<Callout type="info" title="Self vs Cross-attention">
+"Self"-attention : Q, K, V viennent du même texte (un mot regarde ses voisins).
+"Cross"-attention : Q vient d'un texte, K et V d'un autre (un traducteur regarde le texte source).
+</Callout>
+
+## Comment ça marche : étape par étape
+
+### Étape 1 : Les trois projections
+
+Chaque mot est un vecteur. Vous le multipliez par trois matrices apprises (W_Q, W_K, W_V) pour obtenir trois versions du mot :
+
+```
+Query (Q) = mot × W_Q    (la question)
+Key (K) = mot × W_K      (l'identite)
+Value (V) = mot × W_V    (l'information)
+```
+
+Pensez à ça comme une photocopieuse qui produit 3 copies du document, chacune avec une surbrillance différente.
+
+### Étape 2 : Trouver la similarité
+
+Maintenant, comparez chaque Question avec chaque Identité. C'est un simple produit scalaire (multiplication point-à-point) :
+
+```
+scores = Q × K^T    (matrice n fois n)
+```
+
+Résultat : pour chaque mot, vous avez un score indiquant "à quel point ce mot devrait-il attention à chaque autre mot ?"
+
+### Étape 3 : Le scaling (vraiment important !)
+
+Divisez chaque score par racine(d_k). Pourquoi ? Un secret statistique :
+
+Si d_k = 64, les produits scalaires ont une variance de 64 (c'est trop grand). Diviser par racine(64) = 8 remet la variance à 1. Cela empêche les scores de devenir extrêmes (0 ou 100) et tue les gradients pendant l'entraînement.
+
+```
+scores = scores / racine(d_k)
+```
+
+<Callout type="tip" title="Coin technique : la variance">
+C'est une normalisation statistique classique. Si vous additionnez 64 nombres aléatoires, la somme a variance 64. Diviser par racine(64) la ramène à 1. C'est simple mais critique.
+</Callout>
+
+### Étape 4 : Convertir en probabilités
+
+Appliquez softmax pour convertir les scores en probabilités (entre 0 et 1, somme à 1) :
+
+```
+poids_attention = softmax(scores)
+```
+
+Maintenant, pour chaque mot, vous avez une probabilité : "combien de % d'attention vais-je donner à chaque autre mot ?"
+
+### Étape 5 : Récolter les réponses
+
+Faites une **moyenne pondérée** de toutes les Values (V) en utilisant les poids d'attention :
+
+```
+output = poids_attention × Values
+```
+
+Résultat : pour chaque mot, vous avez une réponse qui combine tous les autres mots, pondérée par leur importance relative.
+
+### La formule magique complète
+
+```
+Attention(Q, K, V) = softmax(Q·K^T / racine(d_k)) · V
+```
+
+C'est tout l'algorithme. Trois projections, similitude, normalisation, probabilités, moyenne pondérée. Voilà comment une IA comprend que "chat" et "s'est réveillé" vont ensemble.
+
+## Visualiser : voir où le modèle regarde
+
+La matrice d'attention (les poids avant la moyenne pondérée) est fascinante. Elle montre **littéralement** sur quoi le modèle se concentre. Des chercheurs créent des **heatmaps** (graphiques de couleur) pour les visualiser.
+
+Exemple : analysez "Le chat mange la souris"
+
+Si vous regardez l'attention du mot "mange" :
+- 40% d'attention au mot "chat" (le sujet)
+- 35% d'attention au mot "souris" (l'objet)
+- 15% d'attention aux autres
+- 10% à lui-même
+
+Sans qu'on lui dise jamais "voilà la grammaire", le modèle a **appris tout seul** que les verbes regardent leurs sujets et objets. C'est magique. Emergent behavior : le comportement sort de nulle part en entraînant sur du texte.
+
+## Le problème : c'est très coûteux
+
+Voici le revers de la médaille. Pour chaque mot, vous devez comparer avec **tous les autres mots**. Pour 1000 mots = 1 million de comparaisons. Pour 100,000 mots = 10 **milliards** de comparaisons.
+
+Mathématiquement :
+
+```
+RNN ancien : O(n)       (lineaire - rapide)
+Transformer : O(n²)     (quadratique - coûteux)
+```
+
+Mise en perspective : les grands modèles (GPT-4) traitent 128k tokens. Cela veut dire 16 **milliards** d'opérations d'attention par couche. Multiplié par 80 couches. **Et en parallèle sur le GPU.**
+
+C'est un défi actif : Flash Attention, Mamba, attention linéaire tentent de le résoudre. Mais pour maintenant, c'est le point faible du Transformer.
+
+<Callout type="warning" title="La limite de la longueur de contexte">
+La complexité quadratique empêche les très longues séquences. Jusqu'où pouvez-vous vraiment aller ? Les modèles modernes : 128k-200k tokens max. Au-delà, c'est impractique. C'est un défi majeur pour l'IA de 2024-2026.
+</Callout>
+
+## Attention masquée : interdire le triche
+
+Quand on entraîne GPT ou un modèle autogénérateur, il y a un problème : le modèle ne doit pas regarder les mots **futurs** qu'il suppose générer.
+
+Imagine : vous apprenez à écrire un poème. On vous donne les 5 premiers mots et vous devez prédire le 6e. Si vous pouviez regarder déjà les 100 prochains mots avant de répondre, ce serait tricher.
+
+Solution : le **masque causal**. Vous mettez une barrière invisible :
+
+```
+Mot 1 peut voir : [lui-même]
+Mot 2 peut voir : [mot 1, mot 2]
+Mot 3 peut voir : [mot 1, mot 2, mot 3]
+Mot 4 peut voir : [mot 1, mot 2, mot 3, mot 4]
+```
+
+En technique : vous mettez -infini dans les scores des tokens futurs. Après softmax (qui convertirait -infini en 0), ces mots reçoivent 0 attention. Zéro fuite d'information du futur.
+
+À l'inférence : vous générez mot par mot. Chaque nouveau mot ne voit que ce qui a déjà été généré. Zéro triche possible.
+
+## Pourquoi c'est important
+
+L'attention est le secret du succès du Transformer. C'est le mécanisme qui permet à une IA de comprendre que "chat" et "s'est réveillé" vont ensemble, même s'ils sont à 10 mots de distance. Sans attention, les modèles seraient perdus.
+
+## Les points clés à retenir
+
+1. **Q, K, V** = trois perspectives différentes du même mot
+2. **Produit scalaire Q · K** = mesure de similarité
+3. **Scaling par racine(d_k)** = stabilise l'entraînement et la variance
+4. **Softmax** = convertir les scores en probabilités
+5. **Agrégation** = moyenne pondérée de toutes les réponses
+6. **Complexité O(n²)** = le goulot d'étranglement actuel
+7. **Masque causal** = empêcher la triche en regardant le futur

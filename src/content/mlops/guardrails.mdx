@@ -1,0 +1,143 @@
+---
+title: "Guardrails : filtrer les réponses LLM dangereuses"
+description: "Contrôlez les entrées et sorties des LLM : détectez les jailbreaks, filtrez le contenu, évitez les hallucinations. Défense en profondeur."
+---
+
+## Le risque : un LLM peut générer n'importe quoi
+
+Un LLM en production peut générer :
+- Du contenu offensant, violent, sexuel
+- Divulguer des infos sensibles du contexte
+- Halluciner des faits avec confiance
+- Être jailbreaké par des techniques malveillantes
+- Répondre en dehors du périmètre prévu
+
+Sans **guardrails**, c'est un chaos. Avec guardrails, vous filtrez les entrées dangereuses et validez les sorties.
+
+<Callout type="info" title="La défense en profondeur">
+Pas un guardrail unique qui marche parfait. Combinez plusieurs couches : filtrage entrée, instructions système, fine-tuning de sécurité, filtrage sortie, monitoring continu.
+</Callout>
+
+
+
+## Guardrails d'entrée (Input)
+
+Filtrez les requêtes **avant** qu'elles n'atteignent le LLM :
+
+- **Détection jailbreak** : identifier les tentatives de contournement
+- **Filtrage contenu** : bloquer les requêtes inappropriées
+- **Détection PII** : masquer emails, téléphones, avant le LLM
+- **Validation format** : s'assurer que la requête est valide
+- **Détection topic** : s'assurer que c'est dans le périmètre du système
+
+## Guardrails de sortie (Output)
+
+Validez la réponse **avant** de la retourner :
+
+- **Filtrage contenu** : bloquer les réponses inappropriées
+- **Vérification factuelle** : comparer avec des sources fiables
+- **Détection hallucination** : s'assurer que c'est fidèle au contexte RAG
+- **Validation format** : s'assurer que c'est du bon JSON/structure
+- **Filtrage PII** : supprimer les données sensibles
+- **Détection refus** : quand le modèle refuse à tort
+
+## NVIDIA NeMo Guardrails
+
+**NeMo Guardrails** = framework open source de NVIDIA pour des guardrails programmables.
+
+Il utilise **Colang**, un langage déclaratif pour définir les règles de comportement.
+
+### Types de rails
+
+- **Input rails** : filtrage entrée (jailbreak, toxicité)
+- **Output rails** : filtrage sortie (contenu, format)
+- **Dialog rails** : contrôle du flux conversationnel
+- **Retrieval rails** : filtrage des documents RAG
+- **Execution rails** : contrôle des appels d'outils
+
+### Architecture
+
+```
+Utilisateur envoie message
+↓
+Input rails (analyze, filter)
+↓
+Dialog rails (verify conversation flow)
+↓
+Message (potentiellement modifié) au LLM
+↓
+LLM génère réponse
+↓
+Output rails (analyze, filter)
+↓
+Réponse validée à l'utilisateur
+```
+
+<Callout type="tip" title="Rails sur les outils">
+NeMo peut intercepter les appels d'outils du LLM. Avant que le LLM supprime un fichier ou envoie un email, un rail demande confirmation ou vérifie les permissions.
+</Callout>
+
+## Guardrails AI
+
+**Guardrails AI** = framework Python pour valider les sorties LLM.
+
+### Ce qu'il offre
+
+- **Validators** : bibliothèque de validateurs prédéfinis (PII, toxicité, format)
+- **RAIL spec** : spécification XML/Pydantic pour le format de sortie
+- **Correction automatique** : si validation échoue, relancer le LLM avec feedback
+- **Guardrails Hub** : marketplace de validateurs communautaires
+
+### Le pattern de correction
+
+```
+LLM génère réponse
+↓
+Validation échoue → Erreur claire
+↓
+LLM reçoit : "Votre réponse doit être JSON, vous avez retourné du texte. Recommencez."
+↓
+LLM réessaie avec feedback
+(jusqu'à X tentatives ou succès)
+```
+
+C'est intelligent : le modèle a une chance de se corriger.
+
+<Callout type="paper" title="La boucle de correction">
+Ce pattern c'est puissant. Le LLM peut se corriger s'il comprend l'erreur. C'est plus robuste que de juste rejeter la réponse.
+</Callout>
+
+## Modèles de modération
+
+### OpenAI Moderation API
+Classifie le contenu : hate, violence, self-harm, sexual, etc.
+
+### Perspective API (Google)
+Score toxicité des textes.
+
+### Llama Guard (Meta)
+LLM spécialisé dans la classification de sécurité des conversations.
+
+## Stratégie en profondeur
+
+1. **Prompt système** : instructions claires sur le comportement attendu
+2. **Input filtering** : détection jailbreak avant le LLM
+3. **Model-level** : fine-tuning pour la sécurité (RLHF, safety training)
+4. **Output filtering** : vérification après génération
+5. **Monitoring** : détection anomalies temps réel
+6. **Human escalation** : redirection quand le système hésite
+
+<Callout type="warning" title="Aucun guardrail est parfait">
+Les guardrails réduisent le risque mais ne l'éliminent pas. Les jailbreaks évoluent constamment. Les modèles de modération ont des faux négatifs. C'est "réduction des risques", pas "sécurité absolue". Monitorez en continu, mettez à jour régulièrement.
+</Callout>
+
+## Bonnes pratiques
+
+- **Identifiez les risques d'abord** : quels types de réponses sont inacceptables?
+- **Mesurez l'impact** : les guardrails ajoutent latence et coûts
+- **Testez avec des attaques** : maintenez des prompts adversariaux
+- **Logguez les rejets** : analysez ce qui a été rejeté pour affiner
+- **Évitez le sur-filtrage** : trop strict = mauvaise UX
+- **Itérez** : pas du "set and forget"
+
+Les guardrails c'est une course aux armements continue. Attaquants innovent, vous défendez, ils innovent, etc. C'est jamais fini.

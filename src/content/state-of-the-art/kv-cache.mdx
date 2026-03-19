@@ -1,0 +1,112 @@
+---
+title: "KV Cache : la mémoire cachée qui ralentit tout"
+description: "KV Cache : pourquoi on stocke les clés et valeurs. Comment ça devient énorme. Les tricks pour le compresser (quantification, MLA, éviction)."
+---
+
+## Pourquoi le KV Cache existe
+
+Sans cache : générer chaque nouveau token nécessite recalculer les clés/valeurs de TOUS les tokens précédents. Cher en calcul.
+
+Avec cache : stockez-les une fois, réutilisez. Chaque token nouveau ne coûte que le calcul de ses propres K/V + l'attention avec le cache.
+
+Cost passe de `O(L × d²)` par token à `O(d²)` (séquence K/V linéaire, attention O(L×d)).
+
+
+
+<Callout type="info" title="Analogie : bibliothèque">
+Chercher un livre dans une bibliothèque (recalculer) est cher. Une fois trouvé, gardez-le sur votre table (cache) plutôt que le remiser à chaque requête.
+</Callout>
+
+## Taille réelle du KV Cache
+
+Pour LLaMA 2 7B, 8K tokens, en FP16 (2 bytes) :
+
+```
+KV cache = 2 × 32 couches × 32 têtes × 8000 tokens × 128 dim × 2 bytes
+         ≈ 4 GB
+```
+
+Pour GPT-3 175B ? Environ **18 GB** pour 8K. Sur A100 80GB, il ne reste rien pour le modèle lui-même !
+
+<Callout type="warning" title="Memory bandwidth bottleneck">
+L'inférence autorégressif est limité par la bande passante mémoire, pas le calcul. À chaque token, vous lisez tout le cache (4 GB) depuis la HBM. À 2 TB/s (A100), ça prend 2ms. Seul le débit est limité à ~500 tokens/sec, peu importe la puissance de calcul.
+</Callout>
+
+## Techniques de compression
+
+### Quantification simple
+
+**INT8 KV Cache** : au lieu de FP16 (2 bytes), utilisez INT8 (1 byte). Réduit le cache de moitié. Dégradation minimale.
+
+**INT4** : 4x de réduction, mais plus délicat (quantification par groupe).
+
+**FP8** : bon compromis (plage dynamique conservée comme BF16).
+
+<Callout type="tip" title="Asymétrie utile">
+Les clés et valeurs ont des distributions différentes. Les clés sont uniformes, les valeurs ont des outliers. La quantification asymétrique (avec zero-point) marche mieux que symétrique.
+</Callout>
+
+
+### Éviction intelligente
+
+**Heavy Hitter Oracle (H2O)** : identifiez les tokens qui reçoivent le plus d'attention. Gardez-les + une fenêtre locale récente. Réduit le cache 5-10x.
+
+**Sink Tokens** : conservez les premiers tokens (system prompt) en plus de la fenêtre locale. Aide les tâches nécessitant une instruction initiale.
+
+**Sliding Window** : gardez seulement les W derniers tokens (comme Mistral). Ultra-efficace si le contexte récent suffit.
+
+### Compression par structure
+
+**Multi-Head Latent Attention (MLA, DeepSeek)** : compressez K et V ensemble via une projection latente partagée :
+
+```
+latent = W_compress [K; V]
+K' = W_decompress_K latent
+V' = W_decompress_V latent
+```
+
+Cache stocke juste `latent`. Réduction 93% avec qualité comparable au MHA standard !
+
+<Callout type="paper" title="MLA dans DeepSeek-V2">
+DeepSeek-V2 réduit le cache de 93% via MLA. C'est plus agressif que GQA tout en étant plus expressif (K et V partagent une représentation riche).
+</Callout>
+
+## Optimisations d'implémentation
+
+### PagedAttention (vLLM)
+
+Gérez le KV cache comme la mémoire virtuelle d'un OS :
+
+- Divisez le cache en **pages** (blocs de taille fixe)
+- Allouez dynamiquement selon les besoins
+- Partagez les préfixes : plusieurs séquences avec le même début partagent la même page
+
+Élimine la fragmentation. Utilisation mémoire quasi-optimale.
+
+### Prefix Caching
+
+Si 100 requêtes partagent le même system prompt, calculez le cache du prompt une fois, partagez-le. Économies énormes.
+
+### Speculative Decoding
+
+Générez plusieurs tokens candidats en parallèle (modèle petit), puis vérifiez en batch avec le grand modèle. Le cache est mis à jour en batch, pas token par token. Bande passante meilleure.
+
+## Impact économique
+
+Réduire le cache = plus de requêtes en parallèle sur le même GPU.
+
+```
+batch_max = (GPU_memory - model_weights) / KV_cache_per_request
+```
+
+Doubler le batch size = doubler le throughput = diviser par 2 le coût par token.
+
+Pour un service LLM, le KV cache est directement lié à la profitabilité.
+
+<Callout type="info" title="Implication : les techniques de compression c'est pas optionnel">
+Quantification, GQA, MLA, éviction : ce ne sont pas des optimisations marginales. Ce sont des éléments fondamentaux de viabilité économique.
+</Callout>
+
+## Conclusion
+
+Le KV Cache transforme l'inférence autorégressif en possible mais devient rapidement un goulot. Les techniques de compression et d'optimisation sont critiques pour la production. C'est un domaine actif de recherche directement lié aux profits des services LLM.

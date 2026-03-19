@@ -1,0 +1,115 @@
+---
+title: "RoPE : la rotation qui a changé les LLM"
+description: "RoPE (Rotary Position Embedding) expliqué simplement : comment encoder la position avec juste des rotations. L'encodage positionnel des LLM modernes."
+---
+
+## Intro : l'encodage qui a gagné
+
+RoPE est utilisé par LLaMA, Mistral, Qwen, DeepSeek, Gemma, Phi... quasiment tous les LLM modernes. Pourquoi ? Parce que c'est elegant et ça marche.
+
+<ArxivLink id="2104.09864" title="RoFormer: Enhanced Transformer with Rotary Position Embedding" />
+
+
+
+## L'idée de base : tourner le vecteur
+
+Au lieu de rajouter une valeur "position 42" au token, **tournez le vecteur query/key de manière à inclure l'information de position dans la géométrie elle-même**.
+
+Pour deux dimensions consécutives, une rotation d'angle `m×theta` :
+
+```
+[ q1' ]   [ cos(m×theta)  -sin(m×theta) ] [ q1 ]
+[ q2' ] = [ sin(m×theta)   cos(m×theta) ] [ q2 ]
+```
+
+Où `m` est la position du token, `theta` est une fréquence.
+
+<Callout type="info" title="L'analogie : horloge multidimensionnelle">
+Imaginez chaque paire de dimensions comme les aiguilles d'une horloge. La position du token détermine combien de tours chaque aiguille a fait. Chaque aiguille tourne à une vitesse différente (fréquences différentes).
+</Callout>
+
+## Extension à toutes les dimensions
+
+Pour un vecteur de dimension `d`, on traite les dimensions par **paires**. Chaque paire a sa propre fréquence :
+
+```
+theta[i] = base^(-2i/d)
+```
+
+où `base = 10000` par défaut.
+
+```
+D1-D2 : fréquence ≈ 1.0    (tour rapide, position locale fine)
+D3-D4 : fréquence ≈ 0.1    (tour moyen)
+D5-D6 : fréquence ≈ 0.01   (tour lent)
+...
+D127-D128 : fréquence très petite (tour ultra-lent, position globale)
+```
+
+C'est comme un spectre complet d'horloges qui tournent à des vitesses différentes.
+
+## Le vrai génie : positions relatives
+
+Voici le magic trick. Si vous calculez le produit scalaire entre une query à la position `m` et une key à la position `n` **après** les rotations :
+
+```
+<rotate(Q_m), rotate(K_n)> dépend seulement de (m - n) !
+```
+
+Pas de `m` seul, pas de `n` seul. Juste la différence. C'est une propriété mathématique pure des rotations.
+
+<Callout type="paper" title="Pourquoi c'est cool">
+L'attention encode **positions relatives**, pas absolues. "Suis-je 3 tokens avant celui-ci ?" plutôt que "Suis-je à la position 2012 ?". Ça généralise BEAUCOUP mieux pour différentes longueurs de contexte.
+</Callout>
+
+## Implementation efficace
+
+Les rotations sont implémentées avec des **nombres complexes**.
+
+Chaque paire `(q[2i], q[2i+1])` devient un nombre complexe :
+```
+q_complexe = q[2i] + i×q[2i+1]
+RoPE(q, m) = q_complexe × e^(i×m×theta)
+```
+
+Une multiplication complexe = 4 multiplications réelles + 2 additions. Très rapide sur GPU.
+
+<Callout type="tip" title="Détail d'implémentation">
+RoPE s'applique **avant** le cache. Les queries et keys stockées dans le cache sont déjà rotées. Zéro surcoût d'inférence.
+</Callout>
+
+## Avantages de RoPE
+
+1. **Fonctionne pour n'importe quelle longueur** : les rotations marchent à toute position entière
+2. **Compatible KV cache** : rotation appliquée une fois, réutilisée partout
+3. **Peu coûteux** : juste quelques multiplications par dimension
+4. **Gracieux** : pas de rupture discrète, les positions voisines ont des angles voisins
+
+## Les problèmes (et les solutions)
+
+### L'extrapolation échoue
+RoPE entraîné sur 4K tokens ne généralise pas bien à 16K. Les hautes fréquences produisent des rotations jamais vues.
+
+**Solutions** : YaRN, NTK-aware scaling (voir section extension de contexte).
+
+### Le choix de la base
+Par défaut `base = 10000`. Les travaux récents utilisent des bases beaucoup plus grandes (500K pour LLaMA 3) pour les longues séquences.
+
+<Callout type="warning" title="Limitation fondamentale">
+RoPE force une certaine structure (spectre de fréquences logarithmique). Vous ne pouvez pas arbitrairement redéfinir comment les positions marchent. C'est un compromis.
+</Callout>
+
+## Qui l'utilise ?
+
+- LLaMA (1, 2, 3) ✓
+- Mistral / Mixtral ✓
+- Qwen ✓
+- DeepSeek ✓
+- Gemma ✓
+- Phi ✓
+
+Pratiquement 100% des LLM modernes.
+
+<Callout type="info" title="L'encodage positionnel du futur">
+RoPE a remplacé les encodages sinusoïdaux absolus (Transformer original 2017) et les relatifs appris (T5). C'est le standard qui va rester pour un moment. Simple, élégant, ça marche.
+</Callout>

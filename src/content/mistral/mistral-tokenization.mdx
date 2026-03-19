@@ -1,0 +1,130 @@
+---
+title: "Tokenisation chez Mistral"
+description: "Les tokenizers de Mistral AI : vocabulaire de 32K tokens, Byte-Level BPE, évolution vers Tekken pour le multilingue, et impact sur les performances."
+---
+
+## Tokenization : comment Mistral parle à ses modèles
+
+Les LLM ne lisent pas du texte normal. Ils lisent des nombres. "Bonjour" c'est 1532 pour Mistral. Un space, c'est 789. Chaque "morceau" de texte est un nombre. C'est un "token".
+
+Le "tokenizer" c'est le traducteur: texte humain → nombres → modèle.
+
+Si c'est bon, Mistral lit 100 pages avec 10 000 tokens. Si c'est mauvais, 100 pages = 50 000 tokens. Pauvre en contexte, cher à utiliser.
+
+### Token = pas un mot
+
+"Bonjour" = 1 token.
+"Anticonstitutionnellement" = 4-5 tokens (trop long, décomposé).
+"Le" = 1 token.
+Un space = parfois inclus dans le token, parfois pas.
+
+C'est mathématique, pas linguistique.
+
+<Callout type="info" title="Vous payez au token">
+Mistral facture au token. Si tu envoies 1000 mots en anglais = ~1300 tokens. Même 1000 mots en français = ~1100 tokens (plus efficace). Même 1000 mots en chinois = ~2000 tokens (moins efficace). Le tokenizer change votre facture.
+</Callout>
+
+
+
+### Byte-Level BPE : le fondement
+
+Les tokenizers de Mistral sont basés sur le Byte-Pair Encoding (BPE) au niveau octet, une technique éprouvée et largement utilisée dans les LLM modernes.
+
+#### Principe du BPE
+
+Le BPE construit un vocabulaire de manière itérative :
+
+1. **Initialisation.** Le vocabulaire de base contient les 256 octets possibles (pour le byte-level BPE).
+2. **Itération.** À chaque étape, la paire de tokens adjacents la plus fréquente dans le corpus d'entraînement est fusionnée en un nouveau token.
+3. **Arrêt.** Le processus continue jusqu'à atteindre la taille de vocabulaire cible.
+
+#### Avantage du byte-level
+
+Le BPE au niveau octet garantit que tout texte (dans n'importe quelle langue, avec n'importe quel caractère Unicode) peut être encodé. Il n'y a jamais de token « inconnu » (UNK), car le pire cas est une décomposition en octets individuels.
+
+### Le tokenizer de Mistral 7B / Mixtral
+
+Les premiers modèles Mistral (7B, Mixtral 8x7B, 8x22B) utilisent un tokenizer avec un vocabulaire de 32 000 tokens, basé sur le tokenizer de SentencePiece.
+
+| Paramètre | Valeur |
+|-----------|--------|
+| Taille du vocabulaire | 32 000 |
+| Méthode | Byte-level BPE (SentencePiece) |
+| Tokens spéciaux | `<s>` (BOS), `</s>` (EOS), `[INST]`, `[/INST]` |
+| Support Unicode | Complet (via byte-level fallback) |
+
+**Tokens d'instruction.** Pour les versions Instruct, des tokens spéciaux `[INST]` et `[/INST]` délimitent les instructions utilisateur, permettant au modèle de distinguer les instructions du contenu.
+
+<Callout type="tip" title="Pourquoi 32K tokens ?">
+Un vocabulaire de 32K tokens est un compromis entre plusieurs facteurs. Un vocabulaire plus petit (8K) nécessiterait plus de tokens par texte mais une matrice d'embedding plus petite. Un vocabulaire plus grand (100K) serait plus efficace en tokens mais augmenterait significativement la taille de la matrice d'embedding. 32K offre un bon équilibre pour les langues latines et l'anglais.
+</Callout>
+
+### Tekken : le nouveau tokenizer multilingue
+
+Introduit avec Mistral NeMo 12B, Tekken est un tokenizer de nouvelle génération conçu pour améliorer significativement le support multilingue.
+
+#### Améliorations clés
+
+**Vocabulaire élargi.** Tekken utilise un vocabulaire plus grand que les 32K tokens des premiers modèles, permettant d'inclure plus de sous-mots spécifiques aux langues non-anglaises.
+
+**Entraînement multilingue équilibré.** Le corpus d'entraînement du tokenizer est soigneusement équilibré entre les langues, évitant la surreprésentation de l'anglais qui caractérise de nombreux tokenizers.
+
+**Efficacité par langue.** Le ratio de compression (nombre de tokens nécessaires pour encoder un texte de longueur donnée) est amélioré pour les langues non-anglaises.
+
+#### Impact pratique
+
+Prenons un texte en français de 1000 caractères. Avec le tokenizer original Mistral (32K), ce texte pourrait nécessiter environ 250-300 tokens. Avec Tekken, le même texte pourrait n'en nécessiter que 200-250, soit une amélioration de 15-20%.
+
+Cette efficacité accrue signifie :
+- Plus de texte dans la fenêtre de contexte pour les langues non-anglaises
+- Coût d'inférence réduit par caractère pour ces langues
+- Meilleure capacité du modèle à capturer les structures linguistiques
+
+### Tokens spéciaux et format de prompt
+
+Les modèles Mistral utilisent des tokens spéciaux pour structurer les interactions.
+
+#### Format Instruct (v1)
+
+Le format original utilise les tokens `[INST]` et `[/INST]` :
+
+```
+<s>[INST] Instruction utilisateur [/INST] Réponse du modèle</s>
+```
+
+#### Format avec system prompt
+
+Les versions plus récentes supportent un system prompt via un token dédié :
+
+```
+<s>[INST] <<SYS>> System prompt <</SYS>> Instruction utilisateur [/INST] Réponse</s>
+```
+
+#### Format pour le function calling
+
+Les modèles supportant le function calling utilisent des tokens spéciaux supplémentaires pour délimiter les définitions d'outils, les appels de fonctions et les résultats.
+
+<Callout type="warning" title="Compatibilité des tokenizers">
+Chaque modèle Mistral est lié à son tokenizer spécifique. Il n'est pas possible d'utiliser le tokenizer de Mistral 7B avec Mistral NeMo ou inversement. Lors du déploiement, il est crucial d'utiliser le tokenizer correct pour le modèle utilisé, sous peine de résultats incohérents.
+</Callout>
+
+### Impact sur le fine-tuning
+
+Le choix du tokenizer a des implications importantes pour le fine-tuning.
+
+**Vocabulaire fixe.** Le vocabulaire ne peut pas être modifié lors du fine-tuning standard. Si votre domaine utilise un vocabulaire très spécialisé (termes médicaux, juridiques, scientifiques), ces termes seront décomposés en sous-tokens, ce qui est moins efficace mais fonctionnel.
+
+**Ajout de tokens spéciaux.** Il est possible d'ajouter des tokens spéciaux (marqueurs de début/fin de section, identifiants de rôle) lors du fine-tuning, en étendant le vocabulaire et en redimensionnant la matrice d'embedding.
+
+**Tokenisation des données.** Les données de fine-tuning doivent être tokenisées avec le même tokenizer que le modèle pré-entraîné, en respectant les formats de prompt spécifiques (Instruct, Chat).
+
+### Comparaison des tokenizers
+
+| Tokenizer | Modèles | Vocabulaire | Multilingue | Efficacité FR |
+|-----------|---------|-------------|-------------|---------------|
+| SentencePiece (32K) | Mistral 7B, Mixtral | 32 000 | Moyen | Moyen |
+| Tekken | NeMo 12B, modèles récents | Plus large | Excellent | Bon |
+| tiktoken (GPT-4) | OpenAI | ~100 000 | Bon | Bon |
+| LLaMA tokenizer | Meta LLaMA | 32 000 | Moyen | Moyen |
+
+La tokenisation, bien que souvent négligée dans les discussions sur les LLM, est un facteur déterminant de la performance et de l'accessibilité des modèles. L'évolution vers Tekken chez Mistral reflète une attention croissante à l'inclusivité linguistique et à l'efficacité pour les utilisateurs non-anglophones.

@@ -1,0 +1,118 @@
+---
+title: "Pre-norm vs post-norm : l'impact sur le training"
+description: "Un détail architectural mineur qui change tout : où placer la layer normalization ?"
+---
+
+## L'histoire : un détail qui décide du succès ou de l'échec
+
+Voici une question qui semble **absurdement triviale** : où mettre la normalisation dans une couche du Transformer ?
+
+Deux options :
+1. Normaliser **après** la skip connection
+2. Normaliser **avant** la skip connection
+
+Semble sans importance, n'est-ce pas ? **Faux.** Ce détail architectura décide si :
+- Votre modèle s'entraîne ou s'écrase
+- Vous pouvez faire 6 couches ou 100 couches
+- Votre learning rate peut être 0.001 ou 1e-5
+
+C'est ridicule que si petit détail fasse une si grande différence. Mais c'est la réalité de l'apprentissage profond.
+
+
+
+## Post-norm : la version instable (Transformer original, 2017)
+
+La normalisation vient **après** la skip connection :
+
+```
+output = Normalisation(input + Transformation(input))
+```
+
+Visualisation :
+
+```
+input ──┐
+        ├──(+)──→ Normalisation ──→ output
+        │
+   Transformation
+```
+
+### Les problèmes majeurs
+
+**1. Instabilité de l'entraînement**
+
+Sans normalisation sur le chemin directe (skip connection), les valeurs peuvent devenir énormes en remontant les couches. Le chemin skip="+" laisse tout passer sans frein. Les gradients explosent aux couches peu profondes.
+
+**2. Warm-up obligatoire**
+
+Vous devez commencer l'entraînement avec un très petit learning rate (0.00001) et l'augmenter progressivement. C'est inefficace et délica.
+
+**3. Scaling impossible**
+
+Plus vous ajoutez de couches (6 → 12 → 24 → 80), plus l'entraînement devient instable. Un BERT de 24 couches with post-norm ? Bon courage.
+
+<Callout type="warning" title="Pourquoi post-norm est un cauchemar">
+Le chemin direct (skip connection) n'a **aucune normalisation**. Les valeurs croissent à chaque couche. Après 80 couches, elles peuvent être 10^50 ou 10^-50. Les gradients explosent ou s'évanouissent. Catastrophe.
+</Callout>
+
+## Pre-norm : la version stable (standard moderne)
+
+La normalisation vient **avant** la transformation :
+
+```
+output = input + Transformation(Normalisation(input))
+```
+
+Visualisation :
+
+```
+input ──┬──→ Normalisation ──→ Transformation ──┐
+        │                                        ├──(+)──→ output
+        │                                        │
+        └────────────────────────────────────────┘
+              (skip connection directe)
+```
+
+### Pourquoi c'est stable
+
+Le chemin skip (le "+") **court-circuite tout**. La valeur passe directement, sans transformation, sans normalisation. C'est une autoroute pure.
+
+Mathématiquement, la dérivée du "+" c'est 1. Le gradient passe intouché à travers 100 couches. Pas d'explosion, pas d'évanouissement.
+
+Résultat : entraînement ultra-stable.
+
+**Utilisé par :**
+- GPT-2, GPT-3 (premiers gros modèles à découvrir cela)
+- LLaMA, Mistral (tous les LLM modernes)
+- Flan-T5, Qwen, et quasi tous les LLM de 2023+
+
+<Callout type="tip" title="Pas besoin de warm-up">
+Avec pre-norm, vous pouvez démarrer l'entraînement **directement** avec votre learning rate cible. Pas de warm-up graduel. Entraînement plus rapide, plus simple.
+</Callout>
+
+## Le trade-off : stabilité vs performance
+
+Voici une ironie : **post-norm offre une légère meilleure performance**.
+
+Les études montrent que la normalisation après la résiduelle crée des interactions plus riches. Les chiffres à l'évaluation sont marginalement meilleurs.
+
+**Mais** : cet avantage est écrasé par les problèmes de stabilité. Vous ne pouvez pas entraîner de gros modèles avec post-norm. Alors oui, post-norm est meilleur, mais seulement si vous pouvez l'entraîner. Ce que vous ne pouvez pas.
+
+Pre-norm ? Moins de performance brute, mais vous pouvez entraîner des modèles 10 fois plus gros. Le résultat final : perte de performance de 0.1%, gain de capacité de 1000%. C'est facile à choisir.
+
+## Comparaison concrète
+
+| Aspect | Post-norm | Pre-norm |
+|---|---|---|
+| Stabilité | Fragile | Très stable |
+| Warm-up requis | Oui (complexe) | Non (simple) |
+| Performance brute | 1% meilleure | Référence |
+| Nombre de couches possible | 6-12 (max) | 80-100+ (facile) |
+| Apprentissage (learning rate) | 1e-5 à 1e-4 | 0.001 à 0.1 |
+| Utilisé par | BERT, T5 original | GPT-2/3/4, LLaMA, Mistral |
+
+## Conclusion : la compétition est finie
+
+**Pre-norm a gagné.** Partout. Tous les modèles modernes l'utilisent.
+
+Post-norm est un artefact historique. BERT et T5 originales l'utilaisaient parce que c'était 2018 et on ne savait pas mieux. Maintenant, on sait. Pre-norm + RMSNorm = l'équipe gagnante pour 2024-2026.

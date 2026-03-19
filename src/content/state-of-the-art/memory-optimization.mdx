@@ -1,0 +1,101 @@
+---
+title: "Optimisation mémoire : offloading et techniques avancées"
+description: "Stratégies pour réduire l'empreinte mémoire GPU des LLM : offloading CPU/disque, gradient checkpointing, activation offloading, et gestion du KV cache."
+---
+
+
+
+## Le mur : la mémoire GPU manque toujours
+
+Un modèle 70B en FP16 c'est 140 Go. Votre GPU ? 80 Go max. Vous pouvez pas faire rentrer un éléphant dans une Smart. Mais vous pouvez l'offloader en crédit.
+
+<Callout type="info" title="La recette de la consommation mémoire">
+Durant l'inférence : poids (fixe) + KV cache (grandit avec la séquence) + activations temporaires (pic pendant le forward).
+Pendant l'entraînement : + gradients + états optimizer (2-3× les poids pour Adam).
+</Callout>
+
+## Offloading CPU : stocker ailleurs
+
+Au lieu de tout laisser sur le GPU, vous mettez les couches inutilisées en RAM CPU. Quand la couche suivante en a besoin, vous la rapatriez. C'est lent mais ça marche.
+
+```python
+from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-2-70b-hf",
+    device_map="auto",  # Répartition auto GPU/CPU
+)
+```
+
+**Impact** : un modèle 70B qui tient dans 80 Go GPU soudainement fonctionne sur 32 Go GPU + 48 Go CPU. Mais la vitesse souffre :
+
+- Tout GPU : 1× (référence)
+- 50% GPU, 50% CPU : 0.3-0.5× (3× plus lent)
+- Tout CPU : 0.05× (20× plus lent)
+
+Le PCIe 4.0 c'est 32 Go/sec. Charger une couche (4 Go) prend 130 ms. C'est le goulot.
+
+<Callout type="warning" title="Évaluer si c'est worth">
+3× plus lent mais 80% plus de mémoire, c'est un choix selon votre cas : streaming vidéo ? Inférence batch ? Offline ? Latency-critical ?
+</Callout>
+
+## Gradient Checkpointing : oublier pour recommencer
+
+Pendant le fine-tuning, le backward pass (calcul des gradients) a besoin des activations du forward pass. Elles prennent **beaucoup** de RAM.
+
+Trick : oubliez les activations du forward. Pendant le backward, recalculez-les. Vous perdirez du temps (33% plus lent) mais gagnerez 60% de mémoire.
+
+```python
+model.gradient_checkpointing_enable()
+```
+
+C'est quasi toujours une bonne idée pour le fine-tuning : ça vous permet des batch sizes plus grands, qui compensent le surcoût.
+
+## DeepSpeed ZeRO : partager l'entraînement
+
+Pour l'entraînement distribué (plusieurs GPUs), Microsoft a ZeRO. L'idée : au lieu de dupliquer les gradients et états optimizer sur chaque GPU, vous les **partagez** entre tous.
+
+- **Stage 1** : états optimizer partagés → 4× mémoire en moins
+- **Stage 2** : + gradients partagés → 8×
+- **Stage 3** : + paramètres partagés → 16× (ou plus avec N GPUs)
+
+Stage 3 c'est puissant mais complexe. Stage 2 c'est le spot doux.
+
+<Callout type="tip" title="FSDP : l'alternative PyTorch native">
+PyTorch a **FSDP** (Fully Sharded Data Parallel) qui fait pareil que ZeRO Stage 3, c'est plus simple et vaut du préférer si vous avez le choix.
+</Callout>
+
+## KV Cache Quantification
+
+Le KV cache grandit avec la longueur de la séquence. Quantifier en INT8 au lieu de FP16 = 2× plus petit, quasi aucune perte.
+
+```python
+llm = LLM(model="mistral-7b", kv_cache_dtype="fp8")
+```
+
+Combiné avec GQA (Grouped-Query Attention, où les têtes d'attention partagent K et V), vous gagnez 8-16× sur le KV cache.
+
+Mistral et LLaMA 3 utilisent GQA. Leur cache est 4-8× plus petit que les anciens modèles.
+
+## Accumulation des techniques
+
+Un modèle 70B rendu exécutable sur 1 GPU 80 Go :
+
+1. Quantification 4-bit : 4× réduction
+2. GQA : 4-8× KV cache
+3. KV cache FP8 : 2× réduction KV
+4. Offloading GPU→CPU : débouche mémoire RAM
+
+Résultat : quelque chose qu'on croyait impossible il y a 2 ans marche maintenant.
+
+## Tableau des recommandations
+
+| Scénario | Techniques |
+|---|---|
+| Inférence GPU limité | Quantification + offloading partiel |
+| Fine-tuning GPU limité | QLoRA + gradient checkpointing |
+| Entraînement multi-GPU | FSDP ou DeepSpeed ZeRO 2 |
+| Inférence long contexte | GQA + KV cache quantifié |
+| Hardware très limité | GGUF + offloading CPU |
+
+Le message : vous **ne pouvez pas** faire rentrer un 70B dans 16 Go. Mais combiné plusieurs petits tricks, vous pouvez aller surprenant loin. L'optimisation mémoire c'est pas un seul lever, c'est empiler pleins de petites améliorations.

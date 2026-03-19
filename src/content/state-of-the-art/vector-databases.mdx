@@ -1,0 +1,115 @@
+---
+title: "Bases de données vectorielles : comparaison"
+description: "Tour d'horizon des bases de données vectorielles pour le RAG : Chroma, Qdrant, Weaviate, Pinecone, Milvus, pgvector. Architecture, indexation et critères de choix."
+---
+
+
+
+## Pourquoi une base vectorielle ?
+
+Vous avez 1 million de vecteurs. Un utilisateur demande quelque chose. Vous pouvez pas les comparer **tous** (ça prend 1M d'opérations). Les **bases vectorielles** utilisent des **index** qui retrouvent les K plus proches voisins en log(N) opérations au lieu de N.
+
+C'est pas exact (vous manquez quelques bons matchs) mais rapide (95%+ recall typiquement).
+
+<Callout type="info" title="Le défi des vecteurs">
+Comparer deux vecteurs c'est facile (produit scalaire). Mais **retrouver les K plus similaires parmi N milliards** : c'est hard. ANN (Approximate Nearest Neighbors) avec index HNSW ou IVF résout ça en temps sub-linéaire.
+</Callout>
+
+## Algorithmes d'indexation
+
+### HNSW (Hierarchical Navigable Small World)
+Un **graphe multi-niveau** qu'on traverse hiérarchiquement. Complexité O(log N). Excellent recall (>99%). Mémoire élevée (graphe stocké en RAM).
+
+Idéal pour : corpus <100M vecteurs, quand la qualité compte plus que la mémoire.
+
+### IVF (Inverted File)
+Partitionne l'espace en clusters (via k-means). La recherche explore seulement les clusters proches du query. Complexité O(N/K). Mémoire modérée.
+
+Idéal pour : corpus gigantesques, budget mémoire serré.
+
+### Product Quantization (PQ)
+Compresse les vecteurs en les découpant en sous-espaces quantifiés. 10-50× réduction de taille. Combiné avec IVF (IVF-PQ) = scalabilité maximale.
+
+## Bases vectorielles populaires
+
+### Chroma
+**Type** : in-process (bibliothèque Python).
+**Index** : HNSW.
+**Forces** : ultra-simple (2 lignes de code), parfait prototypage.
+**Limites** : pas de production, pas distribué.
+
+```python
+import chromadb
+client = chromadb.Client()
+collection = client.create_collection("docs")
+collection.add(documents=["texte 1"], ids=["1"])
+results = collection.query(query_texts=["ma question"], n_results=3)
+```
+
+Chroma : pour apprendre, tester, prototype. Pas pour servir 10,000 utilisateurs.
+
+### Qdrant
+**Type** : serveur dédié (Rust).
+**Index** : HNSW + filtrage métadonnées optimisé.
+**Forces** : performance, filtre métadonnées puissant, API riche.
+**Limites** : config plus complexe que Chroma.
+**Licence** : Apache 2.0.
+
+Pour : production self-hosted, besoin de filtres avancés.
+
+### Weaviate
+**Type** : serveur dédié (Go).
+**Index** : HNSW + recherche hybride BM25 intégrée.
+**Forces** : recherche hybride native, modules de vectorisation.
+**Limites** : consommation mémoire élevée.
+
+Pour : si vous voulez dense + sparse (BM25) dans la même DB.
+
+### Pinecone
+**Type** : SaaS serverless (cloud).
+**Forces** : zéro ops, scaling automatique, haute dispo.
+**Limites** : vendor lock-in, pas open-source, coûts à grande échelle.
+
+Pour : équipes petites sans DevOps, prototypage rapide, scaling on-demand.
+
+### Milvus / Zilliz
+**Type** : distribué (serveur ou cloud).
+**Index** : HNSW, IVF-PQ, DiskANN (pour ultra-gros corpus).
+**Forces** : scalabilité horizontale, plusieurs indices.
+**Limites** : complexe à déployer self-hosted.
+
+Pour : massive scale (milliards de vecteurs).
+
+### pgvector
+**Type** : extension PostgreSQL.
+**Index** : IVF, HNSW.
+**Forces** : intégré dans PostgreSQL existant.
+**Limites** : performance < solutions dédiées sur gros volumes.
+
+Pour : si vous avez déjà PostgreSQL, besoin minimal de vecteurs.
+
+<Callout type="tip" title="La décision en 3 questions">
+1. Combien de vecteurs ? <100M → Chroma/Qdrant. >100M → Milvus/Pinecone.
+2. Vous avez DevOps ? Non → Pinecone. Oui → Qdrant/Milvus.
+3. Budget ? Serré → Chroma/pgvector. Élevé → Pinecone.
+</Callout>
+
+## Dimensionnement
+
+Mémoire approximative pour HNSW :
+
+```
+Mémoire ≈ 4 × nb_vecteurs × dimensions × 4 bytes
+```
+
+1M vecteurs de 768 dimensions ≈ 3 Go données + 12 Go index HNSW = 15 Go total.
+
+Prévoir un facteur 2× pour la croissance.
+
+## Pièges communs
+
+<Callout type="warning" title="Attention aux paramètres">
+Les paramètres HNSW (`ef_construction`, `M`) affectent le compromis vitesse/qualité. Un index mal configuré peut avoir 80% de recall (20% des meilleurs résultats manquent). Testez et mesurez sur vos données réelles.
+</Callout>
+
+La plupart des projets **sur-optimisent** la base vectorielle. Pour <1M documents, n'importe quelle solution bien configurée suffit. Mieux : investissez dans la qualité des **embeddings** et du **chunking**. C'est là que ça se joue vraiment.

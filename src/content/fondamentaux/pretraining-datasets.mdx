@@ -1,0 +1,119 @@
+---
+title: "Les datasets de pré-entraînement"
+description: "Common Crawl, The Pile, RedPajama, FineWeb : les datasets massifs utilisés pour entraîner les LLM et les stratégies de mélange de données."
+---
+
+## Le problème : où trouver assez de texte pour apprendre ?
+
+Pour pré-entraîner un LLM moderne, il faut des quantités de texte qui dépassent l'entendement. Un modèle comme LLaMA-3 a été entraîné sur **15 000 milliards de tokens** — soit grosso modo 15 000 milliards de mots. Pour donner une idée d'échelle : si vous lisiez 1 000 mots par minute, 24h/24, il vous faudrait 28 000 ans pour lire autant.
+
+D'où vient tout ce texte ? Et surtout, comment s'assurer qu'il est de qualité ?
+
+
+
+## Common Crawl : la photocopie d'Internet
+
+**Common Crawl** est une organisation à but non lucratif qui "photographie" le web depuis 2008. Elle envoie des robots parcourir des milliards de pages web, télécharge le contenu, et met tout ça à disposition gratuitement. Chaque mois, c'est un nouveau crawl d'environ 3 milliards de pages web, soit 300 To de données brutes.
+
+C'est la source numéro 1 de presque tous les grands datasets d'entraînement. Mais voici le problème : Internet brut, c'est un désastre.
+
+<Callout type="warning" title="Internet brut, c'est 80% de déchets">
+Sur les milliards de pages crawlées, la grande majorité c'est : du spam SEO, des duplicatas (le même article republié 500 fois), du HTML mal extrait, des publicités, du contenu pornographique, des forums de trolls... Après filtrage, on garde typiquement 10 a 20% du crawl original. Le reste est jeté.
+</Callout>
+
+### Le pipeline de nettoyage
+
+Transformer Common Crawl en données utilisables, c'est un travail d'ingénierie colossal :
+
+1. **Extraction du texte** : virer le HTML, le JavaScript, les menus de navigation — garder uniquement le texte lisible
+2. **Detection de langue** : trier par langue pour éviter de mélanger le francais, l'arabe et le japonais dans le même document
+3. **Déduplication** : une technologie appelée MinHash detecte les copies quasi-identiques et n'en garde qu'une
+4. **Filtrage de qualité** : des heuristiques simples (ratio de mots valides, ponctuation, longueur des phrases) éliminent le bruit
+5. **Filtrage par perplexité** : un petit modèle de langage préentrainé note chaque texte — si le texte est incohérent, il obtient un mauvais score et est éliminé
+
+## Les grands datasets : l'histoire du domaine
+
+### C4 — le premier grand ménage (Google, 2019)
+
+Google a créé **C4** (Colossal Clean Crawled Corpus) pour entraîner T5. Ils ont appliqué un filtrage agressif à Common Crawl : 750 Go de texte anglais propre. Révolutionnaire à l'époque, aujourd'hui considéré comme assez basique niveau qualité.
+
+### The Pile — la diversité comme strategie (EleutherAI, 2020)
+
+L'équipe open-source EleutherAI a compris quelque chose de crucial : entraîner uniquement sur du texte web produit un modèle qui excelle sur le texte web... et rien d'autre. **The Pile** mélange 22 sources différentes :
+
+- Common Crawl filtré (le web)
+- PubMed Central (articles biomédicaux)
+- ArXiv (recherche scientifique)
+- GitHub (code source)
+- FreeLaw (textes juridiques américains)
+- StackExchange (questions-réponses techniques)
+- Wikipedia + Project Gutenberg (encyclopédie et livres classiques)
+
+<Callout type="tip" title="Pourquoi la diversité est cruciale">
+Un modèle entraîné uniquement sur du texte web sait parler comme le web. Il sera mauvais en code, en raisonnement scientifique, en logique juridique. Mélanger des sources très différentes produit un modèle plus polyvalent et souvent meilleur sur tous les fronts. The Pile a validé cette intuition et toute l'industrie a suivi.
+</Callout>
+
+### RedPajama — reproduire LLaMA en open source (2023)
+
+Quand Meta a sorti LLaMA sans publier ses données d'entraînement, la communauté open-source a voulu reconstituer le dataset. **RedPajama** reproduit approximativement la recette de LLaMA avec 1 200 milliards de tokens :
+
+| Source | Volume | Proportion |
+|---|---|---|
+| Common Crawl filtré | 878 milliards de tokens | 73% |
+| C4 | 175 milliards | 15% |
+| GitHub | 59 milliards | 5% |
+| ArXiv | 28 milliards | 2% |
+| Wikipedia | 24 milliards | 2% |
+| Livres | 26 milliards | 2% |
+| StackExchange | 20 milliards | 2% |
+
+### FineWeb — l'état de l'art (HuggingFace, 2024)
+
+**FineWeb** représente ce qu'on sait faire de mieux aujourd'hui en filtrage de données web. HuggingFace a appliqué un pipeline de qualité ultra-soigné sur 96 crawls de Common Crawl, pour obtenir 15 000 milliards de tokens de texte anglais.
+
+La grande innovation : **FineWeb-Edu**, un sous-ensemble de 1 300 milliards de tokens sélectionnés pour leur valeur pédagogique. Un classificateur entrainé à noter la qualite éducative d'un texte a passé en revue des milliards de documents et retenu les meilleurs.
+
+<Callout type="paper" title="La qualité bat la quantité">
+HuggingFace a démontré qu'un modèle entrainé sur FineWeb-Edu (1 300 milliards de tokens de qualité) surpasse souvent un modèle entrainé sur un dataset 10 fois plus grand mais moins bien filtré. Moins mais mieux, c'est une leçon centrale du domaine des données.
+</Callout>
+
+## Le dosage : comment mélanger les sources
+
+Avoir des données de qualité ne suffit pas. Il faut décider dans quelles **proportions** mélanger les différentes sources. Ce "data mix" a un impact énorme sur ce que le modèle saura faire.
+
+### La recette typique
+
+- **Web (Common Crawl filtré)** : 60-80% — c'est la base, diverse et abondante
+- **Code (GitHub)** : 5-15% — améliore le raisonnement logique, même pour les tâches non-code
+- **Sciences (ArXiv, PubMed)** : 3-8% — renforce le raisonnement formel
+- **Livres** : 3-5% — textes longs et bien structurés, aidant la cohérence longue distance
+- **Wikipedia** : 2-5% — connaissances factuelles denses et fiables
+
+### L'upsampling : voir les bons textes plusieurs fois
+
+Les meilleures sources sont souvent les plus petites. Wikipedia fait 24 milliards de tokens — minuscule par rapport aux 878 milliards de Common Crawl. Solution : on lui fait faire **3 a 5 tours** pendant l'entraînement (on "suréchantillonne").
+
+<Callout type="warning" title="La répétition a ses limites">
+Au-dela de 4 a 8 répétitions d'un même corpus, les performances se dégradent. Le modèle commence a mémoriser par coeur plutôt qu'à généraliser. C'est un problème sérieux : les données textuelles de qualité sont une ressource finie.
+</Callout>
+
+## Les enjeux éthiques : le grand malaise de l'industrie
+
+### Le copyright
+
+De nombreux datasets contiennent des livres, des articles de presse, du code sous licence. Des procès sont en cours contre OpenAI, Meta et d'autres. Le dataset **Books3** (qui incluait des livres piratés) a été retiré de The Pile suite à des actions légales. La question de la légalité de l'entraînement sur des données protégées n'est toujours pas tranchée.
+
+### Les biais
+
+Le web reflète les biais de la société — et parfois les amplifie. Les modèles entrainés sur ces données reproduisent des stéréotypes de genre, d'origine, de classe. Le filtrage atténue certains problèmes, mais aucun pipeline de nettoyage ne résout fondamentalement le problème : les données biaisées produisent des modèles biaisés.
+
+### Les données personnelles
+
+Noms, adresses, numéros de téléphone — ils trainent partout sur le web. Les efforts de filtrage tentent de les supprimer, mais c'est une tâche impossible à réaliser parfaitement sur des trillions de tokens.
+
+
+## La tendance du futur : les données synthétiques
+
+Les chercheurs commencent à parler de **data wall** : on va manquer de texte humain de qualité. La solution explorée aujourd'hui, ce sont les **données synthétiques** — du texte généré par des LLM existants pour entraîner la prochaine génération.
+
+Le projet **Cosmopedia** de HuggingFace génère par exemple des manuels scolaires synthétiques à grande échelle. Mais attention au **model collapse** : si les modèles s'entraînent sur leur propre production de façon cumulative, leurs erreurs et limitations s'amplifient de génération en génération — comme des photocopies de photocopies qui deviennent de plus en plus floues.

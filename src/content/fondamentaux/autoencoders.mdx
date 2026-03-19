@@ -1,0 +1,148 @@
+---
+title: "Autoencoders : compression et reconstruction"
+description: "Les autoencoders, leur architecture encodeur-décodeur avec goulot d'étranglement, et leurs variantes pour la compression, le débruitage et l'apprentissage de représentations."
+---
+
+## L'idée apparemment stupide
+
+Entraîner un réseau à **copier ses entrées**. Quoi ? C'est useless.
+
+Sauf : il **ne peut pas vraiment copier**. On force un goulot d'étranglement : il doit passer par une représentation minuscule. C'est comme donner une feuille A5 pour passer un roman : résumez les idées essentielles ou crèvez.
+
+L'auto-encoder **ne produit pas** une copie parfaite. Il produit une **représentation compacte** qui garde les infos cruciales et jette le bruit.
+
+
+
+## Architecture de base
+
+### L'encodeur
+
+Réseau qui prend x (une image 784-dim) et produit z (un code 32-dim, 100× plus petit) :
+
+```
+z = f_encoder(x)
+```
+
+Pour images : convolutions avec stride > 1 qui réduisent la résolution, puis couches denses qui "compressent".
+
+### Le goulot d'étranglement (bottleneck)
+
+z est le col étroit. Dimension 32 pour une image 28×28 (784 pixels) ? 25× compression. C'est ici qu'on force l'apprentissage.
+
+### Le décodeur
+
+Inverse de l'encodeur. Prend z et reconstruit x :
+
+```
+x_reconstructed = f_decoder(z)
+```
+
+Couches denses, puis convolutions transposées (upsampling) qui agrandissent les dimensions.
+
+<Callout type="info" title="Pourquoi c'est non-supervisé">
+Pas de labels. Données brutes = labels. Entraîner sur "reconstruire l'entrée" n'a besoin que de données, pas d'annotation humaine. C'est gold pour apprendre des représentations sans labels.
+</Callout>
+
+## La perte : reconstruire fidèlement
+
+Pour images normalisées 0-1, **erreur quadratique** (MSE) :
+```
+L = moyenne( (x - x_hat)^2 )
+```
+
+Pour images binaires, **entropie croisée** (BCE).
+
+Le réseau apprend : "compresse dans z, mais assez bien pour reconstruire". Dualité parfaite.
+
+## Variantes intelligentes
+
+### Autoencoder "sous-complet" (Undercomplete)
+
+dim(z) < dim(x). Forcément. Ça pousse la compression.
+
+### Autoencoder de débruitage (Denoising, DAE)
+
+Astuce : ajoute du **bruit** à l'entrée, mais la cible reste l'entrée **propre**.
+
+```
+x_bruite = x + bruit_gaussien
+L = distance(f_decoder(f_encoder(x_bruite)), x_propre)
+```
+
+Types de bruit : gaussien, masquage (dropout-like), salt-and-pepper (pixels deviennent 0 ou 1 aléa).
+
+<Callout type="tip" title="Pourquoi débruiter enseigne">
+En apprenant à enlever le bruit, le réseau capture la **structure statistique** des données. Pas juste "copier". Il comprend "c'est quoi le signal, c'est quoi le bruit". Représentations plus robustes.
+</Callout>
+
+### Autoencoder épars (Sparse)
+
+L'idée : forcer la représentation z à être **creuse** — la plupart des neurones doivent rester à zéro, seuls quelques-uns s'activent pour représenter chaque entrée.
+
+Concrètement, on ajoute une pénalité de parcimonie à la perte de reconstruction :
+
+```
+L_totale = L_reconstruction + lambda * L_parcimonie
+```
+
+La pénalité de parcimonie peut prendre deux formes :
+- **Pénalité L1** : on additionne la valeur absolue de chaque activation. Plus une activation est grande, plus elle coûte. Le réseau apprend donc à n'activer que ce qui est vraiment nécessaire.
+- **Divergence KL** : on compare la distribution d'activation moyenne des neurones à une cible de parcimonie (ex. "en moyenne, chaque neurone doit s'activer 5% du temps"). Si un neurone s'active trop souvent, il est pénalisé.
+
+**Le paradoxe "overcomplete"** : contrairement aux autoencodeurs classiques où z est plus petit que x, l'autoencoder épars peut avoir un z *plus grand* que x. Par exemple, une image de 784 pixels avec un espace latent de 2000 dimensions. Comment ça ne copie pas bêtement ? Parce que la pénalité de parcimonie force que, pour une image donnée, seulement 30 ou 40 de ces 2000 neurones s'activent. Chaque neurone devient un "détecteur de motif" spécialisé — un peu comme les neurones du cortex visuel, qui répondent chacun à un type de bord ou de texture spécifique.
+
+### Autoencoder contractif
+
+Ajoute une pénalité sur la **sensibilité** de l'encodeur aux petites variations de l'entrée. Techniquement, on pénalise la norme de Frobenius du jacobien de l'encodeur par rapport à l'entrée :
+
+```
+L_totale = L_reconstruction + lambda * || dz/dx ||^2
+```
+
+En pratique : si tu perturbes légèrement x, z ne doit presque pas bouger. Cela force l'espace latent à être lisse et robuste — deux entrées similaires donnent deux codes similaires. Utile pour apprendre des représentations invariantes aux petites transformations.
+
+## Applications concrètes
+
+### Réduction de dimensionnalité
+
+Auto-encoder = **PCA non-linéaire**. PCA : transformations linéaires. Auto-encoders : non-linéaire complexe. Capture structures cachées.
+
+
+
+### Détection d'anomalies
+
+On entraîne l'autoencodeur uniquement sur des données normales. Il apprend à reconstruire fidèlement ce qu'il a vu. Face à une donnée anormale (une fraude, une pièce défectueuse), il ne sait pas la reconstruire — l'erreur de reconstruction explose. On fixe un seuil : au-dessus, c'est une anomalie.
+
+L'avantage clé : on n'a pas besoin d'exemples d'anomalies pour entraîner. Les anomalies sont souvent rares et imprévues par définition — l'autoencodeur détecte "ce qu'il n'a jamais vu".
+
+<Callout type="tip" title="En pratique">
+(1) Entraîner sur données normales. (2) Définir seuil sur erreur recon. (3) Nouvelles données : si erreur > seuil, anomalie. Fraude, maintenance prédictive, contrôle qualité.
+</Callout>
+
+### Pré-entraînement (historiquement)
+
+Avant 2012, on entraînait couche par couche avec autoencoders. Ça initialisait les poids. Avec GPU et gros datasets, c'est obsolète. Mais historiquement crucial.
+
+### Compression d'images
+
+Les autoencodeurs convolutifs apprennent un encodage spécifique au type d'images sur lequel ils sont entraînés. Pour des photos médicales, des images satellites ou des visages, ils peuvent surpasser JPEG et WebP en atteignant des taux de compression supérieurs à qualité visuelle équivalente. C'est le principe des codecs neuraux modernes comme ceux développés par Google et Meta.
+
+### Débruitage d'images
+
+DAE débruite directement. Meilleur que Gaussian blur car apprend la structure réelle.
+
+## Limites de l'autoencoder classique
+
+1. **Espace latent désorganisé** : deux points proches en z → données pas nécessairement similaires
+2. **Pas de génération** : tu ne peux pas échantillonner z aléatoire et générer réaliste
+3. **Pas probabiliste** : juste déterministe. Pas de "distribution de probabilités"
+
+
+
+<Callout type="paper" title="C'est la limite">
+Ces problèmes motivent les **Variational Autoencoders (VAE)** : ajouter une structure probabiliste à l'espace latent. VAE = pont entre autoencoders classiques et modèles génératifs modernes. Elles résolvent les trois limites.
+</Callout>
+
+## Résumé
+
+Auto-encoder = compresse via goulot, puis reconstruit. Simple mais puissant. Variantes (débruitée, éparse, contractive) offrent chacun des bénéfices spécifiques. Applications : réduction de dimensions, anomalies, compression. Limites clés : espace latent non structuré. C'est là où les VAE entrent. Fondamental à comprendre avant de passer aux modèles génératifs modernes.

@@ -1,0 +1,119 @@
+---
+title: "Ollama et inférence locale"
+description: "Ollama simplifie l'exécution de LLM en local avec une interface de type Docker. Installation en une commande, bibliothèque de modèles, et intégration avec les outils de développement."
+---
+
+
+
+## Le rêve : un modèle IA sur votre laptop
+
+Fini les APIs payantes. Fini les données qui quittent votre machine. Fini la dépendance réseau. Vous téléchargez un modèle, il vit sur votre disque dur, il tourne **offline** sur votre GPU/CPU.
+
+C'était un cauchemar en 2023. Aujourd'hui, grâce à **Ollama**, c'est une commande.
+
+<Callout type="info" title="Pourquoi local c'est beau">
+Confidentialité : zéro données transmises. Coût : gratuit après l'investissement hardware. Latence : pas de réseau. Disponibilité : fonctionne sans internet. Parfait pour les devs, les entreprises soucieuses de sécurité, les experimenteurs.
+</Callout>
+
+## Ollama en 2 minutes
+
+```bash
+# Installation (une commande)
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Télécharger et lancer un modèle
+ollama run mistral
+
+# L'API REST automatique
+curl http://localhost:11434/api/generate -d '{
+  "model": "mistral",
+  "prompt": "Explique les Transformers"
+}'
+```
+
+Voilà. Mistral 7B tourne sur votre machine. Aucune config.
+
+## Modèles disponibles
+
+Ollama vend une librairie de modèles **pré-quantifiés** en GGUF (un format léger) :
+
+| Modèle | RAM | Vélocité |
+|---|---|---|
+| Phi-3 Mini (3.8B) | 3 Go | Super rapide |
+| Mistral (7B) | 5 Go | Rapide |
+| LLaMA 3 (8B) | 5 Go | Rapide |
+| Gemma 2 (9B) | 6 Go | Rapide |
+| LLaMA 3 (70B) | 40 Go | Lent mais faisable |
+
+Votre MacBook M1 avec 16 Go de RAM ? LLaMA 3 8B tourne. Pas vite (15 tokens/sec) mais ça tourne.
+
+<Callout type="tip" title="Importer vos modèles perso">
+Vous avez un modèle Hugging Face custom ? Convertissez-le en GGUF, créez un Modelfile qui le référence, et `ollama create mon-modele`. C'est chez vous maintenant.
+</Callout>
+
+## Personnalisation via Modelfile
+
+Vous pouvez tweaker chaque modèle :
+
+```dockerfile
+FROM mistral
+
+PARAMETER temperature 0.7
+PARAMETER num_ctx 8192
+
+SYSTEM """
+Tu es un expert Python.
+Réponds toujours avec du code.
+"""
+```
+
+```bash
+ollama create python-expert -f Modelfile
+ollama run python-expert "comment faire un list comprehension ?"
+```
+
+## L'écosystème
+
+Ollama expose une API REST compatible :
+- **OpenAI** (endpoint `/v1/chat/completions`)
+- **LangChain** (`ChatOllama`)
+- **Continue.dev** (autocomplete VS Code)
+- **Open WebUI** (interface ChatGPT-like)
+
+Votre code peut switcher entre OpenAI, local, Anthropic sans changement.
+
+## Concurrents
+
+### LM Studio
+Interface graphique complète, navigateur de modèles intégré, monitoring GPU. Pour ceux qui aiment les UIs.
+
+### Jan
+Open-source, privacy-first, plugins. Alternative fancy à Ollama.
+
+### GPT4All
+Pour les non-devs. CPU seul, installation Windows/Mac en un clic.
+
+## Combien de RAM vous faut-il ?
+
+**CPU seul** (pas de GPU) :
+- 3B Q4 : 4 Go → 5-10 tokens/sec
+- 7B Q4 : 6 Go → 3-7 tokens/sec
+
+**GPU NVIDIA RTX 4090** (24 Go VRAM) :
+- 30B Q4 : 40-80 tokens/sec ✨
+
+**Apple M1 (8 Go RAM partagée)** :
+- 7B Q4 : 10-15 tokens/sec
+
+<Callout type="warning" title="RAM unifiée Apple ≠ VRAM dédiée">
+Votre M2 Pro a 16 Go de RAM. Ça ne signifie **pas** que vous pouvez charger un modèle 16B. Le système d'exploitation utilise 4-6 Go. Réalité : 7B Q4 c'est le max confortable.
+</Callout>
+
+## Checklist pour la perf
+
+1. Quantification Q4_K_M (défaut, bon) ou Q5_K_M (si RAM permet)
+2. Réduire `num_ctx` si RAM limit : chaque token de contexte = mémoire
+3. `--gpu-layers` : envoyer un max de couches sur le GPU
+4. Monitor l'utilisation mémoire : le swap disque tue la performance
+
+L'inférence locale est **maintenant accessible**. Un laptop 2023 lance facilement du 7-13B. Pour du RAG local sur vos documents ? Ollama + LangChain + Chroma (base vectorielle en mémoire) = système complet gratuit sur votre machine.

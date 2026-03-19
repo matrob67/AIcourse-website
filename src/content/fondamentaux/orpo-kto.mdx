@@ -1,0 +1,146 @@
+---
+title: "ORPO, KTO et les alternatives"
+description: "Les méthodes d'alignement post-DPO : ORPO (monolithique), KTO (données non appariées), SimPO, et leur comparaison."
+---
+
+## La course à la simplification continue
+
+DPO a éliminé le reward model et le RL. Mais des chercheurs continuent de se demander : peut-on simplifier encore ? Et peut-on résoudre les situations où les données ne se présentent pas exactement dans le format requis par DPO ?
+
+Trois méthodes méritent attention : **ORPO**, qui fusionne SFT et alignement en une seule étape ; **KTO**, qui fonctionne sans paires de réponses ; et **SimPO**, qui élimine même le modèle de référence.
+
+
+
+## ORPO : pourquoi faire deux étapes quand une suffit ?
+
+### Le pipeline standard et son coût caché
+
+Jusqu'ici, l'alignement se passe en deux phases distinctes :
+1. **SFT** : apprendre à suivre des instructions (entraînement n°1)
+2. **DPO ou RLHF** : apprendre à préférer les bonnes réponses (entraînement n°2)
+
+Deux entraînements = deux fois le temps de calcul, deux fois les hyperparamètres à calibrer, un checkpoint SFT intermédiaire à sauvegarder et gérer. Et si on faisait les deux en même temps ?
+
+### La solution ORPO
+
+**ORPO** (Odds Ratio Preference Optimization) propose exactement ca : une loss unifiée qui combine l'apprentissage du format (SFT) et l'apprentissage des préférences en une seule passe.
+
+La loss totale est une somme de deux termes :
+
+```
+L_ORPO = L_SFT(y_w) + lambda * L_OR(y_w, y_l)
+```
+
+Le premier terme `L_SFT` est la loss de language modeling classique sur la réponse préférée — le modèle apprend à produire ce type de réponse. Le second terme `L_OR` pénalise le modèle quand il attribue une probabilité plus élevée à la réponse rejetée qu'à la réponse préférée.
+
+Ce second terme utilise le **odds ratio** — une mesure classique en statistiques. L'odds ratio compare les "cotes" (au sens probabiliste) des deux réponses :
+
+```
+OR = (P(y_w|x) / (1 - P(y_w|x)))
+     /
+     (P(y_l|x) / (1 - P(y_l|x)))
+```
+
+Si OR > 1, le modèle préfère correctement la bonne réponse. Si OR < 1, il préfère la mauvaise et est pénalisé.
+
+<Callout type="info" title="L'avantage monolithique">
+ORPO n'a pas besoin d'un modèle de référence séparé (contrairement au DPO). Les poids originaux jouent ce rôle implicitement. Résultat : un seul modèle en mémoire, un seul entraînement, et des performances compétitives avec DPO sur la plupart des benchmarks.
+</Callout>
+
+### En pratique
+
+Le modèle **Mistral-ORPO-7B** a montré que l'approche produisait des résultats de qualité. Les implémentations dans HuggingFace TRL supportent ORPO directement. C'est particulièrement attractif pour les ressources limitées : on divise grosso modo par deux le temps total d'entraînement de l'alignement.
+
+## KTO : et si vos données ne sont pas en paires ?
+
+### Le problème du monde réel
+
+DPO a un prérequis contraignant : pour chaque prompt, vous devez avoir *une réponse choisie ET une réponse rejetée*. Ces paires doivent venir du même prompt.
+
+Or, dans la vie réelle, les données de feedback ressemblent rarement à ca. Ce qu'on a plutôt :
+- Un utilisateur clique "pouce levé" ou "pouce baissé" sur une réponse individuelle
+- Un annotateur note une réponse "bonne" ou "mauvaise" sans la comparer à une autre
+- Des logs de chat avec des indicateurs de satisfaction — mais pas structurés en paires
+
+**KTO** (Kahneman-Tversky Optimization) est conçu pour ce cas : il fonctionne avec des **labels individuels** sur des réponses isolées.
+
+### L'inspiration de l'économie comportementale
+
+Le nom "Kahneman-Tversky" vient des deux psychologues (Daniel Kahneman, prix Nobel d'économie 2002, et Amos Tversky) qui ont développé la **théorie des perspectives**. Leur découverte principale : les humains sont asymétriques face aux gains et aux pertes.
+
+Perdre 100 euros fait deux fois plus "mal" que gagner 100 euros fait "plaisir". On est naturellement plus sensibles aux pertes qu'aux gains.
+
+<Callout type="paper" title="L'asymétrie intégrée dans la loss">
+KTO intègre cette asymétrie directement dans son objectif d'entraînement. Le modèle est pénalisé plus fortement pour produire de mauvaises réponses que récompensé pour produire de bonnes réponses. Cette asymétrie correspond mieux aux vraies préférences humaines que les méthodes symétriques.
+</Callout>
+
+### La mécanique
+
+Pour une réponse **désirable** `y_w` (label "bon") :
+
+```
+L_KTO(y_w) = 1 - sigma( beta * (log(pi(y_w|x)/pi_ref(y_w|x)) - KL_ref) )
+```
+
+Pour une réponse **indésirable** `y_l` (label "mauvais") :
+
+```
+L_KTO(y_l) = 1 - sigma( beta * (KL_ref - log(pi(y_l|x)/pi_ref(y_l|x))) )
+```
+
+Le terme `KL_ref` est une estimation de la divergence KL moyenne sur le batch — il sert de baseline, comme le reward moyen dans le RLHF classique.
+
+Les deux formules fonctionnent sur des exemples individuels, pas sur des paires. On peut les mélanger librement dans un batch.
+
+<Callout type="tip" title="KTO pour les données industrielles">
+Pour une entreprise qui a déployé un chatbot et collecté des pouces levés/baissés des utilisateurs, KTO est souvent le meilleur choix. Ces données non appariées sont directement utilisables sans transformation. Convertir des labels individuels en paires artificielle (comme il faut le faire pour DPO) introduit du bruit et de mauvaises correspondances.
+</Callout>
+
+## SimPO : sans modèle de référence du tout
+
+**SimPO** (Simple Preference Optimization) pousse la simplification encore plus loin : il **n'utilise pas de modèle de référence**.
+
+DPO et KTO ont besoin d'un modèle de référence figé en mémoire pour calculer les ratios de probabilités. SimPO l'élimine entièrement. À la place, il utilise directement la **log-probabilité moyenne** de la séquence comme reward implicite :
+
+```
+r_SimPO(x, y) = (1/|y|) * log pi(y|x)
+```
+
+La normalisation par la longueur `|y|` est importante : sans elle, le modèle préférerait systématiquement les réponses courtes (qui ont mécaniquement des probabilités plus élevées token par token).
+
+SimPO ajoute aussi un **terme de marge** gamma qui impose un écart minimum entre les scores des bonnes et des mauvaises réponses :
+
+```
+L_SimPO = -log sigma(
+  beta * (r(x, y_w) - r(x, y_l)) - gamma
+)
+```
+
+### Les avantages SimPO
+
+- **Moitié moins de mémoire GPU** : un seul modèle en mémoire au lieu de deux
+- **Biais de longueur éliminé** : la normalisation par longueur est intégrée, pas une heuristique ajoutée
+- **Performances compétitives** : SimPO égale ou surpasse DPO sur plusieurs benchmarks publics
+
+## Tableau comparatif : choisir sa méthode
+
+| Méthode | Données requises | Modèle de référence | Etapes | Complexité |
+|---|---|---|---|---|
+| RLHF (PPO) | Paires + annotations | Oui + RM + Value | SFT puis RM puis RL | Tres élevée |
+| DPO | Paires de préférences | Oui | SFT puis DPO | Modérée |
+| ORPO | Paires de préférences | Non | Unique (SFT + pref) | Faible |
+| KTO | Labels individuels | Oui | SFT puis KTO | Modérée |
+| SimPO | Paires de préférences | Non | SFT puis SimPO | Faible |
+
+<Callout type="warning" title="Pas de méthode universellement meilleure">
+Aucune méthode ne domine systématiquement les autres. Le choix dépend du format de vos données disponibles, de vos ressources GPU, et de la tâche cible. Règle pratique : commencez par DPO (le plus documenté), passez à KTO si vos données sont non appariées, et explorez ORPO ou SimPO si vous cherchez à réduire les coûts de calcul.
+</Callout>
+
+
+## Les tendances qui se dessinent
+
+**L'alignement itératif** : plutôt qu'un alignement en une passe sur des données statiques, les approches récentes (Online DPO, Self-Play) régénèrent de nouvelles données à chaque itération. Le modèle améliore continue à mesure qu'il devient meilleur — comme un athlète qui s'entraîne contre des adversaires de plus en plus forts.
+
+**L'alignement multi-objectif** : aujourd'hui, on optimise un seul objectif (être utile et sûr). Les travaux récents explorent comment équilibrer simultanément plusieurs objectifs parfois contradictoires : utilité, honnêteté, sûreté, concision, originalité. Un seul score ne suffit plus.
+
+**La convergence SFT + alignement** : ORPO a montré qu'on pouvait fusionner les deux phases. Cette tendance devrait continuer — les pipelines d'entraînement deviendront plus simples et plus unifiés à mesure qu'on comprend mieux les interactions entre ces phases.

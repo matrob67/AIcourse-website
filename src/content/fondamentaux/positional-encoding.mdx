@@ -1,0 +1,138 @@
+---
+title: "Positional encoding : comment le Transformer comprend l'ordre"
+description: "Donner au Transformer la notion de position : des sinusoïdes aux techniques modernes comme RoPE."
+---
+
+## Le problème : le Transformer oublie l'ordre
+
+Voici un problème mathématique subtil : l'attention n'a **aucune notion de position**. Si vous présentez les mots dans un ordre différent, l'attention produit le même résultat.
+
+Exemple pathologique :
+- "Le chat mange la souris" → résultat A
+- "La souris mange le chat" → même résultat A (WRONG!)
+
+Linguistiquement : le sens change complètement. Mathématiquement : l'attention s'en fout. Il faut donc **ajouter manuellement** une information de position.
+
+## Sinusoïdes : la recette originale
+
+Le papier Transformer original (2017) propose une astuce élégante : ajouter des vecteurs périodiques (sinusoïdes) qui encodent la position.
+
+
+
+Pour la position i, les dimensions des vecteurs oscillent à des fréquences différentes :
+
+```
+Dimension paire:   sin(i / 10000^(pair/d_model))
+Dimension impaire: cos(i / 10000^(impair/d_model))
+```
+
+Pensez à ça comme une **horloge multi-fréquence** :
+- Dimensions basses : oscillent lentement (position globale)
+- Dimensions hautes : oscillent rapidement (position locale)
+
+
+
+<Callout type="info" title="Pourquoi les sinusoïdes ?">
+Mathématiquement, la position i+k peut s'exprimer comme une transformation linéaire simple de la position i. Le modèle apprend donc **facilement les positions relatives** ("le mot 5 pas loin"). Bonus : cela **extrapolle automatiquement** à des séquences plus longues que celles d'entraînement.
+</Callout>
+
+Avantages des sinusoïdes :
+- Pas d'entraînement (formule mathématique fixe)
+- Fréquences multiples (capture local ET global)
+- **Extrapolation gratuite** à des séquences plus longues
+
+## Embeddings appris : la version paresseuse
+
+Alternatif simple : au lieu d'une formule, juste apprendre un vecteur différent pour chaque position.
+
+```python
+position_embedding = nn.Embedding(max_seq_len, d_model)
+# Position 0 : vecteur appris
+# Position 1 : vecteur appris
+# Position 512 : vecteur appris
+```
+
+Simple à implémenter. **Problème majeur** : limité à la longueur max d'entraînement.
+
+BERT entraîné sur 512 tokens ? Vous ne pouvez pas l'utiliser sur 1024 tokens sans le ré-entraîner. C'est un gaspillage.
+
+## RoPE : le champion actuel
+
+Voici une astuce géniale découverte récemment : au lieu d'**ajouter** un vecteur de position, pourquoi ne pas **faire tourner** les vecteurs Q et K selon la position ?
+
+Imaginez un vecteur 2D (x, y). Une rotation d'angle θ le transforme en (x*cos(θ) - y*sin(θ), x*sin(θ) + y*cos(θ)). Pour chaque paire de dimensions, vous appliquez une rotation 2D avec un angle proportionnel à la position.
+
+```
+Q_position_encodee = Rotation(position) × Q
+K_position_encodee = Rotation(position) × K
+```
+
+**Pourquoi c'est brillant ?**
+
+1. **Les distances relatives émergen naturellement** : après rotation, le produit scalaire Q · K dépend seulement de la **différence** de positions (pos_q - pos_k), pas des positions absolues. Le modèle voit automatiquement les distances relatives.
+
+2. **L'attention décroît avec la distance naturellement** : c'est une propriété mathématique, pas un hack.
+
+3. **Ça s'étend à des séquences plus longues** : contrairement aux embeddings appris, RoPE fonctionne pour n'importe quelle longueur (avec quelques ajustements : YaRN, NTK-aware).
+
+<ArxivLink id="2104.09864" title="RoFormer: Enhanced Transformer with Rotary Position Embedding (Su et al., 2021)" />
+
+<Callout type="tip" title="Coin technique : les rotations 2D">
+Chaque paire de dimensions (2i, 2i+1) subit une rotation 2D indépendante. Les paires basses fréquence capturent l'ordre global, hautes fréquence l'ordre local. Élégance mathématique totale.
+</Callout>
+
+**Utilisé par** : LLaMA, Mistral, GPT-NeoX, Qwen, et quasi tous les LLM modernes.
+
+## ALiBi : Alternative minimaliste
+
+Approche radicalement différente : plutôt que d'encoder la position dans les vecteurs, ajouter simplement un **biais** aux scores d'attention.
+
+```
+score(i, j) = Q_i · K_j - facteur × distance(i, j)
+```
+
+C'est simple : si deux mots sont loin, réduisez légèrement leur score d'attention. Si proches, le score reste normal.
+
+<ArxivLink id="2108.12409" title="Train Short, Test Long: Attention with Linear Biases (Press et al., 2022)" />
+
+### Superbe extrapolation
+
+Entraîner sur 1024 tokens, puis utiliser sur 10,000 tokens ? ALiBi le fait sans perte majeure. Les positions relatives sont si simples que le modèle généralise parfaitement.
+
+```
+Modeles: BLOOM, MPT
+```
+
+## Comparaison : les quatre approches
+
+| Méthode | Fond | Extrapolation | Difficulté | Utilisé par |
+|---|---|---|---|---|
+| Sinusoïdal | Formule fixe | Bonne | Moyenne | Transformer original |
+| Appris | Lookup table | Mauvaise (limité à entraînement) | Facile | BERT, GPT-2 |
+| RoPE | Rotation 2D | Bonne (avec YaRN) | Difficile | LLaMA, Mistral, Qwen |
+| ALiBi | Biais linéaire | Excellente | Très facile | BLOOM, MPT |
+
+## L'enjeu : allonger la fenêtre de contexte
+
+Un défi actuel majeur : les modèles s'entraînent sur 4000-32000 tokens, mais on aimerait traiter 100,000+ tokens.
+
+Les techniques de positional encoding déterminent la **longueur maximale** pratique. Heureusement, il existe des raccourcis :
+
+- **YaRN** : interpolation mathématique de RoPE pour des positions plus loin
+- **NTK-aware scaling** : ajuster les fréquences de base
+- **Longrope** : interpolation progressive avec continuum
+
+Résultat : un modèle entraîné sur 4k tokens peut traiter 32k-100k+ tokens avec seulement une légère baisse de performance. Le contexte s'allonge sans ré-entraînement.
+
+## Pourquoi c'est important
+
+La longueur du contexte affecte **tout** : vous pouvez passer un document entier, un long historique de conversation, une codebase complète. Plus long = meilleur. Mais c'est limité par le positional encoding et la complexité quadratique de l'attention.
+
+## Les points clés à retenir
+
+1. Le Transformer **oublie l'ordre** : il faut ajouter l'info de position explicitement
+2. **Sinusoïdes** = élégant mais peu utilisé
+3. **Embeddings appris** = simple mais limité à la taille d'entraînement
+4. **RoPE** = le standard moderne (LLaMA, Mistral), positions relatives naturelles
+5. **ALiBi** = meilleure extrapolation, moins utilisé
+6. **L'extension de contexte** (YaRN, NTK) = enjeu majeur de 2024-2026

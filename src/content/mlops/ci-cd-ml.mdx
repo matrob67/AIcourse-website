@@ -1,0 +1,138 @@
+---
+title: "CI/CD pour le Machine Learning"
+description: "Automatiser l'entraînement et le déploiement de modèles : tester les données, valider les modèles, déployer progressivement."
+---
+
+## CI/CD classique vs CI/CD pour le ML
+
+En logiciel classique, CI/CD = compilez, testez, deployez le code. En ML, le code n'est qu'une partie. **Les données changent, les modèles changent.** Un dataset différent = performances différentes. Même code, données pourries = modèle pourri.
+
+Un CI/CD ML doit :
+
+- Valider que les données sont bonnes (schéma, distribution, pas de pollution test-train)
+- Entraîner le modèle (cher en GPU, faut automatiser)
+- Vérifier que le nouveau modèle est meilleur que l'ancien
+- Le deployer progressivement
+- Le monitorer en production
+
+<Callout type="info" title="Les trois niveaux (selon Google)">
+**Niveau 0** : 100% manuel. Vous entraînez, vous checkez les chiffres, vous deployez. Fragile.
+
+**Niveau 1** : pipeline d'entraînement automatisé. Nouvelles données = réentraînement auto.
+
+**Niveau 2** : CI/CD complet. Chaque commit sur main = test auto + entraînement auto + deployment auto.
+
+La plupart des équipes sont au niveau 0 ou 1. Atteindre le niveau 2 coûte du temps.
+</Callout>
+
+
+
+## Continuous Integration : tester avant d'entraîner
+
+### Tests classiques d'abord
+
+- **Linting** : code propre (black, ruff, mypy)
+- **Unit tests** : les fonctions de preprocessing font ce qu'elles doivent faire
+- **Integration tests** : le pipeline complet sur un petit dataset sans péter
+
+### Tests ML spécifiques
+
+- **Données** : schéma correct ? Pas de valeurs manquantes étranges ? Distribution normale ou on a un problème ?
+- **Modèle** : s'entraîne sans erreur ? Le loss diminue ? Les gradients bougent ?
+- **Performance** : accuracy >= X% minimum ?
+- **Pas de régression** : le nouveau modèle est mieux que l'ancien ?
+- **Pas de biais** : le modèle performe pareil sur les hommes et les femmes ? Sur toutes les catégories ?
+
+<Callout type="tip" title="Le smoke test d'une minute">
+Entraînez le modèle 10 itérations sur 100 exemples. Le loss diminue ? Oui = probablement bon. Non = vous avez un bug. Ce test prend 30 secondes et attrape 80% des erreurs.
+</Callout>
+
+### Valider les données avant d'entraîner
+
+Avant de gaspiller 8 heures d'entraînement GPU, vérifiez les données :
+
+- Les colonnes qu'il faut sont présentes ?
+- Pas trop de valeurs manquantes ?
+- Les statistiques ressemblent à la dernière fois ou c'est du drift (les distributions ont changé) ?
+- Assez d'exemples dans chaque classe ?
+
+Outils : Great Expectations, Pandera, Pydantic. Ce sont des validateurs qui crient si quelque chose cloche.
+
+## Continuous Training : réentraîner quand c'est nécessaire
+
+**Continuous Training** = réentraîner automatiquement le modèle quand :
+
+- Nouvelles données disponibles
+- Distribution des données a drift (changed)
+- Code du modèle a changé
+- Performance en production se dégrade
+
+### Triggers
+
+| Quoi | Fréquence | Exemple |
+|---|---|---|
+| **Calendar** | Quotidien/hebdo | Re-entraîner chaque lundi |
+| **Nouvelles données** | Event-driven | Batch de données étiquetées |
+| **Drift détecté** | Event-driven | Distribution a changé de 10% |
+| **Perf dégradée** | Event-driven | Accuracy < 80% |
+| **Code changé** | À chaque commit | Merge sur main |
+
+Quand faire quoi est une science à part entière.
+
+## Continuous Deployment : vérifier avant de livrer
+
+Avant de mettre le modèle en production :
+
+- Performance >= seuil ?
+- Meilleur que le modèle actuel ?
+- Tests d'inférence sur des cas réels ?
+- Latence acceptable (< X secondes) ?
+- Supporte le débit attendu ?
+
+### Stratégies de déploiement
+
+**Blue/Green** : deux envs, on bascule tout d'un coup
+**Canary** : 5% du trafic → 10% → 50% → 100%
+**Shadow** : tourne en parallèle, pas de users yet
+**A/B Testing** : 50/50, mesure la vraie différence
+
+Voir le chapitre A/B Testing.
+
+<Callout type="warning" title="Le rollback automatique">
+Truc critique : **si ça se casse, revenir au modèle précédent sans attendre un humain**. Si la latence monte ou les erreurs explosent après un deploy, arrêtez immédiatement. Cela veut dire garder les vieux modèles disponibles et pouvoir revenir vite.
+</Callout>
+
+## Outils et architecture
+
+### Orchestration
+
+- **GitHub Actions / GitLab CI** : CI classique, mais faut des runners GPU
+- **Kubeflow Pipelines** : orchestration ML sur Kubernetes
+- **Apache Airflow** : génériques workflows
+- **Prefect / Dagster** : modernes, bien pour ML
+- **SageMaker Pipelines** : AWS managed
+
+### Pipeline type
+
+1. **Trigger** : commit, nouvelles données, schedule, ou alerte monitoring
+2. **Valider les données** : tests de qualité et distribution
+3. **Entraîner** : avec tracking des métriques
+4. **Évaluer** : comparer au modèle champion sur test set fixe
+5. **Valider** : tests auto + approbation humaine optionnelle
+6. **Package** : conteneur ou artefact déployable
+7. **Deploy** : canary/blue-green vers la prod
+8. **Monitor** : watch les métriques post-déploiement
+
+<Callout type="paper" title="Ça coûte combien?">
+CI/CD ML complet = infrastructure GPU on-demand (cher), datasets de test maintenus, monitoring dédié. Pour beaucoup de boîtes, niveau 1 (pipeline auto sans CI/CD du pipeline) c'est le bon compromis.
+</Callout>
+
+## Bonnes pratiques
+
+- **Commencer simple** : smoke test + test de non-régression = 80% des besoins
+- **Automatiser progressivement** : atteignez pas le niveau 2 immédiatement
+- **Tester les données autant que le code** : les bugs de données > bugs de code
+- **Garder un humain** : pour les modèles critiques, une approbation avant prod reste prudente
+- **Versionner tout** : code (Git), données (DVC), modèles (registry), env (Docker)
+
+Essentiellement : traitez vos données comme du code. Elles méritent du respect.

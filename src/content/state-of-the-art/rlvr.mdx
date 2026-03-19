@@ -1,0 +1,199 @@
+---
+title: "RLVR : Reinforcement Learning with Verifiable Rewards"
+description: "Le RLVR utilise des récompenses automatiquement vérifiables pour entraîner le raisonnement des LLM, éliminant le besoin de reward models appris et réduisant le risque de reward hacking."
+---
+
+
+
+## Le problème des reward models imparfaits
+
+L'apprentissage par renforcement classique (RLHF) utilise un **reward model** : un réseau de neurones entraîné sur les préférences humaines qui prédit "cette réponse est bonne/mauvaise".
+
+Problème : le RM est une **approximation imparfaite**. Et le modèle apprend à exploiter ses failles au lieu de devenir meilleur.
+
+C'est le **reward hacking** : le modèle "triche" en exploitant les biais du RM.
+
+Et si, pour les tâches où on peut **vérifier objectivement** la réponse, on éliminait le RM entirely ?
+
+<Callout type="info" title="L'idée révolutionnaire du RLVR">
+Pour les maths, le code, la logique formelle : la réponse est **objectivement correcte ou fausse**.
+
+Au lieu d'un RM qui approxime, utilisez une **vérification automatique** exacte.
+
+Récompense binaire : r=1 (correct) ou r=0 (incorrect). Pas d'approximation, pas de biais, pas de hacking possible.
+</Callout>
+
+## Comment ça marche
+
+### Le pipeline
+
+```
+1. Modèle reçoit un problème (math/code/logique)
+2. Il génère raisonnement + réponse
+3. Vérification automatique :
+   - Maths : compare avec réponse juste
+   - Code : exécute les tests
+   - Logique formelle : proof checker vérifie
+4. Récompense binaire : correct (1) ou incorrect (0)
+5. RL utilise cette récompense exacte
+```
+
+### Les vérificateurs
+
+| Domaine | Méthode | Fiabilité |
+|---|---|---|
+| Arithmétique simple | Comparaison numérique | 100% |
+| Algèbre | Calcul symbolique (SymPy) | ~99% |
+| Code | Exécution de tests | ~95% (dépend tests) |
+| Preuves formelles | Lean/Isabelle | 100% |
+| Logique SAT | SAT solver | 100% |
+| QA factuelle | Matching de réponse | ~90% |
+
+Pas parfait, mais **bien mieux** qu'un RM appris sur données bruitées.
+
+## RLVR en action : DeepSeek-R1
+
+DeepSeek-R1 utilise massivement RLVR :
+
+### GRPO avec récompenses vérifiables
+
+```
+Pour chaque problème :
+  1. Générez G réponses
+  2. Vérifiez chaque réponse : r_i ∈ {0, 1}
+  3. Calculez l'avantage : A_i = (r_i - moyenne) / écart-type
+  4. Mettez à jour la policy
+```
+
+Les réponses correctes sont renforcées, les fausses pénalisées.
+
+### Résultat fou : R1-Zero
+
+Sans **aucun** exemple de raisonnement CoT montré, juste en utilisant RLVR :
+
+Le modèle développe **spontanément** :
+- Décomposition en étapes
+- Vérification de ses propres calculs
+- Retour en arrière quand ça ne marche pas
+- Exploration d'alternatives
+
+<Callout type="paper" title="Le raisonnement émerge de l'optimisation">
+R1-Zero le prouve : le Chain-of-Thought step-by-step est la **stratégie optimale** pour maximiser la probabilité de réponse correcte.
+
+Le modèle le découvre par RL, sans qu'on le lui montre. C'est émergent.
+</Callout>
+
+## Avantages du RLVR
+
+### 1. Pas de reward hacking
+
+La récompense est **exacte**. Pas d'exploitation possible. Soit vous dites "42" et la réponse est 42 (correct), soit ce n'est pas le cas (incorrect).
+
+### 2. Scalabilité massive
+
+Générer des problèmes vérifiables est facile :
+
+- **Maths** : générer algorithme → générer problème + solution
+- **Code** : compiler un algorithme, générer test cases
+- **Preuves formelles** : vérifier automatiquement
+
+Pas besoin d'humains pour annoter.
+
+### 3. Signal clair
+
+Récompense binaire = signal sans ambiguïté. Contrairement aux scores de préférence humaine qui sont bruités, subjectifs.
+
+### 4. Pas d'annotateurs
+
+Élimine le coût, le temps, les biais des humains évaluateurs.
+
+## Limitations
+
+### Applicable seulement aux tâches vérifiables
+
+Le RLVR ne marche que si vous pouvez vérifier automatiquement la réponse.
+
+Tâches créatives, conversationnelles, subjectives ? Un RM appris est nécessaire.
+
+### Signal sparse
+
+Récompense binaire = signal sparse. Le modèle sait "j'ai échoué" mais pas "pourquoi j'ai échoué" ou "quelle étape était fausse".
+
+C'est pourquoi les **PRM** (récompense par étape) sont complémentaires au RLVR.
+
+<Callout type="warning" title="Suroptimisation du format">
+Le modèle peut apprendre à optimiser le **format** plutôt que le **raisonnement**.
+
+Exemple : si le vérificateur compare des strings, le modèle apprend à produire le format exact sans raisonnement réel.
+
+Vérificateurs robustes (équivalence numérique, sémantique) atténuent ça.
+</Callout>
+
+## Combinaison RLVR + RLHF
+
+En pratique, les meilleurs systèmes combinent :
+
+```
+Phase 1 : RLVR pour raisonnement (maths, code)
+Phase 2 : RLHF/DPO pour alignement (style, sécurité, helpfulness)
+```
+
+DeepSeek-R1 illustre ça :
+- RLVR du brut pour raisonnement avancé
+- SFT/rejection sampling pour lisibilité et style
+
+Deux phases, deux approches, meilleur résultat.
+
+## Coin technique : générer les données d'entraînement
+
+### Problèmes de maths
+
+```python
+import random
+
+def generate_algebra_problem():
+    a = random.randint(1, 20)
+    b = random.randint(1, 50)
+    x = random.randint(1, 10)
+    c = a * x + b
+    problem = f"Si {a}x + {b} = {c}, que vaut x ?"
+    answer = x
+    return problem, answer
+```
+
+Générez algorithme pour créer problèmes et réponses.
+
+### Problèmes de code
+
+Utilisez des banques existantes (Codeforces, LeetCode) avec leurs test suites comme vérificateurs.
+
+## Le futur du RLVR
+
+Imaginez :
+- **Vérificateurs formels** pour plus de domaines
+- **Exécution de code** pour tester
+- **Simulations** pour plans, sciences
+- **Chaînes de vérification** pour domaines complexes
+
+Le RLVR s'élargit au-delà des maths vers ingénierie, planification, raisonnement scientifique.
+
+<Callout type="tip" title="L'avenir : vérificateurs > reward models">
+La tendance est claire : **investir dans vérificateurs** plutôt que reward models.
+
+Un vérificateur parfait + RLVR > vérificateur imparfait + RLHF.
+
+La frontière du raisonnement par IA sera définie par la qualité des vérificateurs disponibles.
+</Callout>
+
+## Importance conceptuelle
+
+RLVR représente un **changement de paradigme** :
+
+Avant : "Approximez la qualité avec un RM."
+Après : "Utilisez la vérité objective quand disponible."
+
+C'est un retour à un principe d'IA classique : quand vous avez accès à une fonction d'évaluation parfaite, utilisez-la.
+
+Mais le RLVR apporte aussi une perspective nouvelle : pas juste évaluer la réponse finale, mais chaque étape (PRM).
+
+Combiné, RLVR + PRM = système optimal pour le raisonnement.

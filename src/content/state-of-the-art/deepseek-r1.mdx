@@ -1,0 +1,149 @@
+---
+title: "DeepSeek R1 : le raisonnement open-source"
+description: "DeepSeek R1 est le premier modèle de raisonnement open-source qui rivalise avec o1, démontrant que le raisonnement avancé peut être développé et partagé ouvertement."
+---
+
+## Le choc qui a remis les choses en place
+
+Janvier 2025. Une entreprise chinoise, DeepSeek, publie un modèle de raisonnement open-source (licence MIT) qui **rivalise avec o1 d'OpenAI**.
+
+Pas juste "proche". **Pareil ou mieux** sur les benchmarks.
+
+Et ils publient le code **complet**. Et le paper **détaillé**. Et les poids du modèle.
+
+Voilà la vraie perturbation.
+
+<ArxivLink id="2501.12948" title="DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning (DeepSeek-AI, 2025)" />
+
+
+
+<Callout type="info" title="Pourquoi c'est important">
+1. Le raisonnement avancé n'est pas un monopole américain.
+2. C'est reproducible — on sait comment faire.
+3. C'est ouvert — la communauté entière peut améliorer.
+C'est un moment de basculement de paradigme.
+</Callout>
+
+## Le pipeline d'entraînement fascinant
+
+### Phase 1 : RL pur sans exemples (R1-Zero)
+
+L'expérience la plus dingue du papier :
+
+Prenez un modèle de base (DeepSeek-V3, 671B paramètres, très bon mais sans spécialité raisonnement).
+
+**Entraînez-le uniquement par RL, zéro exemple de raisonnement.**
+
+- Vous donnez un problème mathématique
+- Le modèle génère une réponse
+- Vérification automatique : correct ou pas ? r=1 ou r=0
+- RL (GRPO) qui dit : "réponses correctes, bon travail. Réponses mauvaises, oublie."
+
+**Résultat fou** : le modèle **apprend spontanément à raisonner en chaîne**.
+
+Jamais on ne lui a montré un exemple. Il *découvre* le Chain-of-Thought de lui-même.
+
+<Callout type="paper" title="L'émergence naturelle du raisonnement">
+Sans entraînement explicite sur CoT, le modèle développe **spontanément** : décomposition en étapes, vérification, backtracking, exploration d'alternatives. Le raisonnement émerge comme stratégie optimale pour obtenir la récompense (réponse correcte).
+</Callout>
+
+### Problèmes du R1-Zero
+
+Libre, naturel, mais chaotique :
+- Mélange de langues (français/anglais/code au hasard)
+- Formatting bizarre
+- Raisonnements excessivement longs
+- Parfois incohérent
+
+### Phase 2 : Cold Start
+
+Pour fixer ça :
+
+1. Collectez quelques milliers d'exemples de raisonnement **haute qualité** (humains + modèles bons)
+2. SFT (supervised fine-tune) le modèle sur ces exemples
+3. Puis appliquez RL
+
+Ça donne un point de départ propre avant RL.
+
+### Phase 3 : RL à grande échelle
+
+SFT initié, maintenant RL sur **large ensemble** de problèmes :
+
+- Maths (vérifiable automatiquement)
+- Code (tests)
+- Logique formelle
+- Open-ended (reward model)
+
+### Phase 4 : Distillation
+
+Prenez le raisonnement de R1 et distillez-le dans des modèles plus petits.
+
+| Modèle | Base | Params | Score AIME |
+|---|---|---|---|
+| R1-Distill-Qwen-1.5B | Qwen 2.5 1.5B | 1.5B | 28.9% |
+| R1-Distill-Qwen-7B | Qwen 2.5 7B | 7B | 55.5% |
+| R1-Distill-Qwen-32B | Qwen 2.5 32B | 32B | 72.6% |
+| R1-Distill-Llama-70B | Llama 3.3 70B | 70B | 70.0% |
+
+**Choquant** : un modèle 7B distillé raisonne mieux que GPT-4o (13.4% sur AIME).
+
+## Coin technique : GRPO l'algorithme
+
+GRPO = Group Relative Policy Optimization. Simplifie PPO (l'algo RL classique).
+
+Idée : au lieu d'un "critic model" séparé qui dit "cette réponse vaut 0.7 points", utilisez la **comparaison relative dans le groupe**.
+
+```
+Pour chaque prompt :
+1. Générez G réponses
+2. Vérifiez chacune : est correcte (r=1) ou pas (r=0)
+3. Normalisez au sein du groupe : au-dessus de la moyenne? Vous êtes renforcés. Au-dessous? Pénalisés.
+4. Mettez à jour le modèle
+```
+
+Avantages : plus stable que PPO, pas besoin d'entraîner un critic, plus facile à implémenter.
+
+## Résultats : vraiment compétitif
+
+| Benchmark | GPT-4o | o1 | DeepSeek-R1 |
+|---|---|---|---|
+| AIME 2024 | 9.3% | 79.2% | 79.8% |
+| MATH-500 | 76.6% | 96.4% | 97.3% |
+| Codeforces | 808 | 1891 | 2029 |
+| GPQA Diamond | 53.6% | 78.0% | 71.5% |
+
+**o1 et R1 : équivalents sur maths et code. R1 meilleur sur Codeforces.**
+
+<Callout type="tip" title="R1-Distill pour l'usage réel">
+Vous ne travaillez pas probablement avec un 671B paramètres en local. Les distillés (Qwen-32B, Llama-70B) = excellent rapport qualité/coût. Raisonnement classe mondiale, exécutable sur votre machine.
+</Callout>
+
+## Impact sur la communauté
+
+### Reproductibilité
+
+Le paper détaillé a permis à la communauté de :
+- Reproduire les résultats sur modèles plus petits
+- Appliquer GRPO à Llama, Mistral, etc.
+- Expérimenter des variantes
+
+### Souveraineté technologique
+
+**Message géopolitique** : les capacités de raisonnement avancé ne sont pas le monopole des labs américains rich.
+
+C'est important pour la souveraineté technologique globale.
+
+<Callout type="warning" title="Le coût des tokens cachés">
+Comme o1, R1 génère de longues chaînes de raisonnement. Un problème complexe = 5000-50000 tokens. Regardez votre bill d'API. Utilisez R1 seulement quand vraiment nécessaire.
+</Callout>
+
+## Le moment d'importance
+
+DeepSeek-R1 a montré que :
+
+1. **C'est reproductible** — le RL est suffisant, pas de magie exclusive
+2. **C'est open-sourceable** — la communauté peut avoir accès
+3. **C'est democratizable** — des distillés petits sont super utiles
+4. **C'est competitive** — open-source = compétitif avec propriétaire
+
+Le paysage de l'IA ne sera jamais pareil. Le raisonnement avancé est maintenant public.

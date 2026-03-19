@@ -1,0 +1,105 @@
+---
+title: "Modèles d'embeddings textuels"
+description: "Les modèles d'embeddings transforment le texte en vecteurs denses capturant le sens sémantique. Comprendre les architectures, les benchmarks et le choix du bon modèle pour votre cas d'usage."
+---
+
+
+
+## Qu'est-ce qu'un embedding ?
+
+Un texte → un vecteur (liste de nombres). Deux textes similaires = vecteurs proches. Mesurez la proximité avec la **similarité cosinus** (angle entre vecteurs).
+
+Exemple simplifié : "chat" → [0.8, 0.2, 0.1, ...] et "tigre" → [0.75, 0.25, 0.15, ...] sont proches. "chaise" → [0.1, 0.9, 0.05, ...] est loin.
+
+<Callout type="info" title="Du mot à la phrase">
+Vieux embeddings (Word2Vec) : un vecteur par **mot**. Modernes : un vecteur par **phrase ou paragraphe entier**, qui capture le contexte. C'est plus puissant.
+</Callout>
+
+## Comment ça fonctionne
+
+Vous prenez un **Transformer encoder** (type BERT), vous le passez le texte. Le dernier token [CLS] ou la moyenne de tous les tokens = votre embedding.
+
+Pour que ça soit bon, vous entraînez le modèle avec une loss **contrastive** : paires (texte A, texte B similaire) doivent avoir des embeddings proches, paires dissimilaires doivent être loin.
+
+```
+Loss = -log(exp(sim(A, B_positif)/T) / sum(exp(sim(A, B_*/T)))
+```
+
+Température T=0.05 typiquement. C'est du classification softmax qui force les positifs proches et les négatifs loin.
+
+## Architectures
+
+### Bi-encoders (dominant)
+Query et document **codés séparément**, puis comparés. Rapide (tu pré-encodes tous les documents offline). Moins précis (pas d'interaction entre query et doc).
+
+### Récent : instructions et task-awareness
+Des modèles comme E5 et GritLM acceptent des **instructions** :
+
+```
+"Instruction : retrouver des documents pertinents pour cette query"
+"Query : Qu'est-ce que la photosynthèse ?"
+```
+
+Ça aide énormément le modèle à adapter ses embeddings selon le rôle (query vs document vs résumé).
+
+## Modèles populaires et pratiques
+
+| Modèle | Dimensions | Contexte | Score MTEB | Usage |
+|---|---|---|---|---|
+| all-MiniLM | 384 | 512 | Bon (56) | Prototypage, rapide |
+| BGE-M3 | 1024 | 8192 | Excellent (68) | Production, multilingue |
+| E5-mistral | 4096 | 32768 | Très bon (67) | Haute qualité, lent |
+| OpenAI small | 1536 | 8191 | Bon (62) | Simple, payant |
+
+<Callout type="tip" title="Choix pragmatique">
+Prototypage rapide ? **all-MiniLM** (c'est gratuit et léger).
+Production, multilingue ? **BGE-M3** (open-source, excellent).
+Qualité maximale, budget illimité ? **text-embedding-3-large** (OpenAI, payant mais très bon).
+</Callout>
+
+## MTEB : le benchmark
+
+**MTEB** (Massive Text Embedding Benchmark) teste les modèles sur 56+ tâches : retrieval, STS (similarité), classification, clustering, reranking.
+
+Un modèle peut être excellent en retrieval mais moyen en STS. Regardez les scores par **catégorie** selon votre cas d'usage.
+
+<Callout type="paper" title="Le leaderboard compte">
+Hugging Face a un leaderboard MTEB public. C'est votre source de vérité pour comparer. Les papiers d'université sont souvent biaisés vers leurs modèles.
+</Callout>
+
+## Considérations pratiques
+
+### Dimensions et stockage
+384 dimensions × 4 bytes = 1.5 Ko par embedding.
+1M documents × 1.5 Ko = 1.5 Go stockage.
+Avec 3072 dimensions : 12 Go.
+
+### Normalisation
+La plupart des modèles produisent des vecteurs normalisés (norme L2 = 1). Similarité cosinus = simple produit scalaire. Compatible avec toutes les bases vectorielles.
+
+### Matryoshka Embeddings
+Certains modèles permettent de **tronquer** les vecteurs (prendre les 256 premières dimensions sur 1024). Perte graduelle de qualité mais économie massive en stockage.
+
+### Quantification
+Compresser les embeddings en INT8 ou binaire (1 bit/dimension) pour l'index. Dégradation mineure, économie énorme.
+
+## Fine-tuning sur vos données
+
+Pour un domaine spécifique (médical, juridique), fine-tuner un embedding sur vos données améliore drastiquement le retrieval.
+
+Il vous faut : quelques milliers de paires (query, document pertinent) + un framework (Sentence Transformers) + une loss (MultipleNegativesRankingLoss).
+
+```python
+from sentence_transformers import SentenceTransformer, losses, models
+
+model = SentenceTransformer('bgge-base')
+# Entraîner avec vos paires...
+```
+
+**Attention** : après fine-tuning, vous devez **réindexer** tous les documents avec le nouveau modèle.
+
+<Callout type="warning" title="Réindexation critique">
+Si vous changez le modèle d'embeddings, les vieux embeddings sont invalides. Prévoir du downtime ou une double indexation. Pour les gros corpus, c'est un coût opérationnel non-trivial.
+</Callout>
+
+La qualité d'un RAG dépend à 50% du modèle d'embeddings. Passer d'un modèle faible à un bon modèle améliore souvent plus que toute autre optimisation. C'est votre première priorité.

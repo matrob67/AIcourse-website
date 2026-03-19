@@ -1,0 +1,150 @@
+---
+title: "CLIP : apprentissage contrastif vision-langage"
+description: "CLIP d'OpenAI apprend des représentations visuelles à partir de supervision textuelle, révolutionnant le transfert zero-shot en vision par ordinateur."
+---
+
+## L'idée révolutionnaire : apprendre vision avec du texte
+
+Avant CLIP, entraîner un modèle de vision pour reconnaître des chats, des chiens et des oiseaux nécessitait des milliers d'images étiquetées pour chaque classe. ImageNet en avait 1.2 million pour 1000 classes. Beaucoup de travail manuel.
+
+**CLIP dit : et si on utilisait juste du texte comme supervision ?** On collecte 400 millions de paires image-texte du web (une image + sa description), et on apprend à les associer. Pas besoin d'étiquettes strictes, juste la supervision naturelle du web.
+
+<ArxivLink id="2103.00020" title="Learning Transferable Visual Models From Natural Language Supervision (Radford et al., 2021)" />
+
+<Callout type="info" title="L'insight fondamental de CLIP">
+Au lieu d'entraîner sur des catégories fixes (1000 classes ImageNet, pas plus, pas moins), CLIP apprend directement à associer images et textes. Cela permet une classification zero-shot : pour classer une image, comparez-la avec les descriptions textuelles des classes. Aucun entraînement supplémentaire nécessaire.
+</Callout>
+
+## L'architecture : deux encodeurs parallèles
+
+
+
+### Dual encoder (double encodeur)
+
+CLIP est composé de deux encodeurs entraînés en même temps :
+
+- **Image encoder** : un Vision Transformer (ViT) ou ResNet qui convertit chaque image en un vecteur
+- **Text encoder** : un Transformer classique qui convertit chaque texte en un vecteur
+
+Les deux vecteurs vivent dans le **même espace** de même dimension. Les images et textes similaires ont des vecteurs similaires.
+
+### L'entraînement contrastif : la magie
+
+Pour un batch de N paires (image, texte), l'objectif est simple :
+
+```
+Batch de N paires :
+- (image_1, texte_1) → grande similarité ✓
+- (image_1, texte_2) → petite similarité ✗
+- (image_2, texte_1) → petite similarité ✗
+- (image_2, texte_2) → grande similarité ✓
+```
+
+**Coin technique** : La loss est une cross-entropy symétrique sur les similarités. Pour chaque image, on maximise la similarité avec son texte correct et on minimise avec les autres textes du batch. C'est un problème de ranking.
+
+Formule simplifiée :
+```
+loss = - log( exp(sim(image_i, text_i) / T) / sum_j exp(sim(image_i, text_j) / T) )
+```
+
+Où T est une "température" qui contrôle la confiance de l'apprentissage (T basse = apprentissage plus strict).
+
+## Classification zero-shot : la superpuissance
+
+### Comment ça marche en pratique
+
+Pour classifier une image dans K classes **sans jamais avoir vu ces classes pendant l'entraînement** :
+
+1. Créer des prompts textuels pour chaque classe : "une photo d'un [classe]"
+2. Encoder chaque prompt → K embeddings texte
+3. Encoder l'image → 1 embedding image
+4. Calculer la similarité cosinus entre l'image et chaque texte
+5. La classe avec la plus haute similarité gagne
+
+Aucun fine-tuning ! Le modèle généralisé directement.
+
+### Astuce : le prompt engineering
+
+La façon de formuler les prompts affecte les performances :
+
+- "a photo of a cat" > "cat" (le contexte aide)
+- "a photo of a cat, a type of pet animal" > "a photo of a cat" (plus de contexte)
+- **Ensembling** : moyenner les embeddings de plusieurs formulations du même concept
+
+<Callout type="paper" title="Les résultats zero-shot sont dingues">
+CLIP ViT-L/14 atteint **76.2% de top-1 accuracy sur ImageNet en zero-shot** — comparable à un ResNet-50 entraîné supervisé sur les 1.28 millions d'images d'ImageNet. Et CLIP ne les a jamais vues. C'est la force de l'apprentissage de représentations générales.
+</Callout>
+
+## L'impact massif de CLIP
+
+### Foundation de tous les VLM
+
+CLIP est devenu le **vision encoder standard** pour la plupart des VLM open-source :
+
+- LLaVA utilise CLIP ViT-L/14
+- InternVL le réimplément (InternViT)
+- Les représentations visuelles de CLIP sont la fondation sur laquelle tous les autres VLM construisent
+
+### Recherche d'images par texte
+
+CLIP permet de chercher des images par texte (et vice versa) sans entraînement spécifique. Comparez simplement les embeddings dans l'espace commun.
+
+### Guidage pour la génération d'images
+
+CLIP guide la génération dans les modèles de diffusion :
+
+- **DALL-E 2** utilise CLIP pour encoder le texte utilisateur
+- **Stable Diffusion** utilise le text encoder de CLIP (via OpenCLIP)
+- Le **CLIP score** mesure la cohérence texte-image des images générées
+
+### Transfer learning spectaculaire
+
+Les représentations apprises par CLIP se transfèrent exceptionnellement bien à de nouvelles tâches avec très peu d'exemples (few-shot learning).
+
+## Les successeurs de CLIP
+
+### SigLIP (Google)
+
+Amélioration majeure : remplace la loss softmax par une loss **sigmoïde** par paire. Avantages :
+
+- Plus stable
+- Ne nécessite pas de très gros batches
+- Plus simple à entraîner à grande échelle
+
+### OpenCLIP
+
+Reproduction open-source de CLIP par LAION, avec modèles entraînés sur des datasets plus grands (LAION-2B, DataComp). Démocratise CLIP.
+
+### EVA-CLIP
+
+Améliore l'efficacité de l'entraînement CLIP en utilisant des techniques de masquage et des architectures optimisées. Plus rapide à entraîner.
+
+### DINOv2 (Meta)
+
+Approche alternative d'apprentissage visuel auto-supervisé (**sans texte**). Produit des features visuelles complémentaires à CLIP avec un focus différent.
+
+<Callout type="tip" title="CLIP vs DINOv2 : quand utiliser quoi">
+**CLIP excelle** pour les tâches nécessitant une compréhension sémantique de haut niveau ("qu'est-ce que c'est ?", classification). **DINOv2 excelle** pour les tâches de compréhension spatiale fine ("où est-ce ?", "quelle texture ?", segmentation). Pour les VLM, CLIP est standard. Pour la segmentation, DINOv2 est souvent préféré.
+</Callout>
+
+## Les limitations
+
+### Biais des données web
+
+CLIP hérite des biais des paires image-texte du web :
+
+- Stéréotypes visuels
+- Sous-représentation de certaines cultures
+- Corrélations spurieuses (si le web dit "un docteur = homme", CLIP l'apprendra)
+
+### Comprendre la composition spatiale
+
+CLIP encode une image entière en un seul vecteur, ce qui perd les détails spatiaux fins. Les tâches nécessitant une compréhension des relations spatiales entre objets (où est X par rapport à Y ?) sont moins bien gérées.
+
+<Callout type="warning" title="CLIP n'est pas un détecteur d'objets">
+CLIP comprend "il y a un chat" mais pas "le chat est en bas à gauche". Pour la détection ou la segmentation spécifique, il faut des modèles spécialisés (YOLO, SAM) ou des extensions de CLIP (OWL-ViT, CLIP-Seg).
+</Callout>
+
+## Perspective
+
+CLIP reste l'une des contributions les plus influentes en IA. Son impact se retrouve dans pratiquement tous les modèles vision-langage modernes. C'est l'équivalent en vision de ce que les transformers ont été pour le NLP : un paradigme qui a tout changé.

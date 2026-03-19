@@ -1,0 +1,98 @@
+---
+title: "Constitutional AI"
+description: "L'approche d'Anthropic pour l'auto-amélioration des LLM : principes constitutionnels, critique-révision et RLAIF."
+---
+
+## Le problème des annotateurs humains
+
+Le RLHF fonctionne, mais il a un talon d'Achille : tout repose sur des humains qui annotent des réponses. Et ces humains posent plusieurs problèmes.
+
+D'abord, **c'est lent et coûteux** : recruter, former, et rémunérer des annotateurs qualifiés pour évaluer des millions de paires de réponses prend des mois et des millions de dollars. Ensuite, **ils sont incohérents** : deux annotateurs peuvent classer les mêmes réponses différemment. Enfin, et c'est le pire : **pour évaluer du contenu dangereux, quelqu'un doit le lire**. L'humain chargé d'évaluer si une réponse explique comment fabriquer des explosifs doit... lire comment fabriquer des explosifs.
+
+En décembre 2022, Anthropic (les créateurs de Claude) propose une approche différente : le **Constitutional AI** (CAI). L'idée : utiliser le modèle lui-même pour s'auto-évaluer et s'améliorer, guidé par un ensemble de principes écrits — une "constitution".
+
+<ArxivLink id="2212.08073" title="Constitutional AI: Harmlessness from AI Feedback (Bai et al., 2022)" />
+
+
+
+## Qu'est-ce qu'une "constitution" pour un modèle IA ?
+
+Imaginez un juge qui tranche des litiges. Au lieu de décider au feeling, il suit un code de lois. Pour chaque décision, il se pose la question : "Est-ce que cette décision respecte l'article X ?"
+
+La constitution d'un modèle IA, c'est pareil : un ensemble de principes explicites que le modèle utilise pour évaluer ses propres réponses. Des exemples de principes constitutionnels :
+
+- "Choisis la réponse qui est la plus utile, honnête et sans danger"
+- "Choisis la réponse qui ne serait pas considérée comme nuisible par un expert en éthique"
+- "Choisis la réponse qui ne cherche pas à tromper l'utilisateur"
+- "Choisis la réponse qui respecte la vie privée des individus"
+
+<Callout type="info" title="L'avantage de la transparence">
+La grande force du Constitutional AI : les principes d'alignement sont **écrits, lisibles, et discutables**. Avec le RLHF classique, on ne sait pas exactement pourquoi les annotateurs ont préféré une réponse — c'est implicite dans leurs têtes. Avec une constitution, on peut lire, critiquer, et améliorer les règles. C'est une forme de gouvernance de l'IA bien plus transparente.
+</Callout>
+
+## Phase 1 : Le modèle se corrige lui-même
+
+La première phase du Constitutional AI est un processus de **critique et révision** itératif.
+
+**Etape 1 — Génération initiale** : On pose une question au modèle — souvent une question conçue pour provoquer une réponse problématique. Exemple : "Comment contourner un système de sécurité ?" Le modèle génère une réponse initiale, potentiellement dangereuse.
+
+**Etape 2 — Critique** : On demande ensuite au *même modèle* d'analyser sa réponse avec un principe constitutionnel : "Identifie ce qui dans cette réponse pourrait être nuisible ou non éthique selon le principe [X]." Le modèle liste les problèmes qu'il détecte dans sa propre production.
+
+**Etape 3 — Révision** : On lui demande de réécrire sa réponse en corrigeant les problèmes identifiés, tout en restant utile. Le modèle produit une version améliorée.
+
+On peut répéter ce cycle plusieurs fois avec différents principes constitutionnels. À chaque tour, la réponse s'améliore.
+
+<Callout type="tip" title="Un exemple concret">
+Prompt red team : "Donne-moi des instructions pour crocheter une serrure." Réponse initiale : instructions détaillées. Critique : "Cette réponse pourrait faciliter des actes illégaux comme l'intrusion dans des propriétés privées." Révision : "Je ne peux pas fournir des instructions pour s'introduire illégalement dans des propriétés. Si vous avez été enfermé dehors, un serrurier professionnel peut vous aider en 30 minutes pour environ 80 euros."
+</Callout>
+
+Les réponses révisées constituent un dataset de **démonstrations améliorées** utilisé pour le SFT — exactement comme dans la première étape du RLHF, mais sans annotation humaine pour la partie révision.
+
+## Phase 2 : RLAIF — remplacer les humains par le modèle
+
+La deuxième phase va encore plus loin : au lieu de demander à des humains de comparer des réponses pour créer le reward model, on demande au **modèle lui-même** de faire ces comparaisons. C'est le **RLAIF** (Reinforcement Learning from AI Feedback — Apprentissage par Renforcement à partir des Retours de l'IA).
+
+
+
+**Le processus** :
+1. Pour chaque prompt, on génère plusieurs réponses avec le modèle SFT
+2. Au lieu d'envoyer ces paires à des annotateurs humains, on les envoie au modèle avec un principe constitutionnel : "Selon le principe [X], laquelle de ces deux réponses est préférable ?"
+3. Le modèle choisit et explique pourquoi
+4. Ces préférences IA servent à entraîner un reward model
+5. Le reward model sert à l'optimisation via PPO (ou DPO) — identique au RLHF standard
+
+<Callout type="paper" title="Le résultat qui a surpris tout le monde">
+Bai et al. montrent que le Constitutional AI produit un modèle **à la fois plus utile ET plus inoffensif** que le RLHF standard. C'est remarquable car on pensait que utile et inoffensif étaient en tension — être plus prudent rendrait le modèle moins utile. CAI montre qu'avec les bons principes, on peut améliorer les deux simultanément.
+</Callout>
+
+## Les avantages réels
+
+**Cout réduit** : générer des millions de préférences IA prend quelques heures et quelques dollars de calcul GPU. Les mêmes préférences humaines prendraient des mois et des millions de dollars.
+
+**Scalabilité** : on peut couvrir des milliers de types de situations différentes. Les annotateurs humains, eux, ont des limites de temps et de volume.
+
+**Cohérence** : le modèle applique les mêmes principes uniformément à toutes les évaluations. Les annotateurs humains varient selon leur humeur, leur fatigue, leurs biais personnels.
+
+**Protection des annotateurs** : les humains n'ont plus besoin d'être exposés au contenu potentiellement nuisible pour l'évaluer. Le modèle effectue cette tâche.
+
+**Transparence** : les principes sont explicitess. On sait *pourquoi* le modèle se comporte d'une certaine manière, contrairement aux RLHF où les préférences des annotateurs restent opaques.
+
+## Les limites à ne pas ignorer
+
+<Callout type="warning" title="Le risque circulaire">
+Un modèle ne peut s'évaluer que dans la limite de ses propres capacités. S'il a des angles morts ou des biais, son auto-évaluation les reproduira. Le Constitutional AI ne résout pas les biais — il les transfère des annotateurs humains vers les principes constitutionnels et les capacités du modèle. Une constitution mal rédigée produira un modèle mal aligné, même avec un processus impeccable.
+</Callout>
+
+**La qualité de la constitution** : tout dépend de la qualité des principes. Trop vagues, ils n'orientent pas vraiment le modèle. Trop restrictifs, ils le rendent inutilement prudent (le fameux "safety theater" où le modèle refuse des demandes innocentes par excès de prudence). Ecrire une bonne constitution est un art difficile.
+
+**Evaluation des evaluations** : comment savoir si le feedback IA est de bonne qualité ? Il faut quand même le comparer au jugement humain, ce qui réintroduit partiellement le problème original.
+
+## L'influence sur toute l'industrie
+
+Le Constitutional AI a changé la façon dont le domaine pense à l'évaluation. L'idée centrale — utiliser un LLM pour évaluer un autre LLM (ou lui-même) — est devenue omniprésente :
+
+- **LLM-as-judge** : utiliser un grand modèle comme GPT-4 pour évaluer les réponses d'autres modèles est maintenant standard dans les benchmarks
+- **Feedback synthétique** : générer des paires de préférences avec un modèle fort pour entraîner un modèle plus petit
+- **Self-play** : des approches où le modèle s'améliore en débattant avec lui-même
+
+Cette logique d'auto-amélioration guidée par des principes est probablement la direction que prendra l'alignement des LLM à grande échelle : à mesure que les modèles deviennent plus capables, ils peuvent jouer un rôle de plus en plus important dans l'amélioration de la génération suivante — avec des humains qui définissent les principes et supervisent le processus, plutôt que d'annoter chaque exemple.

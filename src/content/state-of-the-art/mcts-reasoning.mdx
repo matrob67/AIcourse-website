@@ -1,0 +1,173 @@
+---
+title: "MCTS pour le raisonnement LLM"
+description: "Le Monte Carlo Tree Search, algorithme clé d'AlphaGo, est adapté aux LLM pour explorer l'espace des raisonnements de manière plus efficace que le Tree of Thoughts."
+---
+
+## Du jeu de Go à résoudre les maths
+
+Le Monte Carlo Tree Search (MCTS) a gagné le go en 2016. AlphaGo a battu le champion du monde en l'utilisant.
+
+L'idée centrale : explorez intelligemment un arbre énorme en équilibrant **exploration** (essayer nouvelles branches) et **exploitation** (approfondir les branches prometteuses).
+
+Appliquez ça au raisonnement : chaque étape de pensée est un "coup", résoudre le problème c'est gagner la "partie".
+
+<Callout type="info" title="L'analogie : pensez comme une partie d'échecs">
+Dans le Go/Échecs, MCTS explore des coups, simule des parties, concentre effort sur branches prometteuses.
+Pour le raisonnement LLM : chaque "coup" = une étape de pensée. Chaque "partie" = résolution complète.
+</Callout>
+
+
+
+## Les quatre phases du MCTS
+
+### Phase 1 : Selection (sélection)
+
+Commencez à la racine (le problème) et descendez en sélectionnant les meilleurs nœuds selon la **formule UCB** :
+
+```
+UCB(node) = Q(node) / N(node) + c * sqrt(ln(N(parent)) / N(node))
+```
+
+- Q(node) = récompense totale du nœud
+- N(node) = nombre de fois visité
+- Premier terme : exploitation (bons nœuds)
+- Second terme : exploration (nœuds peu visités)
+
+### Phase 2 : Expansion
+
+Quand feuille atteinte, générez de nouvelles étapes de raisonnement (enfants) via le LLM.
+
+Le LLM ajoute des branches.
+
+### Phase 3 : Simulation (Rollout)
+
+Depuis le nouveau nœud, **complétez** le raisonnement jusqu'à réponse finale (greedy ou sampling).
+
+Donnez-vous une réponse temporaire complète.
+
+### Phase 4 : Backpropagation
+
+Remontez le résultat (correct/incorrect) le long du chemin parcouru. Mettez à jour les statistiques (Q, N) de chaque nœud visité.
+
+## Adaptation aux LLM
+
+### L'état = raisonnement partiel
+
+Chaque nœud = raisonnement partiel :
+
+```
+Racine : "Résoudre : f(x) = 2x² + 3x - 5, trouver f'(x)"
+├── Nœud 1 : "Appliquer règles dérivation"
+│   ├── Nœud 1.1 : "d/dx(2x²) = 4x" ✓
+│   └── Nœud 1.2 : "d/dx(2x²) = 2x" ✗
+└── Nœud 2 : "Utiliser formule dérivée polynôme"
+    └── Nœud 2.1 : "f'(x) = 4x + 3"
+```
+
+### Fonction de récompense
+
+Plusieurs options :
+
+- **ORM** : score basé sur correction réponse finale (si vérifiable)
+- **PRM** : score par étape du raisonnement
+- **Self-evaluation** : le LLM évalue chaque étape
+- **Vérification externe** : exécution code, calcul symbolique
+
+### Policy du LLM
+
+Le LLM est la **policy** : quelles étapes générer ? La température contrôle la diversité.
+
+<Callout type="paper" title="MCTS + PRM : le combo gagnant">
+PRM fournit signal par étape qui guide l'exploration. Les branches clairement mauvaises sont pénalisées. Les bonnes explorees plus. C'est puissant.
+</Callout>
+
+## Avantages du MCTS
+
+### 1. Exploration-exploitation équilibrée
+
+UCB équilibre naturellement :
+- Explorer nouvelles pistes
+- Approfondir les bonnes branches
+
+Beam search simple ne fait pas ça — il peut se bloquer sur optima locaux.
+
+### 2. Allocation adaptative du compute
+
+Les problèmes difficiles reçoivent **plus d'itérations** automatiquement. Les faciles convergent vite.
+
+### 3. Backtracking intelligent
+
+Si une branche est évaluée mal, MCTS explore naturellement d'autres branches sans forcer. C'est du retour en arrière élégant.
+
+## Cas d'usage et implémentations
+
+### rStar (Self-play Reasoning)
+
+rStar utilise MCTS avec self-play :
+
+```
+Le modèle = joueur et évaluateur
+Chaque "partie" = résolution d'un problème
+Données générées = entraînement du modèle
+```
+
+Le modèle s'améliore en jouant contre lui-même.
+
+### AlphaProof (DeepMind)
+
+MCTS pour **preuves mathématiques formelles** :
+
+```
+LLM génère les étapes de preuve
+Lean (proof assistant) vérifie chaque étape
+MCTS explore l'espace des preuves possibles
+```
+
+Résultat : résoudre des problèmes d'Olympiades Internationales de Mathématiques.
+
+<Callout type="tip" title="MCTS vs Tree of Thoughts">
+ToT (beam search simple) : bon pour exploration basique.
+MCTS : supérieur quand espace de recherche **énorme** ET récompenses par étape **disponibles** (PRM).
+</Callout>
+
+## Coin technique : le coût
+
+### Nombres approximatifs
+
+Un MCTS typique pour le raisonnement :
+
+```
+50-500 itérations par problème
+Chaque itération : 1 expansion + 1 simulation
+Total : 100-1000 appels LLM par problème
+```
+
+Comparaison :
+- Self-consistency : 10-40 appels
+- MCTS : 100-1000 appels
+
+**Beaucoup plus coûteux**, mais potentiellement plus efficace pour très difficile.
+
+### Parallélisation
+
+Les simulations MCTS peuvent être partiellement parallélisées (leaf parallelization, root parallelization).
+
+Réduit latence mais rend exploration légèrement moins optimale.
+
+<Callout type="warning" title="MCTS c'est la recherche, pas la production">
+MCTS pour LLM raisonnement = technique de **recherche** plus que production.
+
+Coût élevé + nécessité bon signal de récompense = limité aux problèmes haute valeur (maths avancée, code critique, planification complexe).
+
+Pour apps courantes : CoT ou self-consistency largement mieux.
+</Callout>
+
+## L'importance conceptuelle
+
+MCTS appliqué au raisonnement LLM = **convergence entre**:
+- Techniques de planification de l'IA classique (MCTS vient de là)
+- Capacités génératives des LLM modernes
+
+C'est pas deux mondes séparés — ça fusionne.
+
+À mesure que PRM et modèles de base s'améliorent, MCTS pour LLM pourrait débloquer des raisonnements encore plus avancés.

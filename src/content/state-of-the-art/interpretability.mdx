@@ -1,0 +1,156 @@
+---
+title: "Interprétabilité et Explainability (XAI)"
+description: "Comment comprendre ce qu'un modèle a vraiment appris ? SHAP, LIME, attention maps, mechanistic interpretability — les outils pour ouvrir la boite noire."
+---
+
+## Le médecin qui ne sait pas pourquoi
+
+Le modèle dit que le patient a un cancer. Le médecin demande : pourquoi ?
+
+Le modèle répond : je ne sais pas, j'ai juste appris sur des millions d'images, et cette image ressemble aux autres avec un cancer.
+
+Feriez-vous confiance à un médecin humain qui dirait la même chose ? Qui ne pourrait pas expliquer quel signe clinique l'a conduit à son diagnostic, quelle caractéristique de l'image lui semble anormale, pourquoi il est confiant ou incertain ?
+
+C'est le problème central de l'**interprétabilité en IA** : nos meilleurs modèles sont souvent des boites noires. Ils produisent des sorties remarquablement précises, mais leur processus interne est opaque — même pour leurs créateurs.
+
+## Pourquoi l'interprétabilité est importante
+
+### Confiance et adoption
+
+Un modèle dont on ne comprend pas les décisions sera difficile à déployer dans des contextes à enjeux élevés. Un cardiologue ne fera pas confiance à un modèle qui dit "infarctus à 94 %" sans lui montrer quels éléments de l'ECG ont conduit à cette conclusion.
+
+### Détection des biais
+
+Un modèle peut obtenir de bonnes performances sur le jeu de test pour de mauvaises raisons. L'exemple classique : un modèle entraîné à distinguer les loups des huskies qui, en réalité, classifie selon la présence de neige en fond d'image. Sans interprétabilité, ce genre de raccourci reste invisible jusqu'à ce qu'il cause un incident.
+
+### Réglementation
+
+L'EU AI Act et le RGPD imposent dans certains cas un **droit à l'explication** pour les décisions automatisées qui affectent les personnes. Les modèles de crédit, de recrutement ou médicaux doivent pouvoir expliquer leurs décisions de façon compréhensible.
+
+<Callout type="warning" title="EU AI Act et les systèmes à haut risque">
+L'EU AI Act classe certaines applications IA comme "haut risque" : systèmes médicaux, recrutement, crédit, contrôle des frontières. Pour ces systèmes, des exigences de transparence et d'explicabilité sont obligatoires. Des audits indépendants peuvent être requis. Ignorer l'interprétabilité dans ces domaines n'est plus une option légale.
+</Callout>
+
+
+## SHAP : chaque feature a sa contribution
+
+**SHAP** (SHapley Additive exPlanations) est l'une des méthodes les plus utilisées et les mieux fondées théoriquement pour expliquer des prédictions.
+
+L'intuition vient de la théorie des jeux coopératifs : les valeurs de Shapley mesurent la contribution équitable de chaque joueur (feature) à un résultat collectif (la prédiction).
+
+<ArxivLink id="1705.07874" title="A Unified Approach to Interpreting Model Predictions (SHAP)" />
+
+### Comment ça marche
+
+Pour chaque prédiction, SHAP calcule la contribution de chaque feature en considérant toutes les permutations possibles de features. La contribution d'une feature est la moyenne de son impact marginal quand elle est ajoutée à n'importe quel sous-ensemble des autres features.
+
+**Exemple concret pour un modèle de risque de crédit :**
+
+| Feature | Valeur | SHAP value |
+|---------|--------|------------|
+| Salaire | 45 000 EUR | +0.15 (réduit le risque) |
+| Historique de paiement | Incidents | -0.32 (augmente le risque) |
+| Ancienneté | 3 ans | +0.08 (réduit le risque) |
+| Age | 28 ans | -0.03 (augmente légèrement) |
+
+La somme des SHAP values reconstruit la différence entre la prédiction pour cet individu et la prédiction moyenne sur la population.
+
+<Callout type="info" title="SHAP global et local">
+SHAP peut être utilisé localement (expliquer une prédiction individuelle) ou globalement (comprendre quelles features comptent le plus en moyenne). Pour l'explication globale, on peut agréger les valeurs absolues des SHAP values sur tout le jeu de données, produisant un ranking d'importance des features beaucoup plus fiable que les méthodes classiques d'importance de features.
+</Callout>
+
+### Limites de SHAP
+
+Le calcul exact est exponentiel (toutes les permutations). Des approximations efficaces existent pour différents types de modèles (TreeSHAP pour les arbres, DeepSHAP pour les réseaux de neurones), mais elles introduisent des hypothèses qui ne sont pas toujours valides.
+
+## LIME : approximation locale
+
+**LIME** (Local Interpretable Model-agnostic Explanations) adopte une approche différente : plutôt que d'analyser le modèle globalement, il s'intéresse à une prédiction locale en construisant un modèle simple (linéaire) qui approxime le comportement du modèle complexe dans le voisinage de l'exemple à expliquer.
+
+<ArxivLink id="1602.04938" title="Why Should I Trust You? Explaining the Predictions of Any Classifier" />
+
+**Algorithme :**
+
+1. Prendre l'exemple x à expliquer
+2. Générer des voisins de x par perturbation aléatoire
+3. Obtenir les prédictions du modèle sur ces voisins
+4. Entraîner un modèle linéaire sur ces voisins (pondérés par leur proximité à x)
+5. Le modèle linéaire est l'explication
+
+LIME fonctionne pour n'importe quel type de modèle (model-agnostic) et n'importe quel type de données (texte, images, tableaux).
+
+<Callout type="tip" title="LIME pour le texte">
+Pour le texte, les voisins sont générés en masquant aléatoirement des mots. L'explication identifie quels mots sont les plus importants pour la prédiction. Pour un modèle de sentiment, LIME pourrait indiquer que "excellent" et "parfait" contribuent positivement, tandis que "déçu" contribue négativement.
+</Callout>
+
+## Attention Maps : outil pratique aux limites théoriques
+
+Dans les Transformers, les scores d'attention indiquent quels tokens le modèle "regarde" quand il traite un token donné. Visualiser ces scores — les **attention maps** — est intuitif et souvent utilisé comme outil de débogage.
+
+Pour une tâche de traduction, on peut vérifier que le modèle aligne correctement les mots correspondants. Pour une tâche de question-réponse, on peut vérifier que le modèle regarde le bon passage du contexte.
+
+### Les limites des attention maps
+
+Des recherches importantes ont remis en question la valeur explicative des attention maps.
+
+<ArxivLink id="1902.10186" title="Attention is not Explanation" />
+
+**Problèmes principaux :**
+
+- Les poids d'attention et la causalité ne sont pas équivalents : un token peut recevoir beaucoup d'attention sans être causalement important pour la prédiction
+- Il existe plusieurs "têtes" d'attention qui se combinent de façon non linéaire
+- On peut souvent trouver des distributions d'attention radicalement différentes qui produisent les mêmes prédictions
+
+<Callout type="warning" title="Attention is not Explanation">
+L'article de Jain & Wallace (2019) a démontré empiriquement que les attention weights ne constituent pas une explication fiable des prédictions. Un autre article de Wiegreffe & Pinter a répondu avec une vision plus nuancée. Le consensus actuel : les attention maps sont un outil de débogage utile, mais pas une explication causale rigoureuse.
+</Callout>
+
+## Mechanistic Interpretability
+
+La **mechanistic interpretability** est une approche plus ambitieuse : comprendre non pas "quelles features importent", mais **exactement quel calcul le modèle effectue**, au niveau des circuits de neurones.
+
+L'analogie : la biologie peut décrire le comportement d'un cerveau (interprétabilité comportementale), mais peut aussi cartographier les connexions neuronales et comprendre les mécanismes à l'échelle cellulaire (mechanistic interpretability).
+
+### Circuits et features
+
+Les chercheurs d'Anthropic et de DeepMind ont identifié des structures internes dans les réseaux de neurones qui correspondent à des fonctionnalités interprétables.
+
+Par exemple, dans des modèles de vision, des "circuits" peuvent être identifiés qui détectent des courbes, puis combinent ces détections pour identifier des yeux, puis des visages — reproduisant une hiérarchie analogue au cortex visuel humain.
+
+Dans les LLM, des travaux ont identifié des composants qui réalisent des algorithmes précis : induction heads (qui permettent le in-context learning), circuits de copie, circuits de factuel recall.
+
+<Callout type="paper" title="Anthropic et la Mechanistic Interpretability">
+Anthropic a investi significativement dans ce domaine, avec des articles comme "Toy Models of Superposition", "Softmax Linear Units", et "Scaling Monosemanticity". Ces travaux tentent de comprendre comment les features sont encodées dans les activations neuronales, y compris dans des modèles très grands. L'objectif à long terme : s'assurer que les modèles font vraiment ce qu'on pense qu'ils font.
+</Callout>
+
+### Superposition
+
+Un résultat surprenant : les modèles peuvent encoder **plus de features que de dimensions** en superposant plusieurs features sur les mêmes neurones. Cette superposition est rendue possible par la sparsité des activations — la plupart des features ne sont actives qu'une fraction du temps, permettant une coexistence sans trop d'interférence.
+
+Cela rend l'interprétation directe des neurones difficile : un neurone individuel peut contribuer à des dizaines de features différentes.
+
+## Gradient-based methods
+
+Des méthodes basées sur les gradients permettent de calculer quels pixels ou quelles parties d'une entrée sont les plus importants pour une prédiction.
+
+**Saliency maps** : visualiser le gradient de la prédiction par rapport aux pixels d'entrée.
+
+**Grad-CAM** : utiliser les gradients dans les couches convolutionnelles tardives pour produire une carte de chaleur indiquant les régions de l'image les plus pertinentes pour la classification.
+
+Ces méthodes sont computationnellement efficaces et faciles à implémenter, mais peuvent être trompeuses si le modèle utilise des raccourcis non sémantiques.
+
+## Interprétabilité vs Précision
+
+Un compromis souvent cité : les modèles les plus interprétables (régression logistique, arbres de décision, règles) sont généralement moins précis que les modèles boite noire (deep learning).
+
+Ce compromis est réel mais souvent exagéré. Dans de nombreux domaines, un modèle légèrement moins précis mais entièrement interprétable est préférable — non seulement pour la confiance et la régulation, mais aussi parce que les erreurs d'un modèle interprétable sont plus faciles à diagnostiquer et corriger.
+
+<Callout type="tip" title="Inherently interpretable models">
+Des architectures comme les GAM (Generalized Additive Models) et leurs variantes modernes (EBM, NODE-GAM) atteignent des performances proches du deep learning sur des données tabulaires tout en restant entièrement interprétables. Pour de nombreux cas d'usage business, commencer par ces modèles avant de passer au deep learning non interprétable est une approche sage.
+</Callout>
+
+## Takeaways
+
+L'interprétabilité est un domaine en pleine maturation. Les méthodes post-hoc comme SHAP et LIME sont utiles et largement déployées, mais elles approximent l'explication plutôt que de la garantir. La mechanistic interpretability est plus rigoureuse mais encore naissante.
+
+Pour les praticiens, la règle pragmatique : dans les domaines à enjeux (médical, financier, RH), exiger de l'interprétabilité et la tester sérieusement — pas seulement produire de jolies visualisations d'attention.

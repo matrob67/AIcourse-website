@@ -1,0 +1,132 @@
+---
+title: "Batching continu : traiter plusieurs requêtes intelligemment"
+description: "Faire traiter 100 questions au modèle en parallèle au lieu de les attendre une par une."
+---
+
+## Le problème du batching classique
+
+Imaginez un restaurant : vous groupez 8 clients et les servez tous ensemble. Mais si un client finit son plat en 10 minutes et l'autre en 2 heures, le premier attend inutilement. Le serveur est bloqué.
+
+Exactement ce qui arrive au batching de LLM. Si vous groupez 8 requêtes et l'une génère 500 tokens tandis que l'autre 50, la première occupe le GPU pendant que les autres attendent. Gaspillage énorme.
+
+<Callout type="info" title="L'inefficacité">
+Avec un batch de 8 requêtes de longueurs variées, le GPU passe **90% de son temps à calculer du néant** pour les requêtes déjà terminées. Le throughput réel est bien inférieur au potentiel théorique.
+</Callout>
+
+## Continuous Batching (le fix)
+
+### Le principe
+
+Au lieu de gérer les requêtes entières, gérer chaque **token généré** :
+
+1. À chaque step, générer un token pour chaque requête active
+2. Quand une requête finit (token EOS ou max tokens), la **retirer immédiatement**
+3. La remplacer par une **nouvelle requête** de la file d'attente
+4. Le batch reste **constamment rempli**
+
+### Prefill vs Decode
+
+Les LLM ont deux phases :
+
+- **Prefill** : traiter le prompt d'entrée (peut être long, **parallélisable**)
+- **Decode** : générer token par token (court, **séquentiel**)
+
+Le continuous batching mélange les deux phases dans le même batch : certaines requêtes se pré-remplissent tandis que d'autres générèrent.
+
+<Callout type="tip" title="Gain de throughput">
+Continuous batching peut améliorer le **throughput de 2-8×** vs batching statique, selon la variabilité des longueurs. Plus c'est hétérogène, plus le gain est énorme.
+</Callout>
+
+## Dynamic Batching
+
+Une variante : adapter dynamiquement la taille du batch selon la charge :
+
+- **File d'attente avec timeout** : regrouper les requêtes pendant 50ms avant de les traiter
+- **Batch size adaptatif** : ajuster selon la mémoire disponible et les longueurs
+
+### Chunked Prefill
+
+Optimisation avancée : découper les longs prompts en petits chunks :
+
+```
+Prompt de 8000 tokens
+→ Chunks de 512 tokens
+→ Traiter chaque chunk dans un batch mixte
+→ Évite les pics de latence
+```
+
+Les longs prompts ne monopolisent plus le GPU.
+
+
+
+## Gestion du KV Cache (le vrai défi)
+
+### Le problème mémoire
+
+Le **KV cache** (Key-Value cache) stocke les clés et valeurs d'attention pour chaque requête. Sa taille croît avec la longueur de la séquence :
+
+```
+Pour un modèle 7B (32 couches, 32 heads, 128 dim par head):
+KV cache par token = 524 Ko
+Pour 4096 tokens = 2 Go par requête
+Pour 32 requêtes = 64 Go
+```
+
+C'est **énorme**. Et on ne connaît pas la longueur finale à l'avance !
+
+### Allocation dynamique
+
+Les trois stratégies :
+
+1. **Pré-allocation max** : réserver la longueur max pour chaque requête (gaspille 60-80%)
+2. **PagedAttention** : allocation par pages (voir section suivante)
+3. **Radix Tree** : partager les préfixes communs entre requêtes
+
+<Callout type="warning" title="Le bottleneck réel">
+Le KV cache consomme plus de mémoire que le modèle lui-même sur de gros batch sizes. C'est **le facteur limitant** du throughput d'un système de serving de LLM moderne.
+</Callout>
+
+## Scheduling avancé
+
+### Priority-based scheduling
+
+Prioriser les requêtes selon leur importance ou SLA. Les requêtes prioritaires passent en avant.
+
+### Preemption
+
+Si la mémoire est pleine :
+- **Swap** : KV cache en RAM CPU (lent mais fonctionnel)
+- **Recompute** : supprimer le KV cache et le recalculer plus tard
+
+### Multi-step scheduling
+
+Planifier plusieurs steps de decode à l'avance pour réduire l'overhead de scheduling.
+
+## Support dans les frameworks
+
+| Framework | Continuous | Chunked Prefill | PagedAttention |
+|---|---|---|---|
+| vLLM | ✓ | ✓ | ✓ |
+| TGI | ✓ | ✓ | ✓ |
+| TensorRT-LLM | ✓ | ✓ | ✓ |
+| SGLang | ✓ | ✓ | ✓ |
+
+Tous les frameworks modernes le supportent.
+
+## Métriques de performance
+
+### Les trois mesures importantes
+
+- **TTFT** (Time To First Token) : temps avant le premier token de réponse
+- **TPOT** (Time Per Output Token) : temps moyen entre chaque token
+- **Throughput** : tokens/seconde total
+
+Augmenter le batch size augmente le throughput mais aussi le TPOT.
+
+<Callout type="info" title="Le compromis throughput-latency">
+Pour un chatbot interactif, on veut TPOT < 50ms pour fluidité. Pour du traitement batch (documents), on optimise le throughput total. Le scheduling doit respecter les SLA de chaque requête.
+</Callout>
+
+## Impact réel
+
+Le continuous batching est devenu **indispensable** en production. Sans lui, les coûts d'inférence seraient **5-10× plus élevés** pour le même niveau de service. C'est une optimisation système critique qui tout le monde utilise.

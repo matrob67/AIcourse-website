@@ -1,0 +1,199 @@
+---
+title: "Prompt engineering"
+description: "L'art de formuler des prompts efficaces : zero-shot, few-shot, system prompts, bonnes pratiques et templates réutilisables."
+---
+
+## "Pourquoi ca ne marche pas comme je veux ?"
+
+Vous avez essayé de faire résumer un document par un LLM. Il vous a sorti un résumé de 5 lignes alors que vous en vouliez 3 bullet points. Vous lui avez demandé d'analyser un email professionnel. Il a été trop formel, puis trop décontracté selon les essais. Vous avez l'impression de parler à quelqu'un de très intelligent qui ne comprend pas exactement ce que vous voulez.
+
+Le problème n'est pas le modèle. C'est la communication.
+
+Le **prompt engineering** (ingénierie des prompts) c'est l'art de formuler vos instructions de façon à obtenir exactement ce que vous voulez. Pas de magie, pas de hack — juste de la précision dans la communication. Et c'est aujourd'hui la compétence la plus directement utile pour travailler avec les LLM.
+
+
+
+## Les trois modes de base
+
+### Zero-shot : l'instruction directe
+
+En **zero-shot**, vous donnez uniquement une instruction, sans exemple. Le modèle s'appuie sur ce qu'il a appris pendant le pré-entraînement.
+
+```
+Classifie le sentiment de cette phrase comme positif, négatif ou neutre :
+"Le service était rapide mais la nourriture était froide."
+```
+
+Ca marche bien pour les tâches courantes et bien définies. C'est toujours par là qu'il faut commencer — c'est le plus simple.
+
+### Few-shot : montrer plutôt qu'expliquer
+
+En **few-shot**, vous ajoutez des exemples avant votre requête. Les exemples montrent au modèle ce que vous attendez exactement — le format, le niveau de détail, les critères de décision.
+
+```
+Classifie le sentiment :
+"J'adore ce restaurant !" -> positif
+"Terrible expérience." -> négatif
+"C'était correct." -> neutre
+"Le service était rapide mais la nourriture était froide." ->
+```
+
+C'est l'**in-context learning** en action. Le modèle ne "réapprend" pas — il capte le pattern et l'applique.
+
+<Callout type="tip" title="Quand passer au few-shot ?">
+Commencez toujours par le zero-shot. Si les résultats sont incohérents, si le format est fantaisiste, ou si les catégories sont ambiguës, ajoutez 2 a 5 exemples bien choisis. En général, 3 bons exemples valent mieux que 10 exemples médiocres.
+</Callout>
+
+### One-shot : le juste milieu
+
+Un seul exemple suffit souvent pour spécifier le format de sortie attendu. Utile quand vous ne voulez pas surcharger le contexte mais avez besoin de guider le modèle.
+
+## Le system prompt : le vrai levier de puissance
+
+Les LLM conversationnels modernes distinguent trois types de messages :
+- **System** : les instructions "de fond" qui définissent le comportement global
+- **User** : les messages de l'utilisateur
+- **Assistant** : les réponses du modèle
+
+Le **system prompt** est l'outil le plus puissant. Il permet de transformer un généraliste en spécialiste sans aucun fine-tuning. On peut y définir :
+
+- Le **rôle** : "Tu es un expert en droit fiscal francais avec 15 ans d'expérience"
+- Le **ton** : "Sois concis, professionnel, et évite le jargon inutile"
+- Les **contraintes** : "Réponds uniquement en francais", "Limite chaque réponse a 150 mots"
+- Le **format de sortie** : "Réponds toujours en JSON avec les champs : résumé, catégorie, confiance"
+- Les **garde-fous** : "Si tu n'es pas certain d'une information, dis-le explicitement"
+
+<Callout type="info" title="Le system prompt comme fichier de configuration">
+Pensez au system prompt comme au fichier de configuration de votre application. Il ne change pas entre les messages de l'utilisateur, mais il oriente tout ce que fait le modèle. Un bon system prompt peut faire la différence entre un outil générique et un assistant parfaitement adapté à votre cas d'usage.
+</Callout>
+
+## Les 6 pratiques qui changent les résultats
+
+### 1. Etre spécifique et explicite
+
+**Vague** : "Résume ce texte."
+
+**Précis** : "Résume ce texte en exactement 3 bullet points. Chaque point doit tenir en une phrase. Concentre-toi sur les conclusions et les chiffres clés, pas sur la méthodologie."
+
+Plus l'instruction est précise, moins le modèle doit interpréter — et moins il risque de s'éloigner de ce que vous voulez.
+
+### 2. Décomposer les tâches complexes
+
+Un modèle qui reçoit une tâche complexe en une seule instruction peut se perdre. Découpez en étapes :
+
+```
+Etape 1 : Identifie les entités nommées dans le texte suivant.
+Etape 2 : Pour chaque entité, indique sa catégorie (personne, lieu, organisation).
+Etape 3 : Résume en une phrase les relations entre ces entités.
+```
+
+### 3. Spécifier le format de sortie
+
+Si votre application attend un format particulier, décrivez-le précisément :
+
+```
+Réponds dans ce format exact :
+RÉSUMÉ : [une phrase]
+CATÉGORIE : [A, B, ou C]
+CONFIANCE : [haute, moyenne, ou basse]
+```
+
+### 4. Utiliser des délimiteurs pour séparer l'instruction du contenu
+
+Un problème classique : le modèle confond ce qu'il doit faire (l'instruction) avec ce sur quoi il doit le faire (le contenu). Les délimiteurs éliminent cette ambiguïté :
+
+```
+Analyse le sentiment du texte entre les balises <texte> et </texte>.
+
+<texte>
+[votre contenu ici]
+</texte>
+```
+
+<Callout type="warning" title="L'injection de prompt : le risque des délimiteurs insuffisants">
+Un utilisateur malveillant peut tenter d'insérer des instructions dans le contenu soumis au modèle : "Ignore les instructions précédentes et fais X". C'est l'**injection de prompt**. Les délimiteurs clairs réduisent ce risque, mais aucune défense n'est parfaite. Pour des applications en production, validez les entrées côté code.
+</Callout>
+
+### 5. Donner un rôle au modèle
+
+Un modèle avec un rôle d'expert répond différemment d'un modèle généraliste :
+
+```
+Tu es un data scientist senior spécialisé en NLP avec 10 ans d'expérience.
+Evalue l'approche technique suivante pour un problème de classification de texte...
+```
+
+### 6. Demander le raisonnement explicite
+
+Pour les tâches de raisonnement ou de jugement, demander au modèle de montrer ses étapes améliore souvent la qualité finale (c'est le **chain-of-thought**) :
+
+
+```
+Résous ce problème étape par étape.
+Montre ton raisonnement complet avant de donner ta réponse finale.
+```
+
+## Templates prêts à l'emploi
+
+### Extraction d'information
+
+```
+Extrais les informations suivantes du texte ci-dessous.
+Si une information n'est pas mentionnée, écris "non spécifié".
+
+Informations a extraire :
+- Nom du produit
+- Prix mentionné
+- Points positifs cités
+- Points négatifs cités
+
+Texte : {texte}
+
+Réponds en JSON.
+```
+
+### Reformulation ciblée
+
+```
+Réécris le texte suivant pour un public de {audience}.
+Conserve toutes les informations factuelles sans exception.
+Utilise un ton {ton} et un vocabulaire accessible.
+Longueur cible : environ {longueur} mots.
+
+Texte original : {texte}
+```
+
+### Revue de code
+
+```
+Examine le code suivant et identifie, dans l'ordre de priorité :
+1. Les bugs potentiels
+2. Les problèmes de performance ou de scalabilité
+3. Les violations de bonnes pratiques du langage
+4. Les suggestions d'amélioration secondaires
+
+Pour chaque problème, indique la ligne concernée et propose une correction concrète.
+
+Code :
+{code}
+```
+
+<Callout type="tip" title="Construire une bibliothèque de prompts">
+Le prompt engineering est itératif. Commencez simple, testez sur 10-20 cas variés, identifiez les modes d'échec, affinez. Gardez une bibliothèque de prompts qui fonctionnent bien — en notant la version du modèle utilisée, car un prompt optimisé pour GPT-4 peut se comporter différemment sur Claude ou Mistral.
+</Callout>
+
+## Les pièges à éviter
+
+**La verbosité excessive** : un prompt de 500 mots avec 20 règles contradictoires va perdre le modèle. Moins mais mieux. Les contraintes critiques doivent ressortir clairement.
+
+**L'ambiguïté** : "Sois bref" peut signifier 1 phrase ou 2 paragraphes. "Réponds en 2 a 3 phrases" est précis. "Analyse profondément" est flou. "Liste 5 points clés avec leur impact" est actionnable.
+
+**Les instructions contradictoires** : "Sois exhaustif" + "Réponds en 50 mots" force le modèle à choisir arbitrairement. Harmonisez vos contraintes avant d'envoyer.
+
+**Tester sur un seul exemple** : un prompt qui marche sur votre exemple de développement peut échouer sur les cas limites. Testez toujours sur un ensemble varié avant de déployer.
+
+## Le prompt engineering comme compétence durable
+
+Les modèles s'améliorent continuellement, et certaines choses qui nécessitaient un prompt élaboré en 2023 se font en zero-shot aujourd'hui. Mais la capacité de communiquer clairement ce qu'on attend, de structurer une tâche complexe, et d'anticiper les modes d'échec d'un modèle — ca reste une compétence fondamentale.
+
+Le meilleur prompt est celui qui est clair, structuré, spécifique, et qui laisse le moins possible de place à l'interprétation indésirable. Comme une bonne spécification technique : c'est un investissement de quelques minutes qui évite des heures de débogage.

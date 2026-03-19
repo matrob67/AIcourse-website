@@ -1,0 +1,113 @@
+---
+title: "Pré-entraînement"
+description: "Les objectifs d'entraînement des LLM : causal language modeling, masked language modeling, span corruption et prédiction du prochain token."
+---
+
+## Un enfant qui lit tout Internet
+
+Imagine un enfant à qui on donne accès à une bibliothèque infinie — des milliards de livres, d'articles, de conversations, de code — et qu'on lui dit : "Lis tout ça, et à chaque fois qu'on cache un mot, devine-le." Après des années de lecture, cet enfant a tellement vu de patterns qu'il peut terminer n'importe quelle phrase, dans n'importe quel style.
+
+C'est exactement ce qu'est le **pré-entraînement** d'un LLM. C'est la première phase, la plus longue et la plus coûteuse. Le modèle ingère des quantités astronomiques de texte brut — sans qu'on lui dise "cette phrase est bonne" ou "cette réponse est fausse" — et apprend à deviner le mot qui vient ensuite. On appelle ça l'**apprentissage auto-supervisé** : le signal qui permet d'apprendre vient directement du texte lui-même, pas d'un humain.
+
+
+
+<Callout type="info" title="Auto-supervisé, qu'est-ce que ca veut dire ?">
+Dans l'apprentissage supervisé classique, quelqu'un étiquette les données : "cette photo c'est un chat", "cet email c'est du spam". C'est lent et cher. L'apprentissage auto-supervisé est malin : il crée ses propres étiquettes à partir du texte. Si la phrase dit "La capitale de la France est ___", la réponse "Paris" est déjà là, cachée dans les données.
+</Callout>
+
+## La grande question : comment apprendre exactement ?
+
+L'**objectif d'entraînement** (training objective), c'est la règle du jeu : comment exactement on cache des mots et comment on mesure si le modèle a bien deviné. Il en existe trois grands types, et chacun produit un type de modèle très différent.
+
+## Objectif 1 : Causal Language Modeling — deviner le mot suivant
+
+C'est l'approche de GPT, LLaMA, Mistral, Claude — la quasi-totalité des grands modèles d'aujourd'hui. La règle est simple : **prédit le prochain mot, en n'ayant le droit de regarder qu'à gauche**.
+
+```
+Séquence : "Le chat mange une ___"
+Le modèle voit : "Le", "chat", "mange", "une"
+Il doit prédire : "souris" (ou "croquette", ou "pomme"...)
+```
+
+Le mot "causal" vient du fait que l'information ne va que dans un sens : du passé vers le futur. Le token à la position 5 ne peut pas voir le token à la position 6. C'est une contrainte naturelle : quand on écrit, on ne connaît pas la suite.
+
+<Callout type="tip" title="L'argument d'Ilya Sutskever">
+Le co-fondateur d'OpenAI a souvent dit : pour prédire parfaitement le prochain mot d'un article sur la physique quantique, il faut *comprendre* la physique quantique. Prédire le prochain token semble anodin, mais poussé à l'extrême avec assez de données, ça force le modèle à comprendre le monde entier. C'est l'intuition qui a guidé GPT depuis le début.
+</Callout>
+
+En pratique, l'entraînement se déroule ainsi :
+1. On découpe le texte brut en morceaux de longueur fixe (ex. : 4 096 tokens par morceau)
+2. Des milliers de morceaux sont traités en parallèle (c'est un **batch**)
+3. Pour chaque position, le modèle prédit le token suivant
+4. On mesure l'erreur (la **cross-entropy loss**) et on ajuste les poids
+5. On répète ça des milliards de fois, sur des milliers de milliards de tokens
+
+## Objectif 2 : Masked Language Modeling — combler les trous
+
+C'est l'approche de BERT, RoBERTa, DeBERTa. Ici, on cache aléatoirement 15% des mots dans une phrase et on demande au modèle de les retrouver — mais il peut regarder dans les **deux directions**, avant et après le trou.
+
+```
+Entrée : "Le [MASK] mange une souris dans le [MASK]."
+À prédire : "chat" et "grenier"
+```
+
+L'avantage : voir le contexte complet rend le modèle très fort pour comprendre le sens d'un texte. L'inconvénient majeur : ce modèle ne peut pas *générer* du texte naturellement. Il sait remplir des trous, pas écrire une histoire depuis le début.
+
+<Callout type="info" title="Pourquoi BERT a disparu des assistants IA">
+BERT (2018) a dominé le NLP pendant des années pour la classification et l'analyse de texte. Mais quand on a voulu faire des chatbots, on a eu besoin de génération — et là, BERT est impuissant. C'est pourquoi les assistants comme ChatGPT ou Claude utilisent tous le Causal Language Modeling, pas le MLM.
+</Callout>
+
+## Objectif 3 : Span Corruption — cacher des bouts entiers
+
+C'est l'approche de T5 et BART. On va plus loin que cacher un mot : on cache des **séquences entières** (des "spans") et on les remplace par un token unique. Le modèle encoder-decoder doit ensuite régénérer les séquences manquantes.
+
+```
+Entrée :  "Le chat <X> dans le jardin <Y> souris."
+Cible :   "<X> dormait paisiblement <Y> en chassant une"
+```
+
+Cette approche hybride combine la compréhension bidirectionnelle (côté encoder) et la génération (côté decoder). T5 a été pionnier dans l'idée d'unifier toutes les tâches NLP en "traduis ce texte en ce résultat".
+
+## Pourquoi le Causal Language Modeling a gagné
+
+| Objectif | Architecture | Direction | Bon pour |
+|---|---|---|---|
+| CLM (next token) | Decoder-only | Gauche vers droite | Génération, conversation |
+| MLM (masqué) | Encoder-only | Bidirectionnel | Compréhension, classification |
+| Span corruption | Encoder-decoder | Les deux | Tâches texte-vers-texte |
+
+<Callout type="paper" title="Le CLM scale mieux">
+Le CLM a fini par dominer pour une raison pratique : il se prete naturellement à la génération de texte (ce que les utilisateurs veulent), et les **scaling laws** lui sont plus favorables. Quand on augmente la taille des modèles decoder-only, les gains sont plus réguliers et plus prédictibles. La simplicité paie.
+</Callout>
+
+## Les ficelles techniques qui font que ca marche
+
+### Le learning rate schedule
+
+On ne commence pas à fond. L'entraînement utilise un **warmup** : les premières milliers d'étapes, le learning rate monte progressivement pour stabiliser le début. Ensuite, il redescend doucement selon une courbe cosinus jusqu'à la fin. C'est comme démarrer une voiture en douceur avant de prendre l'autoroute.
+
+### Des batches gigantesques
+
+On ne traite pas les textes un par un. On en traite des millions à la fois — souvent plusieurs millions de tokens par batch. Certains entraînements commencent avec de petits batches (signal plus bruité, exploration) et grossissent progressivement (signal plus stable, affinage).
+
+### Mixed precision : la mémoire a un prix
+
+Les GPU ont de la mémoire limitée. Pour faire tenir des milliards de paramètres, on utilise la **mixed precision** : les poids sont stockés en FP32 (précision complète) mais les calculs se font en BF16 (moitié moins de bits). On divise l'empreinte mémoire par deux avec quasi aucune perte de qualité.
+
+### Diviser le modèle sur des centaines de GPU
+
+Un modèle de 70 milliards de paramètres ne tient pas sur un seul GPU. Il faut le découper :
+- **Model parallelism** : différentes couches sur différents GPU
+- **Data parallelism** : différents batches traités en parallèle
+- **Pipeline parallelism** : les couches forment un pipeline d'usine
+
+<Callout type="warning" title="Le coût astronomique du pré-entraînement">
+LLaMA-3 405B aurait nécessité environ 30 millions d'heures GPU sur des H100. Aux prix cloud actuels, ca représente plusieurs dizaines de millions de dollars. Voilà pourquoi seules une poignée d'organisations dans le monde font du pré-entraînement from scratch. Les autres partent d'un modèle existant et l'adaptent.
+</Callout>
+
+
+## Ce qu'on obtient — et ce qu'il manque encore
+
+Au terme du pré-entraînement, on a un **modèle de base** (base model). Il est bluffant pour compléter du texte de façon cohérente. Mais si vous lui posez une question, il risque de... continuer avec d'autres questions. Parce que dans ses données d'entraînement, les questions étaient souvent suivies d'autres questions.
+
+Le modèle de base ne sait pas avoir une conversation, suivre des instructions, ni refuser des demandes dangereuses. C'est le **fine-tuning** — et particulièrement les techniques d'alignement comme le RLHF et le DPO — qui transforment cette encyclopédie brute en assistant utile. C'est ce qu'on explore dans les sections suivantes.

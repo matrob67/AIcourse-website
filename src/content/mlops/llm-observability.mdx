@@ -1,0 +1,146 @@
+---
+title: "LLM Observability : LangSmith, Arize, Langfuse"
+description: "Comprendre ce que vos applications LLM font : tracing, métriques, debugging. Observer pour optimiser."
+---
+
+## Pourquoi l'observabilité LLM
+
+Les applications LLM = **chaînes complexes** : retrieval → prompts → appels LLM → parsing → outils. Quand une réponse est mauvaise, où exactement ça s'est cassé ?
+
+**L'observabilité LLM** va au-delà du monitoring classique (est-ce que ça répond ?). Elle permettre de **comprendre le contenu** : quels documents ont été récupérés ? Quel prompt a été envoyé ? Combien de tokens ? La réponse était pertinente ?
+
+<Callout type="info" title="Les trois piliers">
+1. **Tracing** : suivre le parcours complet d'une requête
+2. **Métriques** : mesurer quantitativement (latence, coûts, qualité)
+3. **Évaluation** : juger la qualité automatiquement ou humainement
+</Callout>
+
+
+
+## Tracing : suivre le parcours complet
+
+Une **trace** capture l'exécution complète d'une requête. Elle est composée de **spans** (étapes) hiérarchiques :
+
+```
+Requête utilisateur
+├─ Span retrieval (search docs)
+├─ Span prompt (build the prompt)
+├─ Span LLM (call model)
+├─ Span parsing (extract info)
+└─ Span tool (call external tool)
+```
+
+### Infos capturées par span
+
+- **Input/Output** : données entrantes et sortantes
+- **Latence** : temps d'exécution
+- **Métadonnées** : modèle, température, max_tokens
+- **Tokens** : count entrée/sortie
+- **Coût** : estimé
+- **Erreurs** : si applicable
+
+### Utilité
+
+Répond à des questions critiques :
+- "Pourquoi la réponse est mauvaise?" → Les docs RAG récupérés étaient non pertinents
+- "Pourquoi latence élevée?" → L'appel LLM prend 5s
+- "Pourquoi les coûts montent?" → Le prompt est devenu 10x plus long
+- "Pourquoi hallucine?" → Le contexte RAG ne contient pas l'info
+
+## LangSmith
+
+**LangSmith** la plateforme complète pour l'observabilité LLM. Tracing, évaluation, monitoring, prompt management.
+
+### Tracing
+
+- **Auto-instrumentation** : avec LangChain, tout est tracé auto
+- **SDK-based** : instrument **n'importe quelle** application
+- **Visualisation** : hiérarchie interactive des spans avec contenu
+- **Recherche** : par métadonnées, latence, coûts, feedback
+
+### De trace à évaluation
+
+Workflow puissant :
+1. Identifier une trace problématique en production
+2. L'ajouter à un dataset d'évaluation avec la correction attendue
+3. Utiliser le dataset pour tester futures versions du prompt
+4. Les bugs de production deviennent des cas de test
+
+<Callout type="tip" title="Traçage productif">
+C'est pas juste du monitoring, c'est du debugging continu en production. Les traces sont de la data pour améliorer votre système.
+</Callout>
+
+## Arize AI
+
+Plateforme d'observabilité ML/LLM. Spécialisée sur **embeddings et RAG**.
+
+### Forces uniques
+
+- **Embeddings analysis** : visualisation UMAP/t-SNE des embeddings de requêtes et documents. Identificer les clusters problématiques.
+- **RAG analysis** : évaluation automatique de la pertinence des docs récupérés
+- **Drift detection** : changements dans les distributions d'embeddings
+
+### Phoenix (open source)
+
+Arize maintient **Phoenix**, outil open source pour l'observabilité LLM locale. Tracing, évaluation, analyse d'embeddings, interface web.
+
+<Callout type="paper" title="Embeddings analysis pour le debugging RAG">
+Projeter les embeddings de requêtes et documents en 2D : on voit visuellement quels clusters de requêtes ne matchent pas bien. Révèle les lacunes du knowledge base et problèmes de retrieval.
+</Callout>
+
+## Langfuse
+
+Plateforme **open source** d'observabilité LLM. Gainé en popularité grâce à sa simplicité et modèle open.
+
+### Ce qu'elle offre
+
+- **Tracing** : via SDK ou intégrations (LangChain, LlamaIndex)
+- **Scores** : système flexible pour évaluation
+- **Prompt management** : versioning et déploiement
+- **Datasets** : depuis traces de production
+- **Analytics** : dashboards coûts, latence, qualité
+
+### Avantages open source
+
+- **Self-hosted** : sur votre infrastructure
+- **Contrôle des données** : traces restent chez vous
+- **Extensible** : API ouverte
+
+## Comparaison
+
+| Critère | LangSmith | Arize AI | Langfuse |
+|---|---|---|---|
+| **Type** | SaaS | SaaS + OSS | OSS + Cloud |
+| **Tracing** | Excellent | Très bon | Très bon |
+| **Évaluation** | Avancée | Avancée (RAG focus) | Bonne |
+| **Embeddings analysis** | Non | Oui | Non |
+| **Prompt management** | Oui | Non | Oui |
+| **Self-hosted** | Non | Phoenix (limité) | Oui |
+| **Coût** | $$$ | $$$ | Gratuit (self-hosted) |
+
+<Callout type="warning" title="Les données de traces">
+Les traces contiennent vos prompts et réponses, potentiellement avec PII. Vérifiez RGPD conformité avant cloud. Solutions self-hosted offrent plus de contrôle.
+</Callout>
+
+## Implémentation pratique
+
+### Que tracer minimalement
+
+- Chaque **appel LLM** : modèle, tokens, latence, coût
+- Chaque **retrieval** : query, documents, scores
+- Les **inputs/outputs** de chaque composant
+- Le **feedback utilisateur** (thumbs up/down, corrections)
+
+### Métriques clés
+
+- **Latence** : P50/P95/P99
+- **Coûts** : par requête
+- **Qualité** : score moyen évaluations
+- **Taux erreur** : % requêtes échouées
+- **Retrieval relevancy** : pertinence docs
+
+### Architecture
+
+Le tracing doit être **non-bloquant**. L'envoi des traces ne ralentit pas l'app. SDKs utilisent asynchrone + buffering. Si le backend d'observabilité plante, l'app continue.
+
+L'observabilité c'est un classique du monitoring, adapté aux LLMs. Essentiel pour la production.

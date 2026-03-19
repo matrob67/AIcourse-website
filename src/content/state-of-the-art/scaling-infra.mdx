@@ -1,0 +1,104 @@
+---
+title: "Infrastructure de scaling : InfiniBand, NVLink"
+description: "Guide sur l'infrastructure matérielle nécessaire pour l'entraînement distribué des LLM à grande échelle : interconnexions GPU, topologies réseau et optimisations système."
+---
+
+
+
+## Le problème: vos GPU ne parlent pas assez vite
+
+Vous avez acheté 1000 GPU pour entraîner une grosse IA. Problème: si ces GPU ne peuvent pas communiquer à vitesse de l'éclair, vous avez 1000 bulldozers qui se disputent une route de campagne. Chacun attend que les autres aient fini de parler avant de pouvoir avancer. C'est ça, l'infrastructure de scaling.
+
+<Callout type="info" title="L'analogie du chat">
+Imaginez 1000 personnes dans une salle d'entraînement collaboratif. Si vous les connectez avec des téléphones fixes lents, c'est catastrophique. Mais avec une fibre optique ultra-rapide qui relie tout le monde à la même vitesse? Soudain, tout le monde peut contribuer en parallèle. C'est exactement ce que font NVLink et InfiniBand pour les GPU.
+</Callout>
+
+## La hiérarchie de la communication: du très rapide au rapide
+
+Un cluster d'IA n'est pas juste des GPU branchés en réseau. C'est une **hiérarchie en couches**, chacune avec sa propre vitesse:
+
+1. **À l'intérieur d'une GPU** : SRAM parle à HBM à ~2000 GB/s (c'est TRÈS rapide)
+2. **GPU à GPU sur le même serveur** : NVLink à ~900 GB/s (voir plus bas)
+3. **D'un serveur à l'autre** : InfiniBand à ~50 Go/s (c'est 20× plus lent)
+4. **Entre racks** : switches réseau à ~12 Tb/s (et oui, c'est encore plus compliqué)
+
+Le truc important: la différence entre le niveau 2 et le niveau 3 est **énorme** (20×!). Cela dicte tout votre stratégie d'entraînement.
+
+## NVLink: le langage privé des GPU NVIDIA
+
+NVLink est la technologie propriétaire de NVIDIA qui permet aux GPU d'un même serveur de se parler directement, super vite, sans passer par la mémoire commune.
+
+| Génération | Débit par lien | Liens par GPU | Débit total |
+|-----------|---|---|---|
+| NVLink 3 (A100) | 25 GB/s | 12 | 600 GB/s |
+| NVLink 4 (H100) | 25 GB/s | 18 | 900 GB/s |
+| NVLink 5 (B200) | 50 GB/s | 18 | 1800 GB/s |
+
+**NVSwitch**: c'est un petit appareil qui branche tous les GPU d'un serveur en un réseau parfait (chacun peut parler directement à tous les autres). Un serveur DGX H100 contient 4 NVSwitch pour 8 GPU.
+
+La nouveauté: **NVLink Network** (depuis Hopper). Avant, NVLink s'arrêtait aux limites du serveur. Maintenant, vous pouvez avoir 72 GPU connectés en NVLink dans un seul domaine de bande passante. C'est dingue.
+
+<Callout type="paper" title="GB200 NVL72">
+NVIDIA a sorti le GB200 NVL72: 72 GPU Blackwell branchés en NVLink dans une même "chambre" de communication. Plus de murs entre les GPU. Ça change complètement les stratégies d'entraînement.
+</Callout>
+
+## InfiniBand: la route entre les serveurs
+
+InfiniBand, c'est l'autoroute qui relie les serveurs entre eux. C'est le **standard de l'industrie** pour les clusters d'IA sérieux.
+
+| Version | Débit | Utilisation |
+|---------|---|---|
+| HDR (200 Gb/s) | 25 GB/s | Clusters A100 |
+| NDR (400 Gb/s) | 50 GB/s | Clusters H100 |
+| XDR (800 Gb/s) | 100 GB/s | Prochaine génération |
+
+**RDMA** (Remote Direct Memory Access): c'est un vrai trick. Au lieu de passer par les processeurs pour échanger de la mémoire entre serveurs, RDMA laisse les GPU copier directement de la mémoire GPU vers mémoire GPU sur un autre serveur. C'est comme donner un ascenseur direct plutôt que forcer tout le monde à descendre les escaliers, traverser le bâtiment, puis remonter.
+
+<Callout type="tip" title="GPU Direct RDMA réduit la latence de 30-50%">
+Sans GPU Direct, une copie inter-serveurs passe par 4 étapes de mémoire. Avec GPU Direct, elle passe par 2. Vous voyez immédiatement cette accélération dans votre throughput d'entraînement global.
+</Callout>
+
+## Ethernet haute performance: le challenger
+
+**RoCE v2** (RDMA over Converged Ethernet): c'est du RDMA mais sur Ethernet classique. Moins coûteux, mais un brin plus lent. Utilisé par certains cloud providers.
+
+**Ultra Ethernet Consortium**: une initiative pour faire un Ethernet vraiment optimisé pour l'IA. Le but: concurrencer InfiniBand en performance tout en restant dans l'écosystème Ethernet.
+
+<Callout type="warning" title="InfiniBand reste le roi">
+Pour les très gros clusters (> 1000 GPU), InfiniBand gagne sur la latence et la gestion des embouteillages. Ethernet s'améliore vite, mais pas assez. InfiniBand = la sécurité pour les vrais clusters.
+</Callout>
+
+## Topologies: comment brancher les switches?
+
+**Fat-tree**: l'hiérarchie classique. Des switches qui se connectent à d'autres switches. Aucun goulot d'étranglement. Coûteux mais optimal.
+
+**Rail-optimized**: plus économique. Les GPU de même rang dans différents serveurs partagent un switch. Optimisé pour les patterns de communication parallèle.
+
+**Dragonfly**: pour les TRÈS gros clusters (> 10000 serveurs). Groupes de serveurs connectés par des liens longue distance.
+
+## Pannes: le cauchemar des gros clusters
+
+Sur 10 000 GPU, des choses vont casser. **Chaque semaine**. Les disques s'usent, les cartes mère grillent, des choses changent.
+
+**Résilience**:
+- Checkpointing fréquent (tous les quelques heures)
+- Checkpointing asynchrone (sans arrêter l'entraînement)
+- Remplacement à chaud (swap un GPU cassé sans redémarrer)
+- Training élastique (adaptez dynamiquement le nombre de GPU)
+- Monitoring proactif (anticipez les pannes par les températures et erreurs)
+
+<Callout type="info" title="Coût brutal">
+Un cluster de 1000 GPU H100 avec networking InfiniBand coûte 300-500 millions de dollars. Le réseau seul c'est 20-30% du prix. Si vous gâchez un pourcent de ce temps en inefficacité, vous venez de perdre millions.
+</Callout>
+
+## Le futur: plus grand, plus intégré, plus intelligent
+
+**Domaines NVLink géants**: on repousse la limite du serveur. GB200 NVL72 en est un exemple.
+
+**Accélérateurs réseau**: des puces spécialisées (SHARP de NVIDIA) qui calculent les réductions de données directement dans les switches, pas dans les GPU.
+
+**Cloud vs maison**: AWS, GCP, Azure offrent tous des clusters pré-configurés. Pas besoin d'acheter l'infrastructure vous-même.
+
+---
+
+**L'essentiel**: NVLink et InfiniBand ne sont pas juste des "branchements". Ce sont les artères de votre cluster. Sans eux, même avec les meilleurs GPU, vous êtes bloqué. Avec eux, vous pouvez vraiment utiliser la puissance parallèle de mille GPU.

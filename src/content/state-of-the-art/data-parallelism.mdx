@@ -1,0 +1,156 @@
+---
+title: "Data Parallelism : distribuer sur plusieurs GPU (la base)"
+description: "Data Parallelism et DDP : répliquez le modèle sur 8 GPU, divisez les données, agrégez les gradients. La façon la plus simple de paralléliser."
+---
+
+## L'idée ultra-simple
+
+**Data Parallelism** : copiez le modèle entier sur chaque GPU. Chaque GPU traite un morceau du batch. Agrégerez les gradients ensuite.
+
+C'est la technique la plus straightforward et elle marche.
+
+
+
+## Classique : nn.DataParallel (obsolète)
+
+PyTorch ancien : `nn.DataParallel`. Un seul processus Python, un GPU "maître".
+
+```
+Maître : scatter données → GPU 1,2,3,...
+GPU 1,2,3,... : forward/backward local
+Maître : gather outputs, reduce gradients
+```
+
+**Problème** : GIL Python, goulot d'étranglement maître. Obsolète, ne l'utilisez plus.
+
+<Callout type="warning" title="Oubliez DataParallel">
+`nn.DataParallel` est lent et imbécile. Déséquilibre mémoire entre GPU. Utilisez toujours DDP.
+</Callout>
+
+## DDP (Distributed Data Parallel) : la vraie solution
+
+**DDP** lance un processus Python **indépendant** par GPU. Zéro GIL, communications peer-to-peer.
+
+Architecture :
+- Processus 0 sur GPU 0
+- Processus 1 sur GPU 1
+- ...
+- Processus 7 sur GPU 7
+
+Chaque processus : forward/backward local, puis `all-reduce` des gradients.
+
+### All-reduce des gradients
+
+L'opération clé : combiner les gradients de tous les GPU et distribuer le résultat identique à tous.
+
+L'algorithme efficace : **Ring All-Reduce**
+
+1. Divisez les gradients en chunks (un par GPU)
+2. **Reduce-scatter** : faire circuler les chunks dans un anneau, chaque GPU accumule son chunk
+3. **All-gather** : distribuer les chunks accumulés
+
+Complexité : `2(P-1)/P × M` où M = taille des gradients. Presque linéaire en P !
+
+<Callout type="info" title="Efficacité du ring">
+Avec 8 GPU, le Ring All-Reduce a complexité ~2 × M × 7/8. Pratiquement 2M. Très efficace. Et ça scale : avec 100 GPU, toujours ~ 2M (le terme (P-1)/P → 1).
+</Callout>
+
+## Overlap communication et calcul
+
+DDP ne communique pas après chaque couche. Au lieu de ça, pendant que vous calculez les gradients des couches shallow, DDP envoie déjà les gradients des couches profondes (calculés en premier).
+
+Grâce aux **hooks**, dès qu'un gradient est calculé, son all-reduce commence. Le calcul et la communication se chevauchent.
+
+Buckets : grouper plusieurs gradients dans un bucket pour amortir l'overhead.
+
+## Configuration DDP en pratique
+
+### Paramètres clés
+
+| Param | Description | Typique |
+|-------|-----------|---------|
+| `world_size` | Nombre total de processus | 8, 16, 64 |
+| `rank` | ID unique (0 à world_size-1) | 0-7 |
+| `local_rank` | ID sur le noeud local | 0-7 (sur un noeud 8-GPU) |
+| `backend` | Tech de communication | "nccl" pour NVIDIA |
+| `bucket_size_mb` | Taille buckets | 25 MB |
+
+### Backends
+- **NCCL** : optimisé NVIDIA, NVLink/InfiniBand, c'est celui-là
+- **Gloo** : multi-purpose, plus lent
+- **MPI** : classique HPC
+
+### Lancer DDP
+
+```bash
+torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 \
+  --master_addr=host0 train.py
+```
+
+`torchrun` gère automatiquement les variables d'environnement et spawne les processus.
+
+<Callout type="tip" title="Toujours utiliser torchrun">
+`torchrun` automatise le boilerplate. Ne lancez jamais les processus manuellement.
+</Callout>
+
+## Scaling du learning rate
+
+Avec P GPU et micro-batch B par GPU, le batch effectif est `P × B`. Les gradients moyens changent de signe.
+
+Règle : **linear learning rate scaling**
+
+```
+lr_effectif = lr_base × P
+```
+
+Si vous aviez `lr=0.001` avec 1 GPU, avec 8 GPU utilisez `lr=0.008`.
+
+Aussi : **warm-up prolongé** pour stabiliser (centaines d'itérations au lieu de dizaines).
+
+### Efficacité de scaling
+
+```
+Efficacité = Throughput(P GPU) / (P × Throughput(1 GPU))
+```
+
+Idéalement 100%, c'est rare.
+
+<Callout type="info" title="Efficacité réelle">
+Au sein d'un noeud (NVLink) : 95-99%.
+Entre noeuds (InfiniBand) : 85-95% selon la taille du modèle.
+Communication/calcul = le ratio détermine.
+</Callout>
+
+## Limitation majeure : mémoire
+
+DDP **réplique** le modèle entier partout.
+
+Pour LLaMA 2 7B en mixed precision :
+
+```
+Poids FP16 : 14 GB
+Poids maître FP32 : 28 GB
+États optimiseur Adam : 28 GB (momentum + variance)
+Gradients : 14 GB
+Total : ~84 GB par GPU
+```
+
+A100 80GB ? Ça ne rentre pas ! Pour 13B+, ça ne marche plus.
+
+### Solutions : ZeRO, FSDP
+
+Ces techniques partitionnent les états entre GPU au lieu de les répliquer. Réduction mémoire drastique. Détails plus tard.
+
+<Callout type="warning" title="Quand DDP ne suffit plus">
+Dès que le modèle (poids + optimiseur + gradients + activations) ne tient pas sur un GPU, complétez DDP avec ZeRO/FSDP ou tensor parallelism.
+</Callout>
+
+## Conclusion
+
+DDP est la fondation de tout entraînement distribué. **Simple à utiliser, efficace au sein d'un noeud**.
+
+Pour les modèles gros ou le multi-noeud à grande échelle, DDP s'empile avec d'autres techniques (ZeRO, tensor parallelism). Mais DDP c'est toujours la base.
+
+<Callout type="info" title="Résumé">
+Data Parallelism via DDP : réplique simple, all-reduce efficace via ring, scaling presque linéaire. Le début de tout entraînement distribué de LLM.
+</Callout>

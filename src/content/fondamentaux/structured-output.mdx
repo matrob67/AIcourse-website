@@ -1,0 +1,187 @@
+---
+title: "Structured output"
+description: "Obtenir des sorties structurées des LLM : JSON mode, function calling, génération contrainte et grammaires formelles."
+---
+
+## Le besoin de structure
+
+Les LLM génèrent du texte libre par nature. C'est parfait pour la conversation, mais problématique quand on veut intégrer leurs réponses dans un programme. Si vous demandez à un LLM d'extraire des données d'un texte, il pourrait répondre de mille façons différentes — et votre code ne saurait pas quoi en faire.
+
+Le **structured output** regroupe les techniques qui contraignent la sortie d'un LLM à un format prédéfini et parseable : JSON, XML, appels de fonction, ou tout autre format structuré. C'est une brique essentielle pour construire des applications fiables autour des LLM.
+
+
+
+## Le JSON mode
+
+### Le principe
+
+Le **JSON mode** est la forme la plus courante de structured output. Le modèle est contraint de produire une sortie qui est un JSON valide, conforme éventuellement à un schéma prédéfini.
+
+```json
+{
+  "sentiment": "positif",
+  "confiance": 0.92,
+  "entites": ["Paris", "Tour Eiffel"],
+  "resume": "Le texte décrit une visite touristique positive à Paris."
+}
+```
+
+### Implémentation côté API
+
+Les principaux fournisseurs de LLM proposent un JSON mode natif :
+
+- **OpenAI** : paramètre `response_format: { type: "json_object" }` ou `response_format: { type: "json_schema", json_schema: {...} }`
+- **Anthropic** : via des instructions dans le system prompt et le préfixage de la réponse
+- **Open source** : bibliothèques comme `outlines`, `guidance`, `lm-format-enforcer`
+
+<Callout type="info" title="JSON schema vs JSON libre">
+Le JSON mode basique garantit un JSON valide mais pas sa structure. Le JSON schema mode (disponible chez OpenAI et d'autres) garantit en plus que le JSON respecte un schéma précis : les bons champs, les bons types, les valeurs parmi un ensemble autorisé. C'est bien plus fiable pour les applications en production.
+</Callout>
+
+### Les pièges du JSON par prompting
+
+Avant l'existence de modes JSON natifs, on demandait simplement au modèle de répondre en JSON dans le prompt. Les problèmes courants :
+
+- Le modèle ajoute du texte explicatif avant ou après le JSON
+- Les virgules finales (trailing commas) rendent le JSON invalide
+- Les guillemets ne sont pas correctement échappés dans les chaînes
+- Le modèle "oublie" de fermer des accolades ou des crochets
+- Les types ne sont pas respectés (un nombre renvoyé comme chaîne)
+
+Le JSON mode natif élimine la plupart de ces problèmes en contraignant la génération au niveau du décodeur.
+
+## Le function calling
+
+### Le concept
+
+Le **function calling** (ou tool use) permet au LLM de "appeler" des fonctions définies par le développeur. Au lieu de générer du texte, le modèle génère un appel de fonction structuré avec les bons arguments.
+
+Le développeur définit un ensemble de fonctions avec leur signature :
+
+```json
+{
+  "name": "get_weather",
+  "description": "Obtient la météo pour une ville",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "city": { "type": "string", "description": "Nom de la ville" },
+      "unit": { "type": "string", "enum": ["celsius", "fahrenheit"] }
+    },
+    "required": ["city"]
+  }
+}
+```
+
+Quand l'utilisateur demande "Quel temps fait-il à Lyon ?", le modèle génère :
+
+```json
+{ "name": "get_weather", "arguments": { "city": "Lyon", "unit": "celsius" } }
+```
+
+<Callout type="tip" title="Le LLM comme routeur intelligent">
+Le function calling transforme le LLM en **routeur intelligent** : il comprend la requête de l'utilisateur en langage naturel et la traduit en un appel structuré à la bonne fonction avec les bons paramètres. C'est la base des agents IA et des systèmes RAG (Retrieval Augmented Generation).
+</Callout>
+
+### Le workflow complet
+
+1. L'utilisateur envoie sa requête
+2. Le LLM décide s'il doit appeler une fonction (et laquelle)
+3. Le LLM génère les arguments de l'appel
+4. L'application exécute la fonction et obtient le résultat
+5. Le résultat est renvoyé au LLM
+6. Le LLM formule une réponse en langage naturel
+
+### Appels multiples et parallèles
+
+Les modèles récents supportent :
+- **Appels séquentiels** : le résultat d'un appel informe le suivant
+- **Appels parallèles** : plusieurs fonctions appelées simultanément
+- **Choix dynamique** : le modèle décide de ne pas appeler de fonction s'il peut répondre directement
+
+## La génération contrainte
+
+
+
+### Le problème fondamental
+
+Un LLM génère des tokens un par un, en échantillonnant à chaque étape dans la distribution de probabilité sur le vocabulaire. Pour garantir une sortie structurée, il faut **contraindre** cet échantillonnage : à chaque étape, seuls les tokens qui maintiennent la validité de la structure sont autorisés.
+
+### Les grammaires formelles
+
+La technique la plus puissante est l'utilisation de **grammaires formelles** (typiquement des grammaires context-free en notation EBNF ou des regular expressions) pour contraindre la génération.
+
+Par exemple, pour garantir un JSON valide :
+
+```
+root   ::= object
+object ::= "{" pair ("," pair)* "}"
+pair   ::= string ":" value
+value  ::= string | number | object | array | "true" | "false" | "null"
+...
+```
+
+À chaque étape de génération, on calcule quels tokens sont compatibles avec la grammaire dans l'état actuel du parseur, et on masque tous les autres tokens (en mettant leur probabilité à zéro).
+
+<Callout type="paper" title="La bibliothèque Outlines">
+**Outlines** est une bibliothèque Python qui implémente la génération contrainte par grammaire pour les modèles open-source. Elle compile la grammaire en un automate fini qui guide efficacement l'échantillonnage. Le surcoût de performance est minime car le masquage est une opération simple sur les logits.
+</Callout>
+
+### Les regex comme contraintes
+
+Pour des formats plus simples, une **expression régulière** peut suffire :
+
+```python
+# Garantir un format de date
+pattern = r"\d{4}-\d{2}-\d{2}"
+
+# Garantir une réponse oui/non
+pattern = r"(oui|non)"
+
+# Garantir un email
+pattern = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+```
+
+### Les JSON schemas comme contraintes
+
+Le JSON schema peut être compilé en une grammaire formelle. C'est ce que font les modes JSON schema natifs des API : le schema est converti en contraintes de génération qui garantissent la conformité.
+
+## Les compromis et limites
+
+### La qualité du contenu vs la structure
+
+Contraindre la structure ne garantit pas la qualité du contenu. Un JSON parfaitement valide peut contenir des valeurs incorrectes, hallucionnées ou incohérentes. La structure est nécessaire mais pas suffisante pour la fiabilité.
+
+<Callout type="warning" title="Structure valide ≠ contenu correct">
+Un modèle contraint de répondre en JSON avec un champ "sentiment" de type enum ["positif", "négatif", "neutre"] produira toujours une de ces trois valeurs. Mais la valeur choisie peut être incorrecte. La génération contrainte résout le problème de la forme, pas celui du fond.
+</Callout>
+
+### L'impact sur la génération
+
+Les contraintes structurelles peuvent légèrement affecter la qualité du texte libre à l'intérieur des champs structurés. Le modèle doit "planifier" sa génération en tenant compte des contraintes à venir, ce qui peut limiter sa créativité ou sa fluidité.
+
+### La latence
+
+La génération contrainte par grammaire ajoute un surcoût computationnel à chaque étape de décodage (calcul des tokens valides). En pratique, ce surcoût est généralement négligeable (&lt;5%) mais peut devenir significatif avec des grammaires très complexes.
+
+## Applications pratiques
+
+### Extraction d'information
+
+Extraire des données structurées de texte libre (emails, rapports, articles) en définissant un schema JSON précis.
+
+### Agents et outils
+
+Le function calling est la base des **agents IA** : des systèmes qui utilisent un LLM pour décider quelles actions effectuer (chercher sur le web, interroger une base de données, envoyer un email).
+
+### Pipelines de données
+
+Intégrer les LLM dans des pipelines de traitement de données où chaque étape attend un format spécifique en entrée et en sortie.
+
+### Validation et robustesse
+
+En production, la génération contrainte permet de **garantir** que la sortie est toujours parseable, éliminant une catégorie entière de bugs. Combinée avec une validation sémantique (vérification des valeurs), elle constitue la base d'applications LLM fiables.
+
+<Callout type="tip" title="La règle d'or en production">
+En production, ne faites jamais confiance à la sortie libre d'un LLM. Utilisez toujours une forme de structured output (JSON schema, function calling, grammaire) et validez le résultat programmatiquement avant de l'utiliser. C'est la différence entre une démo et un produit fiable.
+</Callout>

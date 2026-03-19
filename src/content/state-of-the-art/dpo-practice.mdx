@@ -1,0 +1,158 @@
+---
+title: "DPO en pratique : alignement simplifié"
+description: "Direct Preference Optimization élimine le besoin d'un reward model explicite et du reinforcement learning, simplifiant drastiquement l'alignement des LLM avec les préférences humaines."
+---
+
+## Le problème du RLHF classique: trop d'étapes, trop de modèles
+
+RLHF avec PPO demande:
+1. Entraîner un reward model séparé
+2. Garder 4 modèles en mémoire
+3. Gérer l'instabilité RL
+
+DPO dit: "Et si on pouvait le faire **directement** sur les préférences, sans tout ça?"
+
+<Callout type="info" title="L'insight mathématique">
+DPO montre qu'il existe une correspondance analytique entre la policy optimale et le reward model. Vous pouvez directement optimiser le modèle sur les préférences sans jamais entraîner un reward model explicite.
+</Callout>
+
+## La formulation DPO: du RLHF au direct
+
+RLHF classique:
+```
+max_π E[reward(x,y)] - β × KL(π || π_ref)
+```
+
+DPO reformule ça. La solution optimale peut s'écrire sous forme fermée. Résultat: vous pouvez directement apprendre sur les préférences:
+
+```
+L_DPO = -E[log σ(β × (log π_θ(y_w|x)/π_ref(y_w|x) -
+                       log π_θ(y_l|x)/π_ref(y_l|x)))]
+```
+
+Où:
+- y_w = réponse préférée
+- y_l = réponse rejetée
+- π_θ = votre modèle
+- π_ref = modèle de référence (SFT)
+- β = contrôle l'écart par rapport à la référence
+
+### Interprétation
+
+DPO augmente la proba de y_w et diminue y_l, **relativement** au modèle de référence. Pas de reward model explicite. Pas de RL. Juste une loss standard.
+
+<Callout type="paper" title="Équivalence avec RLHF">
+Sous certaines hypothèses (Bradley-Terry, convergence), DPO converge vers la même solution que RLHF PPO. En pratique, souvent mieux grâce à la stabilité.
+</Callout>
+
+
+
+## Avantages: simplicité et stabilité
+
+### 1. Implémentation simple
+C'est juste une loss de classification. Pas de sampling, pas de reward model, pas de PPO.
+
+### 2. Entraînement stable
+Pas d'instabilité RL. Pas de reward hacking. C'est un problème supervisé standard avec gradients bien comportés.
+
+### 3. Efficacité mémoire
+2 modèles (policy + référence) au lieu de 4. Mémoire divisée par 2 approximativement.
+
+### 4. Compatible PEFT
+DPO marche nativement avec LoRA/QLoRA. Alignement sur GPU consumer devient possible.
+
+## Implémentation avec TRL
+
+```python
+from trl import DPOTrainer, DPOConfig
+
+config = DPOConfig(
+    output_dir="./dpo_model",
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=4,
+    learning_rate=5e-7,
+    beta=0.1,
+    num_train_epochs=1,
+    bf16=True,
+)
+
+trainer = DPOTrainer(
+    model=model,
+    ref_model=ref_model,
+    args=config,
+    train_dataset=preference_dataset,
+)
+trainer.train()
+```
+
+<Callout type="tip" title="DPO + PEFT: trick utile">
+Avec LoRA, le modèle de référence est implicit: le modèle de base (sans LoRA). TRL gère ça automatiquement. Pas besoin de charger ref_model séparément.
+</Callout>
+
+## Format des données: préférences simples
+
+```json
+{
+  "prompt": "Comment fonctionne la photosynthèse ?",
+  "chosen": "La photosynthèse est un processus biochimique...",
+  "rejected": "Les plantes mangent la lumière du soleil..."
+}
+```
+
+C'est tout. Une instruction, deux réponses. Vous dites laquelle vous préférez.
+
+### Sources de données de préférences
+
+- **Annotations humaines**: gold standard, très coûteux
+- **IA-as-judge**: GPT-4 ou Claude classe les réponses
+- **UltraFeedback**: 64K prompts, 4 réponses classées par GPT-4
+- **Nectar**: 183K conversations avec classements
+- **Distilabel**: framework pour générer données synthétiques
+
+## Hyperparamètres critiques
+
+### Beta (β)
+- β=0.1: défaut, bon compromis
+- β petit (0.01-0.05): diverge plus de la référence, meilleur alignement mais risque
+- β grand (0.2-0.5): reste proche, alignement conservateur
+
+### Learning rate
+DPO est **sensible** au LR:
+- Plage: 1e-7 à 5e-6
+- Commencez bas, augmentez prudemment
+- Trop élevé = diverge rapidement
+
+### Nombre d'epoches
+1 époque souvent optimal. > 2-3 epochs = overfitting sur les préférences.
+
+<Callout type="warning" title="Le SFT de base compte">
+DPO est très dépendant du modèle SFT initial. Un SFT pourri donne DPO pourri. DPO réoriente juste les probabilités existantes. Pas d'apprentissage de nouvelles compétences.
+</Callout>
+
+## Variantes de DPO
+
+### IPO (Identity Preference Optimization)
+Ajoute une régularisation pour éviter l'overfitting quand le modèle Bradley-Terry ne colle pas aux données réelles.
+
+### KTO (Kahneman-Tversky Optimization)
+Pas besoin de paires. Juste labels bon/mauvais. Plus facile à collecter mais moins informatif.
+
+### ORPO (Odds Ratio Preference Optimization)
+Combine SFT et alignement en une seule phase. Pas besoin de modèle de référence séparé.
+
+### SimPO
+Simplifie encore plus. Utilise la longueur normalisée des log-probs comme reward implicite.
+
+## DPO vs RLHF PPO: pragmatiquement
+
+RLHF PPO reste théoriquement solide. Mais **DPO gagne en pratique**:
+- Plus simple à implémenter
+- Plus stable à entraîner
+- Moins de mémoire
+- Fonctionne avec PEFT
+
+Pour 95% des praticiens: **DPO + QLoRA** est le chemin le plus accessible vers un modèle aligné.
+
+---
+
+**TL;DR**: DPO = alignement sans reward model ni RL. Plus simple, plus stable, meilleure efficacité mémoire. C'est devenu le choix par défaut pour l'alignement open-source.

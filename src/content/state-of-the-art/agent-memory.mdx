@@ -1,0 +1,179 @@
+---
+title: "Systèmes de mémoire pour agents"
+description: "Les agents IA nécessitent différents types de mémoire pour fonctionner efficacement : mémoire à court terme, mémoire à long terme, mémoire épisodique et mémoire sémantique."
+---
+
+## Le problème : l'agent amnésique
+
+Imaginez un assistant IA qui vous aide chaque jour mais qui, chaque matin, vous demande votre nom et vos préférences. Frustrant, non ? C'est exactement ce qui se passe avec un agent sans mémoire. Il recommence à zéro à chaque conversation, oublie vos préférences, ne capitalise pas sur ses erreurs passées, et ne retient rien des leçons apprises. **La mémoire est ce qui transforme un agent réactif en un partenaire utile qui s'améliore avec le temps.**
+
+<Callout type="info" title="Les quatre types de mémoire des agents">
+Inspiré des sciences cognitives, on distingue quatre types : **court terme** (la conversation en cours, comme votre attention du moment), **long terme** (les connaissances persistantes que vous rapatriez quand nécessaire), **épisodique** (vos souvenirs de situations passées : "je me souviens du jour où j'ai raté l'examen"), et **sémantique** (les faits purs : la capitale de la France, comment faire un gâteau).
+</Callout>
+
+## Mémoire à court terme : la fenêtre de contexte (votre attention)
+
+### Comment ça marche
+
+La forme la plus basique de mémoire est la **fenêtre de contexte** du modèle. C'est comme le "buffer d'attention" de votre cerveau quand vous lisez un livre — vous gardez en tête les dernières phrases pour comprendre la phrase actuelle.
+
+```
+[Instructions système au modèle]
+[Message utilisateur 1]
+[Réponse de l'agent 1]
+[Message utilisateur 2]
+[Réponse de l'agent 2]
+... (tout cela tient dans le contexte du modèle)
+[Message utilisateur N - c'est ici qu'on est]
+```
+
+### Les limites de cette approche
+
+- **Taille limitée** : même 200 000 tokens (environ 150 000 mots) finissent par déborder
+- **Coût croissant** : chaque token supplémentaire coûte en calcul et en argent
+- **Distraction par les détails anciens** : les messages très anciens sont "oubliés" par le modèle (le phénomène du "lost in the middle")
+
+### Stratégies pour survivre
+
+- **Fenêtre glissante** : garder seulement les 10 derniers messages, oublier les anciens
+- **Résumé** : résumer périodiquement toute l'historique en un bloc compact
+- **Hybride** : résumé général + les 5 derniers messages concrets
+
+<Callout type="tip" title="Le pattern efficace du résumé">
+Tous les 10-20 échanges, demandez au modèle de faire un résumé intelligent : "Résume cette conversation en gardant les décisions importantes, les préférences de l'utilisateur, et le contexte essentiel." Ce résumé remplace ensuite l'historique détaillé. C'est comme faire un résumé de votre journée avant de dormir au lieu de vous rappeler chaque détail.
+</Callout>
+
+
+
+## Mémoire à long terme : la base vectorielle (votre mémoire de bibliothèque)
+
+### L'idée centrale
+
+Au lieu de garder tout dans le contexte (impossible), vous stockez les interactions passées et les connaissances dans une **base de données vectorielle**. Quand vous en avez besoin, vous cherchez par similarité sémantique — c'est comme chercher des livres dans une bibliothèque sans catalogue, mais en demandant au libraire "je cherche des livres parlant de X" et il vous rapporte les plus pertinents.
+
+```python
+# Sauvegarder une interaction importante
+memory_store.add(
+    text="L'utilisateur préfère le format JSON pour les exports",
+    metadata={"type": "preference", "date": "2024-03-15"}
+)
+
+# Plus tard, retrouver les souvenirs pertinents
+relevant_memories = memory_store.search(
+    "format de sortie pour l'export",
+    k=5  # Top 5 souvenirs les plus pertinents
+)
+```
+
+### Alternative simple : le stockage clé-valeur
+
+Pour des informations structurées (préférences, faits), un simple dictionnaire fonctionne souvent mieux :
+
+```python
+user_profile = {
+    "language": "français",
+    "expertise_level": "avancé",
+    "preferred_format": "JSON",
+    "recent_projects": ["migration API", "dashboard analytics"]
+}
+```
+
+C'est comme avoir une fiche client avec les informations clés plutôt que de chercher dans des milliers de messages.
+
+## Mémoire épisodique : les leçons apprises
+
+### Stocker les expériences
+
+La mémoire épisodique stocke des **souvenirs complets d'interactions passées** — pas juste les faits, mais la situation entière, ce qui s'est passé, et la leçon retenue.
+
+```json
+{
+  "episode": "Résolution du bug #423",
+  "date": "2024-03-10",
+  "context": "Erreur de connexion à la base de données",
+  "actions_taken": ["Vérifier les credentials", "Tester la connexion réseau", "Découvrir un timeout trop court"],
+  "outcome": "Résolu en augmentant le timeout à 30 secondes",
+  "lesson": "Toujours vérifier les timeouts de connexion en premier"
+}
+```
+
+<Callout type="paper" title="Reflexion : apprendre de ses erreurs">
+Le framework Reflexion montre que les agents apprennent plus vite en utilisant la mémoire épisodique. Après chaque échec, l'agent génère une "réflexion" (ce qui a mal tourné, comment faire mieux) et la stocke. Lors de tâches similaires futures, il récupère ces réflexions et les applique.
+</Callout>
+
+## Mémoire sémantique : la base de connaissances
+
+### Les faits et concepts
+
+La mémoire sémantique stocke les **faits et concepts appris** organisés par domaine :
+
+- Les faits sur le métier (les règles métier)
+- Les définitions et la terminologie
+- Les relations entre concepts
+- Les procédures et workflows
+
+### Un graphe de connaissances personnel
+
+Imaginez un réseau de points connectés par des liens : chaque point est une entité (une personne, un concept, un objet), chaque lien est une relation. L'agent construit ce graphe au fil des interactions et l'utilise pour raisonner. Par exemple :
+
+"Alice → travaille_pour → TechCorp" et "TechCorp → fabrique → des logiciels" permet à l'agent de déduire "Alice fait du développement logiciel" sans que vous le lui ayez dit explicitement.
+
+## Architectures de mémoire en pratique
+
+### MemGPT / Letta : la mémoire inspirée du système d'exploitation
+
+MemGPT propose une gestion de mémoire hiérarchique, comme dans un vrai ordinateur :
+
+- **RAM du contexte** : la fenêtre de contexte active (rapide, petit)
+- **Disque archival** : stockage persistent illimité (lent, grand)
+- **Mémoire de récupération** : index pour chercher dans l'historique
+- **L'agent gère les transferts** : le modèle lui-même décide quoi garder en RAM et quoi archiver
+
+C'est comme votre cerveau : vous gardez en tête (RAM) ce dont vous avez besoin immédiatement, et vous fouiller votre mémoire long-terme quand nécessaire.
+
+### Mem0 : la mémoire en service cloud
+
+Mem0 est une couche de mémoire "prête à l'emploi" :
+
+- Extraction automatique de mémoires depuis les conversations
+- Déduplication (si vous dites la même chose deux fois, on mémorise une fois)
+- API simple : add, search, update
+- Support multi-utilisateur
+
+## Implémentation pratique
+
+### Pattern simple avec gestion automatique du résumé
+
+```python
+from langchain.memory import ConversationSummaryBufferMemory
+
+memory = ConversationSummaryBufferMemory(
+    llm=llm,
+    max_token_limit=2000,  # Quand ça dépasse, résumer automatiquement
+    memory_key="chat_history",
+)
+
+# La mémoire gère le résumé + messages récents automatiquement
+```
+
+### Pattern hybride (recommandé)
+
+Combinez trois niveaux :
+
+1. **Court terme** : les 5 derniers messages dans le contexte
+2. **Long terme** : recherche vectorielle des interactions pertinentes
+3. **Profil** : préférences utilisateur en key-value
+
+C'est comme comment vous fonctionnez : vous vous souvenez de la dernière phrase de votre ami (court terme), vous pouvez vous souvenir d'une anecdote qu'il vous a racontée (long terme), et vous savez qu'il préfère le café au thé (profil).
+
+<Callout type="warning" title="Le grand défi : la pertinence">
+Le problème principal de la mémoire long-terme est de retrouver les **bons souvenirs au bon moment**. Trop de souvenirs non-pertinents polluent le contexte, trop peu causent des oublis. Il faut évaluer régulièrement la qualité de ce qu'on retrouve.
+</Callout>
+
+## Bonnes pratiques
+
+1. **Commencer simple** : fenêtre glissante + résumé résout 80% des problèmes
+2. **Mémoire explicite** : préférez laisser l'utilisateur dire "souviens-toi que..." plutôt que mémoriser automatiquement
+3. **Oubli actif** : supprimer les vieux souvenirs deviennent faux ou obsolètes
+4. **Transparence** : l'utilisateur doit pouvoir voir et éditer ce qui est mémorisé
+5. **Évaluation** : testez régulièrement si l'agent retrouve les bonnes infos

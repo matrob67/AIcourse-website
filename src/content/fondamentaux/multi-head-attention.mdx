@@ -1,0 +1,175 @@
+---
+title: "Multi-head attention : pourquoi et comment"
+description: "Plusieurs points de vue simultanés : comprendre pourquoi une tête d'attention ne suffit pas."
+---
+
+## Le problème : une paire de lunettes ne suffit pas
+
+Imaginez que vous portiez **une seule paire de lunettes** pour lire un texte. Ces lunettes vous montrent un aspect du sens : peut-être la grammaire, peut-être la sémantique, peut-être juste la structure.
+
+C'est insuffisant. Prenez "Je vais à la banque" :
+- Grammaticalement : "vais" est verbe, "banque" est complément
+- Sémantiquement : "banque" = institution financière (pas rivière)
+- Positionnellement : "banque" est à la fin de la phrase
+
+Une seule tête d'attention capture qu'**un seul** de ces patterns. Mais le langage est multifacette. Il faut tous les voir.
+
+Solution : **multi-head attention**. Imaginez 8 paires de lunettes spécialisées :
+- Paire 1 : voit les relations sujet-verbe-objet
+- Paire 2 : voit les coréférences (pronoms et leurs antécédents)
+- Paire 3 : voit les relations entre adjectifs et noms
+- Paire 4-8 : autre patterns
+
+Vous regardez avec les 8 paires **simultanément**. À la fin, vous fusionnez les 8 perspectives.
+
+
+
+<Callout type="info" title="Analogie des lunettes">
+C'est exactement ça : 8 paires de lunettes, chacune spécialisée. Un mot reçoit 8 traitements différents en parallèle. Puis vous fusionnez tout en une compréhension riche.
+</Callout>
+
+## Comment ça marche : diviser et régner
+
+Au lieu d'une énorme tête d'attention, vous en créez plusieurs petites. Chacune reçoit une **portion réduite** de la dimension totale.
+
+Transformer original : d_model = 512 (la taille des représentations)
+
+Avec 8 têtes :
+- Chaque tête traite seulement 512 / 8 = **64 dimensions**
+- Mais il y a **8 têtes en parallèle**
+
+```
+Pour chaque tete i (de 1 a 8):
+  Q_i = mot × W_Q_i    (64 dimensions)
+  K_i = mot × W_K_i    (64 dimensions)
+  V_i = mot × W_V_i    (64 dimensions)
+  resultat_i = Attention(Q_i, K_i, V_i)
+```
+
+Puis vous **fusionnez** tous les résultats (concatenation) :
+
+```
+Resultat_final = Fusion(resultat_1, resultat_2, ..., resultat_8) × W_sortie
+```
+
+### Le secret : coût identique
+
+8 têtes × 64 dimensions = même calcul que 1 tête × 512 dimensions.
+
+Vous divisez simplement le travail entre 8 ouvriers au lieu de 1 seul. **Zéro surcoût.** Mais 8 perspectives différentes au lieu d'une.
+
+<Callout type="tip" title="Efficacité remarquable">
+C'est du génie. Vous obtenez 8 fois plus de perspective sans payer 8 fois plus cher en calcul. Juste une réorganisation intelligente.
+</Callout>
+
+
+
+## Ce que chaque tête apprend (vraiment)
+
+Des chercheurs ont visualisé les matrices d'attention de chaque tête. Surprise : elles font vraiment des choses différentes !
+
+**Tête 1** : suit les relations sujet-verbe
+- "chat" regarde "mange"
+- "souris" regarde "mange"
+
+**Tête 2** : suit les coréférences
+- "il" regarde "chat"
+- "son" regarde "chat"
+
+**Tête 3** : attention locale (mots voisins)
+- Chaque mot regarde surtout ses 2-3 voisins
+- Structure de la phrase locale
+
+**Tête 4** : copie (pour traduction)
+- "Paris" regarde "Paris" (copie un token identique)
+- Utile pour noms propres
+
+**Tête 5-8** : patterns mixtes et généraux
+
+### La redondance : une sécurité
+
+Chose fascinante : vous pouvez **supprimer** une tête sans perte catastrophique de performance. Il y a de la redondance. Mais c'est aussi une **sécurité** : si une tête apprend mal, les autres compensent.
+
+## Optimisations modernes : encore plus rapide
+
+L'attention multi-head a un problème à l'inférence (génération) : vous devez garder en mémoire toutes les Keys et Values de tous les tokens précédents (le **KV cache**). Pour 128k tokens × 8 têtes = beaucoup de RAM.
+
+Les modèles récents ont trouvé des raccourcis :
+
+### GQA : Grouped Query Attention
+
+Au lieu que chaque tête ait ses propres K et V, les têtes partagent K et V par groupes.
+
+Exemple : 8 têtes, mais seulement 2 K/V partagés :
+- Têtes 1-4 partagent les mêmes K, V
+- Têtes 5-8 partagent les mêmes K, V
+
+Résultat : **KV cache 4 fois plus petit**. Économies énormes en inférence.
+
+```
+Modeles: LLaMA 2/3, Mistral, Gemma, Qwen
+```
+
+### MQA : Multi-Query Attention
+
+Cas extrême : **toutes les têtes partagent les mêmes K et V**. Une seule copie pour tout.
+
+Résultat : **KV cache 8 fois plus petit**. Ultra-rapide. Légère baisse de performance.
+
+```
+Modeles: PaLM, Falcon
+```
+
+### Comparaison
+
+| Variante | K/V par tete | Mémoire | Performance |
+|---|---|---|---|
+| MHA (original) | 1 par tete | Beaucoup | Excellent |
+| GQA | Partagé par groupe | 4x moins | Excellent |
+| MQA | Partagé global | 8x moins | Bon |
+
+GQA est le **meilleur compromis** : presque pas de baisse de performance, énorme économie de mémoire.
+
+## Code simplifié (pseudo-Python)
+
+```python
+class MultiHeadAttention:
+    def __init__(self, d_model, num_heads):
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+
+        self.W_Q = Linear(d_model, d_model)
+        self.W_K = Linear(d_model, d_model)
+        self.W_V = Linear(d_model, d_model)
+        self.W_O = Linear(d_model, d_model)
+
+    def forward(self, x):
+        # Projections et reshape
+        Q = self.W_Q(x).reshape(batch, seq, self.num_heads, self.d_k)
+        K = self.W_K(x).reshape(batch, seq, self.num_heads, self.d_k)
+        V = self.W_V(x).reshape(batch, seq, self.num_heads, self.d_k)
+
+        # Attention par tête
+        scores = (Q @ K.transpose(-1, -2)) / sqrt(self.d_k)
+        weights = softmax(scores, dim=-1)
+        output = weights @ V
+
+        # Concaténer et projeter
+        output = output.reshape(batch, seq, d_model)
+        return self.W_O(output)
+```
+
+## Pourquoi c'est important
+
+Multi-head attention est le secret derrière la compréhension du langage du Transformer. Sans elle, le modèle serait aveugle à la plupart des structures linguistiques. Avec elle, il capture la grammaire, la sémantique, les relations à distance, tout en parallèle.
+
+C'est aussi un exemple de **design élégant en IA** : vous n'ajoutez pas de complexité, vous divisez simplement le travail différemment. Zéro surcoût, 8 fois plus de perspective.
+
+## Les points clés à retenir
+
+1. **Plusieurs têtes** = plusieurs perspectives en parallèle
+2. Chaque tête a ses **propres matrices W_Q, W_K, W_V**
+3. Les sorties sont **fusionnées** et reprojetées
+4. **Coût identique** à une seule tête (juste réorganisé)
+5. Les têtes apprennent **grammaire, sémantique, position, coréférence**
+6. **GQA** est l'optimisation moderne standard (LLaMA, Mistral)

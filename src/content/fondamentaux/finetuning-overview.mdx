@@ -1,0 +1,123 @@
+---
+title: "Full fine-tuning vs parameter-efficient"
+description: "Quand utiliser le full fine-tuning ou les méthodes PEFT (LoRA, QLoRA, adapters) : coûts, performances et cas d'usage."
+---
+
+## Le modèle de base, c'est un génie inutilisable
+
+Après le pré-entraînement, vous avez un modèle extraordinaire... qui ne sait pas répondre à vos questions. Posez-lui "Quelle est la capitale de l'Allemagne ?", et au lieu de dire "Berlin", il risque de continuer avec "Quelle est la capitale de l'Italie ? Quelle est la capitale de l'Espagne ?" — parce que dans ses données d'entraînement, les questions étaient souvent suivies d'autres questions.
+
+Le modèle de base est un *compléteur de texte*, pas un *assistant*. Le **fine-tuning** (ajustement fin), c'est le processus qui le transforme en outil utile.
+
+Il existe deux grandes familles : le **full fine-tuning** (on retouche tout le modèle) et les méthodes **parameter-efficient** comme LoRA (on n'en retouche qu'une infime fraction). Ce choix a des conséquences énormes sur le coût, les ressources nécessaires et les performances.
+
+
+
+
+
+## Full fine-tuning : la chirurgie lourde
+
+### Le principe
+
+On reprend le modèle pré-entraîné et on continue l'entraînement sur des données spécialisées. **Chaque paramètre** du modèle peut être modifié. C'est l'équivalent de rééduquer quelqu'un complètement — chaque neurone peut changer.
+
+### Le coût réel — et c'est là que ca fait mal
+
+Pour fine-tuner un modèle de 7 milliards de paramètres avec l'optimiseur AdamW, il faut stocker en mémoire GPU :
+
+```
+Poids du modèle     : ~14 Go  (en FP16)
+Gradients           : ~14 Go  (autant que les poids)
+Etats de l'optimiseur: ~28 Go  (AdamW garde 2 moments en FP32)
+Activations         : ~20-50 Go (selon la longueur de séquence)
+---
+Total               : ~70-100 Go de VRAM minimum
+```
+
+Un modèle de 70 milliards ? Multipliez par 10 : il vous faut un cluster de GPU haut de gamme et plusieurs centaines de milliers d'euros de matériel.
+
+<Callout type="warning" title="Le catastrophic forgetting">
+Autre danger du full fine-tuning : en spécialisant le modèle sur une tâche, on peut lui faire "oublier" des capacités apprises pendant le pré-entraînement. C'est le **catastrophic forgetting**. Un modèle fine-tuné uniquement sur du code médical peut devenir incapable de rédiger un email professionnel. La solution : mélanger les données de fine-tuning avec une fraction de données de pré-entraînement, et utiliser un learning rate très faible.
+</Callout>
+
+## LoRA : le génie de l'adaptation minimaliste
+
+### Une observation surprenante
+
+Des chercheurs de Microsoft ont remarqué quelque chose en 2021 : quand on adapte un modèle pré-entraîné à une nouvelle tâche, les changements de poids qui en résultent ont une structure particulière — ils sont de **faible rang** (low-rank). En d'autres termes, les modifications nécessaires vivent dans un sous-espace de très petite dimension.
+
+Alors pourquoi modifier les milliards de paramètres originaux si l'adaptation réelle ne touche qu'un tout petit coin de l'espace des paramètres ?
+
+### La solution LoRA
+
+**LoRA** (Low-Rank Adaptation) ne touche pas les poids originaux W. À la place, on leur ajoute une "correction" de faible rang :
+
+```
+W_nouveau = W_original + B × A
+
+W_original : matrice (d × d) -- GELÉE, jamais modifiée
+B           : matrice (d × r) -- apprise
+A           : matrice (r × d) -- apprise
+r           : rang, typiquement 8, 16, ou 64 (bien plus petit que d)
+```
+
+On entraîne uniquement les matrices A et B. Les poids originaux restent intacts. Si d = 4 096 et r = 16, au lieu de modifier 4 096 x 4 096 = 16,7 millions de paramètres par matrice, on n'en entraîne que 2 x 4 096 x 16 = 131 072 — soit **128 fois moins**.
+
+<Callout type="paper" title="Pourquoi ca marche vraiment ?">
+L'intuition : l'adaptation d'un modèle pré-entraîné à une nouvelle tâche n'est pas un changement radical — c'est un léger recadrage d'un modèle déjà très capable. Ce "léger recadrage" vit effectivement dans un sous-espace de faible dimension. En pratique, LoRA avec r=16 atteint **95 a 99%** des performances du full fine-tuning en n'entraînant que 0,1 a 1% des paramètres.
+</Callout>
+
+### Les avantages concrets
+
+- **Mémoire** : on ne garde pas d'états d'optimiseur pour les poids gelés — gain massif
+- **Portabilité** : l'adaptateur LoRA (les matrices A et B) pèse quelques dizaines de Mo, pas des centaines de Go
+- **Modularité** : un seul modèle de base peut avoir 10 adaptateurs LoRA différents — un pour chaque client, chaque langue, chaque tâche
+- **Inférence gratuite** : on peut fusionner les matrices (W + B*A) avant déploiement, zéro surcoût en production
+
+## QLoRA : fine-tuner un 70B sur un seul GPU
+
+**QLoRA** pousse LoRA encore plus loin en combinant deux techniques :
+1. Le modèle de base est **quantifié** en 4 bits (au lieu de 16) — ca prend 4 fois moins de place
+2. Les adaptateurs LoRA sont entraînés en précision normale (BF16)
+
+Résultat bluffant :
+
+| Modèle | Full fine-tuning (VRAM) | LoRA (VRAM) | QLoRA (VRAM) |
+|---|---|---|---|
+| 7 milliards params | ~80 Go | ~16 Go | ~6 Go |
+| 70 milliards params | ~800 Go | ~160 Go | ~48 Go |
+
+<Callout type="tip" title="QLoRA a démocratisé l'alignement">
+Avec une NVIDIA RTX 4090 (24 Go, environ 1 500 euros), vous pouvez fine-tuner un modèle de 7-13 milliards de paramètres. Avec une A100 (80 Go), vous atteignez les 70 milliards. Ce qui nécessitait un cluster à 1 million d'euros il y a 2 ans est maintenant accessible à un étudiant avec une bonne carte graphique.
+</Callout>
+
+## Les autres méthodes PEFT en bref
+
+**Adapters** (Houlsby et al., 2019) : on insère de petits modules entre les couches du Transformer. Historiquement antérieurs a LoRA, mais ajoutent une légère latence à l'inférence car ils modifient l'architecture.
+
+**Prefix Tuning** : on apprend de faux "tokens virtuels" placés au début du contexte. Très léger, mais moins performant que LoRA en général.
+
+**Prompt Tuning** : encore plus minimal — on n'apprend que les embeddings de quelques tokens ajoutés à l'entrée. Fonctionne surtout pour les très grands modèles.
+
+## Comment choisir ?
+
+| Critère | Full fine-tuning | LoRA | QLoRA |
+|---|---|---|---|
+| Paramètres modifiés | 100% | 0,1-1% | 0,1-1% |
+| VRAM (modèle 7B) | ~80 Go | ~16 Go | ~6 Go |
+| Performance relative | Référence (100%) | 95-99% | 93-97% |
+| Portabilité | Modèle complet (14 Go) | Adaptateur (50 Mo) | Adaptateur (50 Mo) |
+
+**Choisissez le full fine-tuning si :**
+vous êtes un laboratoire avec des clusters de GPU, vous construisez un modèle de fondation pour un domaine très spécialisé (médical, juridique, code propriétaire), et vous avez des centaines de milliers d'exemples d'entraînement.
+
+**Choisissez LoRA/QLoRA si :**
+vous adaptez un modèle existant à un cas d'usage spécifique, vos ressources sont limitées, vous avez besoin d'itérer rapidement, ou vous avez plusieurs adaptateurs pour plusieurs tâches différentes.
+
+<Callout type="info" title="Ce que fait l'industrie en pratique">
+La grande majorité des fine-tunings dans l'industrie utilisent LoRA ou QLoRA. Le full fine-tuning est réservé aux acteurs majeurs (OpenAI, Google, Meta, Anthropic, Mistral) pour leurs modèles principaux. Pour tout cas d'usage spécifique, les méthodes PEFT sont devenues la norme absolue.
+</Callout>
+
+## Et ensuite ?
+
+Choisir entre full fine-tuning et LoRA n'est que la première décision. La vraie question c'est : *sur quoi* fine-tuner ? Apprendre à suivre des instructions, c'est le SFT. Apprendre à avoir les bonnes valeurs et à être utile sans être dangereux, c'est l'**alignement** — via RLHF, DPO et leurs variantes. C'est ce qu'on explore dans les sections suivantes.

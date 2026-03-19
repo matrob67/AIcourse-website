@@ -1,0 +1,120 @@
+---
+title: "SqueezeLLM et la quantification ultraprofonde"
+description: "Compresser à 2-3 bits en gérant intelligemment les valeurs extrêmes."
+---
+
+
+
+## Le problème des outliers
+
+Les LLM ont un secret épineux : **certains canaux sont 100 à 1000× plus grands que la moyenne**. Ces outliers rendent la quantification normale très inefficace. Imaginez quantifier une photo où 99% des pixels sont sombres et 1% explosent en blanc éblouissant. Vous gaspillez la moitié de votre palette de couleurs sur ces quelques pixels blancs.
+
+<Callout type="info" title="Les outliers tuent la quantification">
+Dans LLaMA-7B, seulement 0.1% des canaux sont outliers, mais ils occupent **75% de la plage dynamique**. Une quantification INT4 uniforme = 8 niveaux pour les outliers, 8 pour tout le reste. Horrible.
+</Callout>
+
+## SqueezeLLM : la solution
+
+### Idée 1 : Quantification non uniforme
+
+Au lieu d'espacer les niveaux de quantification uniformément (0, 1, 2, ..., 15 pour INT4), placez-les **là où les poids réels se concentrent** :
+
+```
+Poids réels : [−0.1, −0.05, 0.0, 0.05, 0.1, 0.5, 5.0]
+           ↓
+Quantification uniforme: 0,1,2,3,4,5,15 (gaspille 8 niveaux)
+Quantification smart: 1,2,3,4,5,6,15 (utilise chaque niveau)
+```
+
+Utilisez **k-means clustering** pour placer les niveaux optimalement.
+
+### Idée 2 : Storage sparse des outliers
+
+Les outliers sont extrait et stockés séparément en **haute précision (FP16)** dans un format sparse (CSR - format matrice creuse). Le reste en INT3/INT4.
+
+```
+Résultat = MatMul dense (poids quantifiés) + MatMul sparse (outliers)
+```
+
+C'est comme avoir deux canaux : un pour la majorité, un pour les exceptions.
+
+<Callout type="paper" title="Résultats">
+SqueezeLLM 3-bit atteint une **perplexité comparable à GPTQ 4-bit** en étant plus compact. À 2-bit, c'est imbattable pour la compression.
+</Callout>
+
+## Autres techniques avancées
+
+### QuIP : éliminer les outliers par chaos
+
+**QuIP** applique une transformation mathématique random (matrices orthogonales) pour rendre les poids "incohérents" et uniformément distribués. Fini les outliers.
+
+- **QuIP#** améliore avec des matrices de Hadamard (rapides)
+- Résultats impressionnants à **2-bit**
+- Léger surcoût computationnel compensé par kernels optimisés
+
+### AQLM : quantification additive
+
+Au lieu de représenter un poids par un nombre, utilisez la **somme de vecteurs** tirés de codebooks appris :
+
+```
+Poids ≈ Codebook_1[idx1] + Codebook_2[idx2] + Codebook_3[idx3]
+```
+
+Particularité : excellent à **2-bit**, les meilleurs résultats à compression extrême.
+
+### HQQ : sans données de calibration
+
+HQQ fait de la quantification **zero-shot** : pas besoin de dataset de calibration, le modèle se quantifie tout seul avec des formules mathématiques rapides.
+
+```
+Temps quantification: quelques secondes vs heures pour GPTQ
+Qualité: comparable à GPTQ/AWQ
+```
+
+<Callout type="tip" title="HQQ pour la rapidité">
+Si vous avez besoin d'une quantification rapide sans dataset de calibration, HQQ est votre ami. 7B en quelques secondes. Pas parfait mais très pratique.
+</Callout>
+
+## Quantification FP8 (le futur)
+
+Sur GPU H100/L40S (2023+), le format **FP8** (8-bit flottant) est supporté nativement :
+
+- **Quasi lossless** (perte < 0.1%)
+- **2× plus rapide** que FP16
+- **Aucune calibration**
+- Supporté par vLLM, TensorRT-LLM
+
+C'est le format "magique" qui compresse un peu sans presque rien perdre.
+
+## Comparaison : quelle méthode choisir ?
+
+| Méthode | Bits | Vitesse quantif | Qualité | Support |
+|---|---|---|---|---|
+| RTN | 4-8 | Instant | Moyenne | Universel |
+| GPTQ | 3-4 | Heures | Bonne | GPU |
+| AWQ | 4 | Minutes | Très bonne | GPU |
+| HQQ | 2-4 | Secondes | Bonne | GPU |
+| QuIP# | 2-4 | Minutes | Excellente | GPU custom |
+| AQLM | 2-3 | Heures | Meilleure | GPU |
+| GGUF | 2-8 | Minutes | Bonne | CPU+GPU |
+
+<Callout type="warning" title="2-bit : encore instable">
+La quantification 2-bit est glamour en recherche mais instable en prod. Pour les tâches difficiles (math, code), 4-bit reste le standard sûr. Testez toujours votre cas spécifique.
+</Callout>
+
+## Tendances émergentes
+
+### Quantification mixte (mixed-precision)
+
+Différentes précisions selon les couches :
+- Couches critiques (début, fin) : Q5/Q6
+- Couches milieu : Q4
+- Couches non critiques : Q3
+
+### Quantification aware training
+
+Entraîner le modèle **en tenant compte** de la quantification future. BitNet (modèles 1-bit) en sont l'exemple extrême.
+
+### On-device quantification
+
+Formats comme CoreML et TFLite permettent de quantifier directement sur mobile/edge, sans dépendre du cloud.

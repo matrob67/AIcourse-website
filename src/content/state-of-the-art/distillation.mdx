@@ -1,0 +1,64 @@
+---
+title: "Distillation de modèles"
+description: "La distillation de connaissances transfère le savoir d'un grand modèle teacher vers un petit modèle student, permettant des modèles compacts et rapides avec des performances préservées."
+---
+
+## Le problème : un gros modèle c'est lent
+
+Imaginez un expert très compétent (mais lent) qui doit transmettre ses connaissances à un apprenti. L'expert ne peut pas faire un clone de lui-même en miniature — mais il peut **montrer son raisonnement** et laisser l'apprenti apprendre en l'imitant. C'est exactement la distillation.
+
+Vous avez un modèle GPT-4 merveilleux qui pense à 100%, mais il coûte cher et met 2 secondes par réponse. Le RAG avancé demande des réponses rapides. Solution : créer un **petit modèle** qui apprend du grand.
+
+<ArxivLink id="1503.02531" title="Distilling the Knowledge in a Neural Network (Hinton et al., 2015)" />
+
+<Callout type="info" title="Les probabilités cachées du modèle">
+Un modèle ne produit pas juste un label : il donne des **probabilités pour chaque classe**. Un modèle qui classe une image de chat donne peut-être : chat 90%, tigre 7%, lion 2%. Ces petites probabilités contiennent de l'**or pédagogique** — elles disent "chat ressemble à tigre" — que les labels durs (juste "chat") ne capturent pas.
+</Callout>
+
+## Comment ça marche : la température magique
+
+La distillation combine deux signaux :
+
+```
+Loss = alpha × Cross-entropy(vraie réponse, réponse student)
+     + (1 - alpha) × KL(distributions teacher et student)
+```
+
+Le **truc magique** : la **température T**. Avec T=1 (normal), le modèle sort cat: 0.90, tiger: 0.07. Avec T=4, il sortait cat: 0.73, tiger: 0.18. Les petites probabilités deviennent visibles — c'est comme passer des lunettes à infrarouge pour voir la chaleur cachée.
+
+<Callout type="tip" title="Température optimale en pratique">
+T=3 marche presque toujours. Trop bas (T=1) : pas de signal. Trop haut (T=10) : tout devient flou. Testez sur vos données.
+</Callout>
+
+
+
+
+## Pour les gros modèles de langage (LLM)
+
+Avec les LLM, deux approches cohabitent :
+
+### Approche 1 : Copier les réponses (black-box)
+Vous ne pouvez accéder au modèle propriétaire que via une API ? Pas grave. Posez-lui 100K questions, récupérez ses réponses, et fine-tunez le petit modèle dessus comme du supervised learning classique. **Alpaca** et **Vicuña** fonctionnent ainsi. Le gros modèle reste une boîte noire.
+
+### Approche 2 : Imiter les logits (white-box)
+Si vous avez accès au code source, vous pouvez faire mieux : comparez directement les distributions token par token. C'est plus efficace mais demande le code.
+
+<Callout type="paper" title="Attention : perte d'intelligence">
+Des études montrent que copier les réponses copie le **style** mais pas la **profondeur du raisonnement**. Orca contourne ça en forçant le modèle enseignant à générer du chain-of-thought. Le petit modèle apprend le **processus**, pas juste la réponse.
+</Callout>
+
+## En pratique
+
+Pour un 7B → 3B :
+- Taille du dataset de distillation : 100K-500K exemples
+- Temps d'entraînement : quelques heures
+- Perte de qualité : ~10-20% selon la complexité
+- Gain de vitesse : 2-3×
+
+Vous pouvez aussi combiner distillation + quantification pour compresser 8× : GPT-4 → Mistral-7B (distillé) → Mistral-4-bit = 8× plus léger, 70% de la qualité.
+
+<Callout type="warning" title="Avant de distiller depuis une API">
+OpenAI interdit contractuellement d'utiliser ses sorties pour entraîner des modèles concurrents. Vérifiez vos termes. Les modèles open-source type LLaMA : c'est OK.
+</Callout>
+
+La distillation n'est pas une solution miracle mais un **compromis intelligent** : vous perdez 10-20% de qualité pour gagner 3× en vitesse. Pour le RAG, c'est souvent un bon deal.

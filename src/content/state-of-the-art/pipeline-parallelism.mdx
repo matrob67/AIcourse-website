@@ -1,0 +1,79 @@
+---
+title: "Pipeline Parallelism"
+description: "Étude du Pipeline Parallelism, la technique qui distribue les couches d'un modèle entre GPU en stages et utilise le micro-batching pour minimiser les temps morts."
+---
+
+
+
+## Le problème : ton GPU attend l'autre
+
+Imagine une usine de fabrication. Tu as 8 machines en ligne pour fabriquer un produit. Si la première machine reçoit une pièce, elle la traite pendant 10 secondes. Ensuite, elle la passe à la deuxième. Pendant ce temps, les machines 3 à 8 sont complètement inactives—elles attendent que la pièce arrive jusqu'à elles. C'est du gaspillage.
+
+C'est exactement ce qui se passe quand tu essaies d'entraîner un énorme modèle sur plusieurs GPU : si tu mets les couches d'attention sur le GPU 1 et les couches MLP sur le GPU 2, pendant que le GPU 1 traite les données, le GPU 2 dort.
+
+Le Pipeline Parallelism résout ce problème : au lieu de traiter un batch à la fois, tu divises le batch en 4, 8 ou 16 micro-batches et les fais circuler dans le pipeline en continu. Pendant que la machine 1 traite le micro-batch 2, la machine 2 travaille sur le micro-batch 1, la machine 3 sur le micro-batch 0... tout le monde est occupé.
+
+## Comment ça marche en détail
+
+### Distribution des couches
+
+Pour un modèle avec N couches et P stages (GPU), chaque stage gère environ N/P couches consécutives. Par exemple, avec 96 couches et 8 GPU :
+- GPU 0 : couches 0-11
+- GPU 1 : couches 12-23
+- ...
+- GPU 7 : couches 84-95
+
+Chaque GPU n'a besoin que de stocker les paramètres de ses propres couches. Ça divise la mémoire nécessaire par 8.
+
+### Le problème de la bulle
+
+Même avec le pipeline, il y a un moment inutile appelé la "bulle". À l'itération 0, seul le GPU 0 travaille. À l'itération 1, seulement GPU 0 et 1. Ce n'est qu'à l'itération 7 (si tu as 8 GPU) que tout le pipeline est rempli. Cette période initiale est du temps perdu.
+
+<Callout type="warning" title="Pourquoi la bulle te coûte cher">
+Avec 8 GPU, la bulle représente les 7 premières itérations où tu n'as pas utilisé tous les GPU. Si tu entraînes sur 1000 itérations, c'est 7/1000 = 0.7% de temps perdu. Mais si tu entraînes sur 100 itérations avec beaucoup de micro-batches, ça peut être plus. C'est un calcul direct : (nombre de GPU - 1) / (nombre de micro-batches + nombre de GPU - 1).
+</Callout>
+
+## Les deux stratégies principales
+
+### GPipe : simple mais consomme beaucoup de mémoire
+
+GPipe c'est straightforward : tu fais d'abord tous les forward passes de tes micro-batches, puis tous les backward passes.
+
+**Avantage** : simple à implémenter.
+**Inconvénient** : tu dois garder en mémoire toutes les activations de tous les micro-batches pendant la phase de forward. Si tu as 16 micro-batches, c'est 16 fois plus de mémoire.
+
+<Callout type="info" title="Mémoire avec GPipe">
+Avec 16 micro-batches et un contexte de 4096 tokens, tes activations peuvent facilement prendre 100 GB. C'est énorme.
+</Callout>
+
+### 1F1B : alterne forward et backward pour économiser la mémoire
+
+1F1B signifie "One Forward, One Backward". L'idée : fais un forward, puis immédiatement un backward (sur un micro-batch différent), puis relance. Ça signifie que tu libères les activations au fur et à mesure au lieu de les garder toutes.
+
+Résultat : tu stockes en mémoire seulement les activations d'environ P micro-batches à la fois (où P est le nombre de stages), pas toutes les activations de tous les micro-batches. Ça peut te sauver 10x de la mémoire.
+
+### Interleaved 1F1B : réduit encore la bulle
+
+Au lieu de donner à chaque GPU un bloc de couches, tu donnes à chaque GPU plusieurs petits blocs non-contigus. Ça augmente le nombre effectif de stages, ce qui réduit la bulle proportionnellement.
+
+## Combinaison avec d'autres parallélismes
+
+Le Pipeline Parallelism brille quand tu le combines avec :
+
+**Tensor Parallelism (au sein d'un noeud)** : utilise la NVLink ultra-rapide d'NVIDIA pour partitionner chaque couche sur 8 GPU locaux. Le PP distribue ensuite ces groupes entre noeuds via InfiniBand.
+
+**Data Parallelism (répliques)** : multiplie le pipeline complet pour traiter plusieurs copies du même modèle.
+
+Pour un modèle de 175 milliards de paramètres sur 512 GPU (64 noeuds DGX) :
+- Tensor Parallelism = 8 (dans chaque noeud)
+- Pipeline Parallelism = 8 (entre 8 noeuds)
+- Data Parallelism = 8 (8 répliques du pipeline complet)
+- Total : 8 × 8 × 8 = 512 GPU
+
+<Callout type="tip" title="Pourquoi PP fonctionne bien inter-noeud">
+PP n'a besoin que de communications point-à-point : GPU N envoie les activations à GPU N+1. C'est très efficace sur InfiniBand. Le Tensor Parallelism, lui, nécessite des all-reduce fréquents, beaucoup plus coûteux. D'où la division : TP intra-noeud, PP inter-noeud.
+</Callout>
+
+<Callout type="info" title="Résumé">
+Le Pipeline Parallelism distribue les couches d'un modèle sur plusieurs GPU pour éviter que certains n'attendent. La bulle de pipeline est le prix à payer, mais avec assez de micro-batches (M >> nombre de GPU), c'est négligeable. Combiné avec TP et DP, c'est la base du scaling de tous les plus grands LLM (GPT-4, LLaMA, etc.).
+</Callout>

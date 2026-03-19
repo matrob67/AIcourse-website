@@ -1,0 +1,112 @@
+---
+title: "RLHF"
+description: "Reinforcement Learning from Human Feedback : reward model, PPO, préférences humaines et l'approche InstructGPT qui a rendu les LLM utiles."
+---
+
+## Le problème : un génie qui ne sait pas être utile
+
+Imaginez engager le plus grand expert en linguistique du monde pour répondre à vos questions. Mais il a un problème : au lieu de répondre, il continue vos phrases comme s'il écrivait un livre. Vous demandez "Quelle est la capitale de la France ?", et il enchaîne avec "Quelle est la capitale de l'Italie ? Quelle est la capitale de l'Espagne ?"
+
+C'est exactement le modèle de base (base model) après pré-entraînement. Il est brillant pour prédire le prochain token. Il ne sait pas *vous aider*.
+
+En 2022, OpenAI publie **InstructGPT** et présente une solution : le **RLHF** (Reinforcement Learning from Human Feedback — Apprentissage par Renforcement à partir des Retours Humains). C'est la technique qui a transformé GPT-3 en ChatGPT. Et qui a changé l'industrie entière.
+
+<ArxivLink id="2203.02155" title="Training language models to follow instructions with human feedback (Ouyang et al., 2022)" />
+
+
+
+## Le pipeline en trois étapes
+
+### Étape 1 : SFT — montrer par l'exemple
+
+Avant même de parler de renforcement, on fait quelque chose de simple : on **montre au modèle ce qu'on attend de lui**.
+
+Des annotateurs humains — des personnes formées spécifiquement pour ca — rédigent des milliers de dialogues exemplaires. Pour chaque question, ils écrivent la réponse idéale : utile, honnête, bien structurée, qui refuse poliment les demandes dangereuses.
+
+On utilise ces exemples pour faire un fine-tuning supervisé classique, appelé **SFT** (Supervised Fine-Tuning). Le modèle apprend à répondre au lieu de compléter du texte.
+
+<Callout type="info" title="SFT : changer le format, pas les connaissances">
+Un détail important : le SFT ne donne pas de nouvelles connaissances au modèle. Il sait déjà que Paris est la capitale de la France. Il apprend seulement qu'il doit *répondre* à la question, pas enchaîner avec d'autres questions. C'est un changement de comportement, pas d'intelligence.
+</Callout>
+
+Le SFT donne déjà un modèle bien meilleur. Mais il est limité par le nombre d'exemples rédigés par des humains. Pour aller plus loin, il faut un mécanisme qui permet au modèle de s'améliorer à grande échelle.
+
+### Étape 2 : Reward Model — apprendre ce que les humains préfèrent
+
+Comment mesurer automatiquement si une réponse est bonne ? C'est le rôle du **reward model** (modèle de récompense) — un second modèle entraîné à imiter les préférences humaines.
+
+Le processus de création :
+1. On prend un prompt et on fait générer **4 à 9 réponses différentes** au modèle SFT
+2. Des annotateurs humains **classent** ces réponses de la meilleure à la pire
+3. On entraîne un modèle à prédire ce classement
+
+Le reward model apprend une fonction qui prend un prompt et une réponse et retourne un score numérique — une estimation de "à quel point les humains aimeraient cette réponse".
+
+<Callout type="tip" title="Pourquoi classer plutôt que noter ?">
+Donner une note absolue ("cette réponse vaut 7,5/10") est difficile et incohérent entre annotateurs. En revanche, comparer deux réponses ("A est mieux que B") est beaucoup plus naturel et fiable. C'est comme choisir sa pizza préférée dans un menu plutôt que de noter chaque pizza sur 20.
+</Callout>
+
+La loss d'entraînement du reward model est basée sur des comparaisons par paires. Pour chaque paire (réponse préférée `y_w`, réponse rejetée `y_l`) :
+
+```
+L = -log( sigma( r(x, y_w) - r(x, y_l) ) )
+```
+
+Le modèle est pénalisé quand il donne un score plus élevé à la mauvaise réponse.
+
+
+
+### Étape 3 : PPO — s'améliorer grâce aux récompenses
+
+La troisième étape utilise le **PPO** (Proximal Policy Optimization), un algorithme de reinforcement learning. L'idée : utiliser le reward model comme "jury automatique" pour entraîner le LLM à produire de meilleures réponses.
+
+Pour chaque étape d'entraînement :
+1. On tire un prompt au hasard du dataset
+2. Le modèle génère une réponse
+3. Le reward model attribue un score
+4. Le score sert à calculer un gradient qui pousse le modèle à faire plus de réponses similaires (si le score est haut) ou moins (si le score est bas)
+
+Mais il y a un piège. Sans garde-fou, le modèle apprend à "tricher" : il découvre que les réponses longues et confiantes obtiennent des scores élevés... et il commence à produire des réponses longues et confiantes même quand elles sont fausses. C'est le **reward hacking**.
+
+La solution : une **pénalité KL** qui empêche le modèle de trop s'éloigner du modèle SFT original :
+
+```
+Recompense_totale = r(x, y) - beta * KL( pi_RL || pi_SFT )
+```
+
+Le paramètre `beta` règle l'équilibre : trop grand, le modèle ne s'améliore pas ; trop petit, le reward hacking revient.
+
+<Callout type="paper" title="Le résultat choc d'InstructGPT">
+OpenAI a montré que le RLHF pouvait rendre un modèle de **1,3 milliard de paramètres** préféré par les humains à un modèle de **175 milliards** sans alignement. Un modèle 130 fois plus petit peut être plus utile si il est bien aligné. C'est la preuve que l'alignement est au moins aussi important que la taille.
+</Callout>
+
+## PPO : l'algorithme sous le capot
+
+PPO maintient quatre modèles en mémoire simultanément — ce qui explique en grande partie pourquoi le RLHF est si coûteux :
+
+1. **Le modèle actuel** (la "politique" qu'on entraîne)
+2. **Le modèle de référence** (le modèle SFT figé, pour calculer la pénalité KL)
+3. **Le reward model** (qui donne les scores)
+4. **Le critic/value model** (qui estime les récompenses futures pour stabiliser l'entraînement)
+
+Le "clipping" de PPO est un mécanisme de sécurité : il limite la taille des mises à jour pour éviter que le modèle ne saute trop loin dans une mauvaise direction.
+
+<Callout type="warning" title="Le RLHF est notoirement difficile à implémenter">
+Demandez à n'importe quel ingénieur ML qui a implémenté PPO pour des LLM : les courbes d'entraînement peuvent s'effondrer sans prévenir, le reward hacking est un problème constant, et les hyperparamètres sont extrêmement sensibles. Il n'est pas rare de passer des semaines à déboguer un pipeline RLHF. C'est une des raisons majeures pour lesquelles le DPO (section suivante) a été accueilli avec enthousiasme.
+</Callout>
+
+## Les défis du RLHF en pratique
+
+**Reward hacking** : le modèle optimise le proxy (le reward model) plutôt que l'objectif réel (être utile). Il apprend les biais des annotateurs et des artefacts du reward model.
+
+**Qualité des annotations** : les annotateurs humains ont des biais, des angles morts, et sont incohérents entre eux. Des études montrent que les préférences humaines varient significativement selon la culture, l'éducation, et même l'humeur du moment.
+
+**Instabilité** : PPO avec des LLM est fragile. Les divergences KL peuvent exploser, les récompenses s'effondrer, le modèle dégénérer en texte répétitif. Monitoring constant requis.
+
+**Coût** : annotateurs humains qualifiés (lents et chers) + quatre modèles en mémoire + nombreuses itérations = budget conséquent, accessible seulement aux grands laboratoires.
+
+## L'héritage : une révolution malgré tout
+
+Malgré ces difficultés, le RLHF a été un tournant historique. ChatGPT, Claude, Gemini — tous les assistants IA modernes utilisent une forme d'alignement dérivée du RLHF. Il a prouvé que rendre un LLM utile et sûr est possible et essentiel.
+
+Ses limitations ont aussi motivé une vague d'innovation. Le **DPO** élimine le reward model et le RL. Le **Constitutional AI** réduit la dépendance aux annotations humaines. **ORPO** et **KTO** simplifient encore davantage. Ce sont ces alternatives qu'on explore dans les sections suivantes.

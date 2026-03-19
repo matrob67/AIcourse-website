@@ -1,0 +1,102 @@
+---
+title: "FSDP : Fully Sharded Data Parallel"
+description: "Guide sur FSDP (Fully Sharded Data Parallel), l'implémentation native PyTorch du partitionnement complet des paramètres, gradients et états d'optimiseur pour l'entraînement distribué."
+---
+
+## Le concept : partitionner le modèle entre GPU
+
+FSDP est la réponse de PyTorch à ZeRO. Au lieu de donner à chaque GPU une copie complète du modèle, FSDP divise le modèle en 64 (ou 8, ou 128) fragments. Chaque GPU gère un fragment.
+
+Quand un GPU a besoin de toutes les couches pour faire un calcul, il demande les fragments des autres GPU, les rassemble temporairement (all-gather), calcule, puis libère la mémoire.
+
+C'est simple en théorie, subtil en pratique.
+
+## Le cycle de vie des paramètres en FSDP
+
+Pour chaque unité FSDP (un groupe de couches) :
+
+1. **All-gather** : reconstitue les paramètres complets depuis tous les GPU
+2. **Forward** : calcule avec les paramètres complets
+3. **Libère** : les paramètres non-locaux sont effacés de la mémoire
+4. **All-gather** (à nouveau) : pour le backward
+5. **Backward** : calcule les gradients
+6. **Reduce-scatter** : réduit les gradients et distribue, chaque GPU garde sa fraction
+7. **Libère** : les paramètres de nouveau effacés
+
+<Callout type="info" title="Mémoire à l'usage de pointe">
+Pendant le forward d'une unité FSDP, les paramètres complets de cette unité sont temporairement en mémoire. La mémoire maximale = (paramètres locaux × 64) + (paramètres complets d'une unité) + activations. Le choix de la granularité affecte ce compromis.
+</Callout>
+
+
+
+## Configuration : wrapping policies
+
+FSDP enveloppe (wrap) le modèle pour déterminer quelles parties sont des unités indépendantes.
+
+### Auto wrap
+Wrap automatique basé sur la taille. Tout module avec plus de 1M paramètres devient une unité FSDP.
+
+### Transformer wrap (le plus commun)
+Chaque bloc Transformer (attention + MLP) devient une unité. C'est ce que tu veux pour les LLM.
+
+### Manual wrap
+Contrôle explicite : tu dis exactement ce qui est une unité.
+
+<Callout type="tip" title="Quelle granularité choisir">
+Un wrapping trop fin (par couche linéaire) = trop de communications. Un wrapping trop grossier (modèle entier) = tu dois rassembler tout le modèle en mémoire. Par bloc Transformer c'est le sweet spot : communications amorties sur un bloc entier, mémoire de pointe limitée.
+</Callout>
+
+## Stratégies de sharding
+
+| Stratégie | Équivalent ZeRO | Mémoire | Communication |
+|-----------|-----------------|---------|---------------|
+| `FULL_SHARD` | ZeRO-3 | Minimale | 1.5x |
+| `SHARD_GRAD_OP` | ZeRO-2 | Modérée | 1x |
+| `NO_SHARD` | DDP classique | Maximale | 1x |
+
+### Mixed precision dans FSDP
+
+FSDP gère nativement trois niveaux de précision :
+- **param_dtype** : précision des paramètres (BF16 typique)
+- **reduce_dtype** : précision des communications (BF16 ou FP32)
+- **buffer_dtype** : précision des buffers (LayerNorm, etc.)
+
+## FSDP2 : la version moderne (PyTorch 2.x+)
+
+FSDP2 (dans torch.distributed) apporte des améliorations :
+
+- **Per-parameter sharding** : sharding des paramètres individuels au lieu de modules entiers
+- **Meilleure composabilité** : compatible avec torch.compile et TP
+- **DTensor** : utilise le framework DTensor pour la distribution des tenseurs
+
+<Callout type="paper" title="FSDP2 + torch.compile">
+FSDP2 est conçu pour torch.compile (le compilateur JIT PyTorch). Le compilateur voit le code FSDP comme du code PyTorch standard et peut l'optimiser. Résultat : 10-30% de speedup supplémentaire. C'est magique.
+</Callout>
+
+## Bonnes pratiques pour les LLM
+
+### Activation checkpointing + FSDP
+
+Combine-les toujours. FSDP réduit la mémoire des paramètres, le checkpointing réduit la mémoire des activations. Ensemble, tu peux entraîner des modèles énormes.
+
+### Prefetching
+
+FSDP peut pré-charger les paramètres de la couche suivante pendant que tu calcules la couche actuelle. Ça cache la latence de communication.
+
+### Hybrid Sharding
+
+Sur un cluster multi-noeud : utilise FSDP au sein d'un noeud (bande passante NVLink ultra-rapide), DDP entre noeuds (bande passante InfiniBand plus limitée).
+
+<Callout type="tip" title="Configuration recommandée pour 7-13B">
+FSDP FULL_SHARD avec wrapping par bloc Transformer + mixed precision BF16 + activation checkpointing + prefetching. Ça donne les meilleures performances et la meilleure mémoire. Pour les modèles 70B+, combine FSDP avec Tensor Parallelism.
+</Callout>
+
+## Migrations FSDP1 → FSDP2
+
+<Callout type="warning" title="API incompatible">
+FSDP2 réimagine complètement l'API de FSDP1. FSDP1 use un wrapping manuel, FSDP2 use des policy classes et DTensor. Les migrations ne sont pas triviales. Les nouveaux projets devraient commencer directement avec FSDP2.
+</Callout>
+
+## Résumé
+
+FSDP est la solution standard PyTorch pour l'entraînement distribué à grande échelle. C'est natif, c'est simple, c'est compatible avec l'écosystème (torch.compile, activation checkpointing). Pour la plupart des projets d'entraînement de LLM, c'est le bon choix. Stage 2 (SHARD_GRAD_OP) offre un bon compromis entre mémoire et simplicité.

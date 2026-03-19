@@ -1,0 +1,156 @@
+---
+title: "Model Merging : TIES-Merging"
+description: "TIES-Merging est une technique avancée de fusion de modèles qui résout les conflits de signes entre task vectors, permettant de combiner efficacement les compétences de plusieurs modèles fine-tunés."
+---
+
+
+
+## L'idée folle: fusionner les poids de modèles
+
+Au lieu de fine-tuner un modèle sur 5 tâches (coûteux), vous:
+1. Fine-tunez 5 modèles séparément
+2. Additionnez leurs poids
+3. Vous avez 1 modèle qui fait les 5 tâches
+
+Ça marche? Bizarrement, oui.
+
+<ArxivLink id="2306.01708" title="TIES-Merging: Resolving Interference When Merging Models (Yadav et al., 2023)" />
+
+<Callout type="info" title="Pourquoi ça fonctionne">
+L'hypothèse: le fine-tuning modifie les poids dans des sous-espaces relativement **indépendants** pour chaque tâche. Si les modifications sont assez orthogonales, on peut les superposer.
+</Callout>
+
+## Les task vectors: la base
+
+Un **task vector** c'est simple:
+
+```
+τ = θ_fine_tuned - θ_base
+```
+
+La différence entre poids fine-tunés et poids de base.
+
+Pour combiner N modèles, la version naive: additionnez les task vectors
+
+```
+θ_merged = θ_base + Σ λᵢ × τᵢ
+```
+
+Ça devrait marcher. Ça ne marche pas.
+
+## Le problème: bruit et conflits
+
+Deux problèmes identifiés par TIES:
+
+1. **Paramètres redondants**: beaucoup de modifications sont minuscules, juste du bruit
+2. **Conflits de signes**: pour un même paramètre, un modèle veut l'augmenter, un autre le diminuer
+
+## TIES-Merging en trois étapes
+
+### Étape 1: Trim (Élagage)
+
+Éliminez les petits changements. Gardez seulement les top-k% les plus importants (typiquement 20%):
+
+Pour chaque task vector, si |τᵢ| < seuil, mettez à zéro.
+
+Résultat: vous concentrez sur les modifications significatives.
+
+### Étape 2: Elect Sign (Résolution des conflits)
+
+Pour chaque paramètre, déterminez le "signe majoritaire":
+
+Si 3 modèles augmentent et 1 diminue, les 3 gagnent. Le modèle qui diverge est mis à zéro pour ce paramètre.
+
+<Callout type="paper" title="Intuition">
+Un paramètre augmenté par 3 modèles et diminué par 1? Probablement doit être augmenté. Les conflits de signes sont LA source de dégradation.
+</Callout>
+
+### Étape 3: Merge (Fusion)
+
+Les task vectors nettoyés sont moyennés et ajoutés aux poids de base:
+
+```
+θ_merged = θ_base + λ × mean_nonzero(τ̃₁, τ̃₂, ..., τ̃ₙ)
+```
+
+Simple.
+
+
+## Résultats: amélioration significative
+
+| Méthode | Accuracy moyenne |
+|---|---|
+| Modèles individuels | 74,2% |
+| Moyenne simple | 60,1% |
+| Task Arithmetic | 64,8% |
+| TIES-Merging | 69,7% |
+
+TIES gagne clairement. La fusion naive est catastrophique.
+
+<Callout type="tip" title="Le paramètre density">
+k = pourcentage de paramètres conservés après trim. k=20% est default. Peut être tuné. Trop bas = perd info. Trop haut = bruit revient.
+</Callout>
+
+## Applications: créer des super-modèles
+
+La communauté open-source adore ça. Le processus:
+
+1. Prenez un modèle fort en raisonnement
+2. Un fort en code
+3. Un fort en conversation
+4. Fusionnez avec TIES
+5. Super-modèle qui fait les trois
+
+C'est comment les meilleurs modèles open-source sur les leaderboards sont construits.
+
+### Fusion de LoRA
+
+TIES peut aussi fusionner des **adapters LoRA**. Au lieu de poids complets, fusionnez les matrices LoRA. Permet d'accumuler des compétences via PEFT sans toucher le modèle de base.
+
+### MergeKit: l'outil
+
+MergeKit (Arcee AI) rend le model merging accessible:
+
+```yaml
+merge_method: ties
+base_model: mistralai/Mistral-7B-v0.1
+parameters:
+  density: 0.2
+  normalize: true
+models:
+  - model: model_code
+    parameters:
+      weight: 1.0
+  - model: model_reasoning
+    parameters:
+      weight: 0.7
+  - model: model_chat
+    parameters:
+      weight: 0.5
+```
+
+Décrivez en YAML, lancez. Fusion automatique.
+
+## Les limitations
+
+### Pas de garantie théorique
+
+Le model merging repose sur des hypothèses empiriques (orthogonalité) qui ne sont pas toujours vraies. Qualité = imprévisible. Doit être évaluée empiriquement.
+
+<Callout type="warning" title="Évaluation indispensable">
+Ne déployez jamais sans tester. Un modèle fusionné peut exceller sur tâche A mais régresser sur tâche B. Testez tout ce qui compte.
+</Callout>
+
+### Même architecture seulement
+
+Fusion possible qu'entre modèles de **même architecture** et généralement du même modèle de base. Pas de fusion Mistral + LLaMA.
+
+## Impact: démocratise le scaling
+
+TIES et le model merging ont transformé l'open-source. Sur le leaderboard Hugging Face, une bonne proportion des meilleurs modèles sont **fusionnés**, pas entraînés from scratch.
+
+Ça signifie: sans GPU massif, vous pouvez créer un modèle compétitif en fusionnant intelligemment des existants.
+
+---
+
+**Essence**: TIES-Merging = fusion de modèles qui résout les conflits. Permet de combiner les compétences de plusieurs modèles en un seul, sans entraînement supplémentaire.

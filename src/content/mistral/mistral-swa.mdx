@@ -1,0 +1,121 @@
+---
+title: "Sliding Window Attention"
+description: "Implémentation détaillée de l'attention à fenêtre glissante dans les modèles Mistral : réduction de la mémoire, rolling buffer KV cache et propagation de l'information."
+---
+
+## Sliding Window Attention : lire JUSTE ce qui compte
+
+Problème: Un transformer classique lit TOUS les tokens précédents. Si tu donnes 100 pages de contexte, il regarde toutes les 100 pages pour CHAQUE token généré. En mémoire: énorme. En vitesse: lent.
+
+Mistral: "Et si on regardait juste la fenêtre locale? Les 10-20 dernières phrases?"
+
+C'est Sliding Window Attention. Plus rapide, moins de mémoire, assez intelligent.
+
+### Le problème du contexte infini
+
+Standard transformer: le token 10000 peut voir les tokens 1-9999. La mémoire (KV cache) croît constamment. 100K tokens = énorme cache.
+
+**Complexité mémoire.** Le cache KV croît linéairement avec la longueur de la séquence. Pour un modèle avec d_model = 4096, 32 couches et des clés/valeurs en fp16, le cache KV pour une séquence de 32K tokens occupe environ 8 Go. Pour 128K tokens, cela monte à environ 32 Go — uniquement pour le cache.
+
+**Complexité de calcul.** Le calcul de l'attention est quadratique en la longueur de la séquence : O(n²). Pour les séquences longues, cela devient le goulot d'étranglement principal.
+
+<Callout type="info" title="Le KV cache en inférence">
+Lors de l'inférence autoregressive (génération token par token), le cache KV stocke les clés et valeurs des tokens déjà générés pour éviter de les recalculer. C'est une optimisation essentielle pour la vitesse d'inférence, mais sa croissance avec la longueur du contexte pose un problème de mémoire.
+</Callout>
+
+
+
+### Principe de la Sliding Window Attention
+
+Avec la SWA, chaque couche d'attention ne regarde que les W derniers tokens au lieu de tous les tokens précédents. W est appelé la taille de la fenêtre (window size).
+
+Pour Mistral 7B, W = 4096. Cela signifie que dans chaque couche, un token à la position t ne peut voir que les tokens des positions max(1, t-W+1) à t.
+
+#### Avantages immédiats
+
+**Mémoire constante.** Le cache KV a maintenant une taille fixe de W tokens par couche, indépendamment de la longueur totale de la séquence. Pour Mistral 7B : le cache KV est limité à ~1 Go au lieu de croître indéfiniment.
+
+**Calcul réduit.** L'attention n'est calculée que sur W tokens au lieu de t tokens, réduisant la complexité de O(n²) à O(n × W).
+
+### Propagation de l'information à travers les couches
+
+La question naturelle est : si chaque couche ne voit que W tokens, comment le modèle peut-il capturer des dépendances sur des séquences bien plus longues que W ?
+
+La réponse réside dans l'empilement des couches. Considérons un modèle avec L couches et une fenêtre de taille W.
+
+- **Couche 1 :** le token à la position t voit les positions [t-W+1, t]
+- **Couche 2 :** le token à la position t voit les représentations de la couche 1 des positions [t-W+1, t], mais ces représentations contiennent elles-mêmes de l'information des positions [t-2W+2, t]
+- **Couche L :** l'information peut théoriquement provenir des positions [t-L×W+L, t]
+
+Pour Mistral 7B : L = 32, W = 4096, donc la portée théorique est de 32 × 4096 = 131 072 tokens. C'est bien supérieur à la fenêtre de contexte officielle de 32K tokens.
+
+<Callout type="tip" title="Portée théorique vs effective">
+La portée théorique (L × W) est un maximum, pas une garantie. En pratique, l'information se dilue à mesure qu'elle traverse les couches. Les dépendances à très longue distance sont plus faibles que les dépendances proches. Néanmoins, des expériences montrent que le modèle capture efficacement des dépendances sur des distances bien supérieures à W.
+</Callout>
+
+### Rolling Buffer KV Cache
+
+L'implémentation du SWA dans Mistral utilise un rolling buffer (buffer circulaire) pour le cache KV, une optimisation élégante qui garantit une utilisation mémoire constante.
+
+#### Fonctionnement
+
+Le cache est un tableau de taille fixe W. Quand un nouveau token est généré à la position t, sa clé et sa valeur sont stockées à l'index t mod W dans le buffer. Quand le buffer est plein, les nouvelles entrées écrasent les plus anciennes.
+
+Par exemple, avec W = 4 (simplifié) :
+
+| Position du token | Index dans le buffer (t mod 4) |
+|-------------------|-------------------------------|
+| 0 | 0 |
+| 1 | 1 |
+| 2 | 2 |
+| 3 | 3 |
+| 4 | 0 (écrase la position 0) |
+| 5 | 1 (écrase la position 1) |
+
+#### Avantages
+
+**Mémoire constante.** Quelle que soit la longueur de la séquence générée (100 tokens ou 100 000), le cache occupe exactement W × d_model × 2 (clés + valeurs) × nombre de couches.
+
+**Pas d'allocation dynamique.** Le buffer est pré-alloué, éliminant les coûts d'allocation mémoire dynamique pendant l'inférence.
+
+**Cache-friendly.** L'accès mémoire est prévisible et localisé, ce qui optimise l'utilisation du cache CPU/GPU.
+
+### Pre-fill et chunking
+
+Pour les longues entrées (prompts de plusieurs milliers de tokens), Mistral implémente un mécanisme de pre-fill optimisé.
+
+**Pre-fill par chunks.** Au lieu de traiter tout le prompt en une seule passe (qui nécessiterait une matrice d'attention de taille prompt × prompt), le prompt est découpé en chunks de taille W. Chaque chunk est traité séquentiellement, et seul le cache des W derniers tokens est conservé.
+
+Ce mécanisme réduit la mémoire pic nécessaire pour le pre-fill et maintient la cohérence avec la SWA.
+
+<Callout type="paper" title="Comparaison avec d'autres techniques">
+La SWA n'est pas la seule approche pour réduire la complexité de l'attention. D'autres techniques incluent : l'attention linéaire (Performer, Linear Transformer), l'attention locale + globale (Longformer, BigBird), l'attention Flash (FlashAttention - optimisation hardware plutôt qu'algorithmique). La SWA se distingue par sa simplicité d'implémentation et son efficacité en pratique.
+</Callout>
+
+### SWA dans les différents modèles Mistral
+
+| Modèle | Fenêtre SWA | Contexte max | Ratio |
+|--------|-------------|-------------|-------|
+| Mistral 7B | 4096 | 32K | 8:1 |
+| Mixtral 8x7B | 4096 | 32K | 8:1 |
+| Mixtral 8x22B | Variable | 64K | - |
+| Mistral NeMo | Adaptatif | 128K | - |
+| Mistral Large 3 | Avancé | 256K | - |
+
+Les modèles plus récents utilisent probablement des variantes plus sophistiquées de la SWA, combinées avec d'autres techniques (attention hiérarchique, attention globale sparse) pour supporter des contextes de 128K et 256K tokens.
+
+### Interaction SWA + GQA
+
+La combinaison de la SWA avec le Grouped-Query Attention (GQA) multiplie les économies de mémoire.
+
+**GQA** réduit le nombre de têtes K/V (par exemple, 8 au lieu de 32), divisant la taille du cache par le ratio de groupement.
+
+**SWA** limite la longueur du cache à W tokens au lieu de la longueur totale de la séquence.
+
+L'effet combiné est multiplicatif. Pour Mistral 7B avec 8 têtes K/V (GQA 4:1) et W = 4096 (SWA), le cache KV est environ 32 fois plus petit qu'avec un MHA standard sur l'intégralité du contexte.
+
+<Callout type="warning" title="Limites de la SWA">
+La SWA implique une perte d'information pour les tokens situés au-delà de la fenêtre dans une couche donnée. Pour les tâches nécessitant une attention fine à des détails très éloignés dans le contexte (par exemple, rappeler un chiffre exact mentionné il y a 10 000 tokens), la SWA peut être moins performante qu'une attention complète. C'est pourquoi les modèles récents combinent probablement la SWA avec des mécanismes d'attention globale sparse.
+</Callout>
+
+La Sliding Window Attention est un exemple parfait de la philosophie Mistral : une innovation technique élégante qui offre un gain pratique majeur (mémoire constante, inférence rapide) avec une implémentation relativement simple.

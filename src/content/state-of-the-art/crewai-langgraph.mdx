@@ -1,0 +1,156 @@
+---
+title: "CrewAI et LangGraph : orchestration d'agents"
+description: "CrewAI simplifie la création d'équipes d'agents par rôles, tandis que LangGraph offre un contrôle granulaire via des graphes d'états. Deux approches complémentaires."
+---
+
+## Deux philosophies : équipe vs graphe
+
+**CrewAI** : métaphore d'équipe. Agents avec rôles, tâches à accomplir, équipe coordonne.
+
+**LangGraph** : graphe d'états. Nœuds = fonctions, arêtes = transitions, état = données partagées.
+
+<Callout type="info" title="Choisir">
+CrewAI si vous voulez prototyper rapidement avec des rôles clairs.
+LangGraph si vous avez besoin d'un contrôle fin du flux.
+</Callout>
+
+## CrewAI : équipe intuitive
+
+Trois abstractions :
+- **Agent** : rôle, objectif, backstory, tools
+- **Task** : tâche spécifique assignée à un agent
+- **Crew** : l'équipe qui orchestre tout
+
+```python
+from crewai import Agent, Task, Crew
+
+researcher = Agent(
+    role="Chercheur",
+    goal="Trouver infos précises",
+    backstory="Expert en recherche doc",
+    tools=[search_tool, scrape_tool],
+)
+
+writer = Agent(
+    role="Rédacteur",
+    goal="Articles clairs et engageants",
+    backstory="Journaliste 10 ans expérience",
+)
+
+research_task = Task(
+    description="Chercher les avancées IA génératives",
+    agent=researcher,
+    expected_output="Résumé structuré des avancées",
+)
+
+writing_task = Task(
+    description="Rédiger article",
+    agent=writer,
+    context=[research_task],  # Dépend de research_task
+    expected_output="Article blog 800 mots",
+)
+
+crew = Crew(
+    agents=[researcher, writer],
+    tasks=[research_task, writing_task]
+)
+result = crew.kickoff()
+```
+
+**Modes** :
+- Sequential : tâches dans l'ordre
+- Hierarchical : manager agent délègue
+
+**Forces** :
+- API intuitive et lisible
+- Métaphore équipe naturelle
+- Intégration facile d'outils
+- Support délégation
+
+## LangGraph : contrôle par graphe
+
+Modélise workflow comme graphe orienté :
+- **State** : état partagé (dict typé)
+- **Nodes** : fonctions qui transforment l'état
+- **Edges** : transitions (conditionnelles ou fixes)
+
+```python
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, List
+
+class RAGState(TypedDict):
+    question: str
+    documents: List[str]
+    answer: str
+    needs_web_search: bool
+
+graph = StateGraph(RAGState)
+
+# Nœuds
+graph.add_node("retrieve", retrieve_from_vectordb)
+graph.add_node("grade", grade_relevance)
+graph.add_node("web_search", search_web)
+graph.add_node("generate", generate_answer)
+
+# Edges
+graph.set_entry_point("retrieve")
+graph.add_edge("retrieve", "grade")
+graph.add_conditional_edges("grade", decide_route, {
+    "relevant": "generate",
+    "not_relevant": "web_search",
+})
+graph.add_edge("web_search", "generate")
+graph.add_edge("generate", END)
+
+app = graph.compile()
+```
+
+**Forces** :
+- Contrôle total
+- Débuggable (visualisation du graphe)
+- Persistance native (checkpointing)
+- Streaming token par token
+- Human-in-the-loop (interruptions)
+
+<Callout type="tip" title="LangGraph pour la production">
+LangGraph offre prévisibilité et contrôle que les frameworks conversationnels ne donnent pas. Graphe = déterministe et testable.
+</Callout>
+
+
+
+## Comparaison directe
+
+| Aspect | CrewAI | LangGraph |
+|---|---|---|
+| Paradigme | Équipe par rôles | Graphe d'états |
+| Abstraction | Haute | Basse |
+| Contrôle flux | Séquentiel/hiérarchique | Graphe arbitraire |
+| Courbe d'apprentissage | Faible | Moyenne |
+| Debugging | Modéré | Excellent (viz) |
+| Persistance | Limitée | Native |
+| Human-in-the-loop | Basique | Avancé |
+| Production-ready | En progression | Oui |
+
+## Quand choisir
+
+**CrewAI idéal pour** :
+- Prototypage rapide multi-agents
+- Cas d'usage avec rôles clairs
+- Équipes peu techniques
+- Recherche → analyse → rédaction
+
+**LangGraph idéal pour** :
+- Workflows complexes avec branchements
+- Production avec SLA de fiabilité
+- Systèmes RAG avancés avec routing
+- Human-in-the-loop intégré
+
+<Callout type="warning" title="Multi-agent coûte cher">
+Quel que soit le framework, multi-agents = moins fiable que single-agent. Moins rapide aussi. Évaluez si un agent unique avec bons outils ne suffirait pas. La complexité organisationnelle a un coût réel.
+</Callout>
+
+## L'évolution
+
+L'écosystème converge : combiner la simplicité de conception de CrewAI avec le contrôle d'exécution de LangGraph. Frameworks nouveaux (Smolagents de Hugging Face) proposent code-first plus léger. Plateformes no-code permettent construire des graphes visuellement.
+
+Le meilleur choix dépend de VOS besoins : simplicité ou contrôle.

@@ -1,0 +1,94 @@
+---
+title: "Évolution des fenêtres de contexte"
+description: "De 32K à 256K tokens : comment Mistral AI a progressivement étendu les fenêtres de contexte de ses modèles grâce à des techniques d'attention innovantes."
+---
+
+## Contexte long : lire des livres entiers
+
+En septembre 2023, Mistral 7B = 32K tokens max (un livre court). En 2025, Mistral Large = **256K tokens** (2-3 livres complets).
+
+La fenêtre de contexte = la limite de ce qu'un modèle peut « lire » d'un coup. Plus elle est large, plus cool les cas d'usage.
+
+### La progression
+
+| Modèle | Date | Contexte | Gain |
+|--------|------|----------|------|
+| Mistral 7B | Sept 2023 | 32K | Ref |
+| Mixtral 8x7B | Déc 2023 | 32K | 1x |
+| Mixtral 8x22B | Avr 2024 | 64K | 2x |
+| Mistral NeMo 12B | Juil 2024 | 128K | 4x |
+| Mistral Large 3 | 2025 | 256K | 8x |
+
+### Pourquoi c'est important
+
+**32K tokens** : un article moyen, un fichier de code petites-moyen. Suffisant pour du chat normal.
+
+**64K tokens** : un rapport complet, un chapitre de livre, un module de code. Commence à vraiment utile.
+
+**128K tokens** : un livre entier. Un projet logiciel complet avec plusieurs fichiers.
+
+**256K tokens** : 2-3 livres. Le codebase entier d'une startup. Context **massif**.
+
+<Callout type="info" title="Contexte long vs RAG">
+Avant : couper doc en chunks, faire du RAG pour finder les bons chunks.
+Maintenant : fit le doc entier en contexte.
+Résultat : architectures plus simples, pas besoin d'hybrid search compliquée.
+</Callout>
+
+
+
+### Les défis techniques
+
+**Complexité O(n²) de l'attention** : l'attention standard a une complexité mémoire en n². Passer de 32K à 256K = multiply la RAM par 64.
+
+Solution : **Sliding Window Attention (SWA)**. Chaque couche d'attention ne regarde que les W tokens récents (W=4096). Mais en empilant 32 couches, l'info remonte de 32×4096 = 131K tokens au total. Clever.
+
+**KV Cache énorme** : le cache clés-valeurs croît linéairement. Pour Mistral Large (675B params) + 256K contexte, ça prend des **dizaines de Go**.
+
+Solutions :
+- **Grouped-Query Attention (GQA)** : réduire le nombre de têtes K/V
+- **Rolling buffer** : cache circulaire, size fixe
+- **KV quantification** : stocker les clés/valeurs en précision réduite
+- **PagedAttention** (vLLM) : compresser le cache
+
+**Positional encoding pour long contexte** : les positions doivent fonctionner jusqu'à 256K tokens. Mistral utilise **RoPE** (Rotary Position Embedding) avec scaling techniques (NTK-aware, YaRN).
+
+**Entraînement sur long sequences** : le modèle doit apprendre à utiliser son contexte. Mistral entraîne progressivement : d'abord 4K, puis 8K, puis 128K, puis 256K.
+
+<Callout type="paper" title="RoPE Scaling">
+RoPE encode les positions via rotations. Pour étendre au-delà de la taille d'entraînement, il faut ajuster les fréquences. Techniques : NTK-aware, YaRN, fine-tuning sur long sequences.
+</Callout>
+
+### Techniques utilisées
+
+**FlashAttention** : implémentation GPU optimisée de l'attention. Pas de changement algorithmique, mais réduit les transferts mémoire (HBM ↔ SRAM). 2-3x plus rapide.
+
+**Hierarchical Attention** : pour ultra-long contexte, combiner attention locale fine (SWA) avec attention globale sparse. Quelques tokens « sentinelles » participent à l'attention globale, permettant des dépendances lointaines.
+
+**Context Compression** : compresser les vieilles parties du contexte (résumé auto, embedding compression) pour economiser la mémoire.
+
+### Évaluation du contexte
+
+Comment vérifier que le modèle utilise **vraiment** son contexte ?
+
+**Needle in a Haystack** : insérer un fait caché quelque part dans un long texte. Le modèle doit le retrouver.
+
+**RULER** : benchmark plus sofistiqué. Teste retrieval multi-hop, agrégation d'info, suivi de variables sur long contexte.
+
+**Lost in the Middle Effect** : recherches montrent que les LLM utilisent mieux l'info au début/fin du contexte, moins au milieu. Mistral intègre des techniques d'entraînement pour combattre ça.
+
+<Callout type="warning" title="Lost in the Middle">
+Même avec 256K contexte, le modèle peut oublier l'info au milieu. Solution : structurez votre contexte (instructions au début, doc au milieu, question à la fin = meilleur que dumper tout).
+</Callout>
+
+### Recommandations pratiques
+
+**Ne pas toujours maximiser le contexte.** 256K tokens = latence + coût. Si vous n'avez besoin que de 4K, utilisez 4K.
+
+**Structurer l'info.** Même avec long contexte, l'organisation aide. Format : system instructions → contexte → question.
+
+**Tester la rétention.** Avant de déployer un app qui exploite 256K contexte, vérifiez que le modèle retient vraiment les infos critiques partout.
+
+---
+
+**Contexte long** = le LLM peut lire des boulots entiers d'un coup. Architectures simplifiées. Nouveau paradigme d'IA.

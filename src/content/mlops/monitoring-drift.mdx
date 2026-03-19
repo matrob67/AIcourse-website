@@ -1,0 +1,141 @@
+---
+title: "Monitoring et Data Drift : quand ça se casse silencieusement"
+description: "Votre modèle dégringole en production et personne ne le remarque. Détectez le data drift avant les utilisateurs."
+---
+
+## Le modèle qui meurt lentement
+
+Vous déployez un modèle excellent. Puis les utilisateurs commencent à se plaindre. Accuracy s'est écroulée. Mais vous ne l'avez pas remarqué parce que vous aviez pas de monitoring.
+
+C'est **data drift** : la distribution des données a changé. Votre modèle a été entraîné sur un monde, maintenant il's dans un monde différent.
+
+Une étude Google : modèles perdent 1-2% de performance par mois en production. Sans réentraînement régulier, chute de 10-20% en un an.
+
+<Callout type="info" title="Apprendre du problème">
+Vous découvrez le problème des utilisateurs, pas de vos métriques. C'est trop tard. Coûts = perte de confiance, revenue, reputation. Détecter le drift **avant** les utilisateurs : critique.
+</Callout>
+
+
+
+## Types de drift
+
+### Data Drift (Covariate Shift)
+
+Le **data drift** (ou covariate shift) désigne un changement dans la distribution des **données d'entrée** (features) entre l'entraînement et la production. La relation entre les features et la cible reste la même, mais les features elles-mêmes changent.
+
+**Exemples** :
+- Un modèle de prix immobilier entraîné sur des données urbaines reçoit des requêtes rurales
+- Les utilisateurs d'un site web changent de démographie au fil du temps
+- Un capteur IoT se décalibre progressivement
+
+### Concept Drift
+
+Le **concept drift** est un changement dans la **relation entre les features et la cible**. Même si les données d'entrée ont la même distribution, la bonne réponse a changé.
+
+**Exemples** :
+- Un modèle de détection de spam : les spammeurs adaptent leurs techniques
+- Un modèle de prédiction de demande : le comportement d'achat change avec les saisons
+- Un modèle de score de crédit : les critères de solvabilité évoluent avec l'économie
+
+<Callout type="paper" title="La distinction cruciale">
+Data drift et concept drift nécessitent des réponses différentes. Le data drift peut souvent être résolu en ré-entraînant sur des données plus récentes. Le concept drift peut nécessiter un changement de features, d'architecture ou même de formulation du problème. Détecter le type de drift est la première étape vers une correction efficace.
+</Callout>
+
+### Prediction Drift
+
+Le **prediction drift** est un changement dans la distribution des **prédictions** du modèle. C'est souvent un symptôme de data drift ou de concept drift. Si un modèle de classification binaire prédit soudainement 70% de positifs au lieu de 50%, quelque chose a changé.
+
+### Label Drift (Prior Probability Shift)
+
+Le **label drift** est un changement dans la distribution de la **variable cible**. Par exemple, la proportion de transactions frauduleuses augmente de 1% à 3%.
+
+## Détection du drift
+
+### Méthodes statistiques
+
+Plusieurs tests statistiques permettent de détecter le drift :
+
+- **Kolmogorov-Smirnov (KS) test** : teste si deux distributions continues sont différentes. Simple et interprétable.
+- **Chi-squared test** : pour les variables catégorielles, teste si les fréquences ont changé.
+- **Population Stability Index (PSI)** : mesure le décalage entre deux distributions. PSI > 0.2 indique un drift significatif.
+- **Jensen-Shannon Divergence** : mesure symétrique de la distance entre distributions.
+- **Wasserstein Distance** : distance "earth mover" entre distributions, sensible aux décalages de localisation.
+
+### Fenêtres de comparaison
+
+Le drift se détecte en comparant deux distributions :
+- **Référence vs Production** : comparer les données de production actuelles avec le dataset d'entraînement
+- **Fenêtre glissante** : comparer la dernière semaine avec la semaine précédente
+- **Page-Hinkley** : test séquentiel qui détecte les changements de moyenne au fil du temps
+
+<Callout type="tip" title="Choisir la bonne fenêtre">
+La taille de la fenêtre de détection est un compromis : une fenêtre trop petite génère des faux positifs (bruit statistique), une fenêtre trop large détecte le drift trop tard. En pratique, comparer des fenêtres quotidiennes ou hebdomadaires avec les données de référence est un bon point de départ.
+</Callout>
+
+## Métriques de monitoring
+
+### Métriques de données
+
+- **Distribution des features** : histogrammes, quantiles, statistiques descriptives
+- **Valeurs manquantes** : pourcentage de nulls par feature
+- **Cardinalité** : nombre de valeurs uniques pour les catégorielles
+- **Corrélations** : matrice de corrélation entre features
+
+### Métriques du modèle
+
+- **Distribution des prédictions** : répartition des scores/classes prédits
+- **Confiance** : distribution des scores de confiance (softmax)
+- **Latence** : temps de réponse du modèle
+- **Throughput** : nombre de prédictions par seconde
+- **Taux d'erreur** : pourcentage de requêtes échouées
+
+### Métriques de performance (quand les labels sont disponibles)
+
+- **Accuracy, Precision, Recall, F1** : métriques de classification
+- **MAE, RMSE** : métriques de régression
+- **AUC-ROC** : discrimination du modèle
+- **Calibration** : les probabilités prédites correspondent-elles aux fréquences réelles ?
+
+<Callout type="warning" title="Le défi des labels retardés">
+En production, les labels (ground truth) ne sont souvent pas disponibles immédiatement. Pour un modèle de prédiction de churn, on ne sait si le client a churné qu'après 30 jours. Pour un modèle de prédiction de défaut de paiement, il faut attendre l'échéance du prêt. Sans labels, on ne peut monitorer que les données d'entrée et les prédictions, pas les performances réelles.
+</Callout>
+
+## Outils de monitoring
+
+### Evidently AI
+
+**Evidently** est une bibliothèque open source Python pour le monitoring ML :
+- Génération de rapports de drift (HTML ou JSON)
+- Tests automatisés de qualité des données et des prédictions
+- Intégration avec des pipelines CI/CD
+- Dashboards via Grafana
+
+### NannyML
+
+**NannyML** se spécialise dans l'estimation des performances **sans labels**. Il utilise des techniques comme le CBPE (Confidence-Based Performance Estimation) pour estimer l'accuracy du modèle à partir des scores de confiance.
+
+### Arize AI
+
+**Arize** est une plateforme SaaS de monitoring ML complète :
+- Détection automatique de drift
+- Root cause analysis des dégradations
+- Embeddings drift pour les modèles NLP/vision
+- Intégration avec les frameworks de serving
+
+### WhyLabs
+
+**WhyLabs** propose un monitoring basé sur le profiling statistique des données :
+- Profils légers des distributions (via la bibliothèque whylogs)
+- Alertes automatiques sur les anomalies
+- Intégration avec les feature stores
+
+## Stratégie de monitoring
+
+Une stratégie de monitoring ML complète comprend :
+
+1. **Baseline** : établir les distributions de référence à partir des données d'entraînement
+2. **Alertes** : configurer des seuils sur les métriques clés (PSI > 0.1, latence > 200ms)
+3. **Dashboards** : visualiser les tendances en temps réel
+4. **Escalade** : procédures claires quand un drift est détecté (ré-entraînement, rollback, investigation)
+5. **Boucle de feedback** : collecter les labels de production pour valider les performances réelles
+6. **Automation** : déclencher automatiquement un ré-entraînement quand le drift dépasse un seuil

@@ -1,0 +1,112 @@
+---
+title: "In-context learning"
+description: "Comment les LLM apprennent de nouveaux patterns à partir d'exemples dans le prompt, les théories explicatives, les limites et le rôle des induction heads."
+---
+
+## Apprendre sans modifier le cerveau
+
+Imaginez quelqu'un qui ne parle pas japonais. Vous lui montrez cinq phrases en japonais avec leur traduction anglaise. Il est capable d'en traduire une sixième — sans avoir jamais appris le japonais, sans cours, sans dictionnaire.
+
+C'est ce que font les grands modèles de langage avec l'**in-context learning** (ICL) — l'apprentissage en contexte. On leur montre quelques exemples dans le prompt, et ils "captent" le pattern et l'appliquent à de nouveaux cas. Sans aucune modification des poids du modèle. Sans aucun entraînement supplémentaire.
+
+
+
+```
+Exemple de prompt ICL :
+
+francais -> anglais
+chat -> cat
+maison -> house
+voiture -> ???
+```
+
+Le modèle répond "car". Il a "appris" la tâche de traduction à partir de trois exemples — uniquement pendant l'inférence.
+
+## La découverte qui a tout changé : GPT-3 en 2020
+
+Avant 2020, adapter un modèle à une nouvelle tâche signifiait toujours la même chose : fine-tuner, c'est-à-dire modifier les poids du modèle sur un dataset spécialisé. Long, coûteux, un modèle différent pour chaque tâche.
+
+En 2020, le paper GPT-3 de Brown et al. montre que ça n'est plus nécessaire — du moins pour les modèles suffisamment grands. GPT-3 peut effectuer des dizaines de tâches NLP sans aucun fine-tuning, en recevant simplement quelques exemples dans le prompt.
+
+Les auteurs définissent trois régimes :
+
+- **Zero-shot** : uniquement une description de la tâche, aucun exemple
+- **One-shot** : un seul exemple
+- **Few-shot** : quelques exemples, typiquement 5 a 32
+
+<Callout type="info" title="Le changement de paradigme">
+Avant l'ICL : un modèle spécialisé par tâche, une semaine de fine-tuning pour chaque nouveau cas d'usage. Après l'ICL : un seul modèle généraliste, 5 exemples dans le prompt, résultat immédiat. La barrière d'entrée pour utiliser un LLM sur une nouvelle tâche est passée de "plusieurs jours de travail" à "quelques minutes de formulation du prompt".
+</Callout>
+
+## Comment ca marche ? Trois théories en compétition
+
+La question "pourquoi l'ICL fonctionne" reste ouverte. Plusieurs théories coexistent.
+
+### Théorie 1 : Descente de gradient implicite
+
+Des chercheurs (Akyurek et al., 2022 ; von Oswald et al., 2023) ont démontré mathématiquement que les couches d'attention d'un Transformer peuvent implémenter, lors du forward pass, quelque chose qui ressemble formellement à une descente de gradient.
+
+Autrement dit : le Transformer "s'entraîne" sur les exemples du prompt pendant qu'il les lit, en mettant à jour des "poids internes" temporaires. Les exemples jouent le rôle de données d'entraînement, le prompt est un mini-dataset.
+
+Cette théorie est élégante et précise mathématiquement, mais elle a surtout été validée sur des Transformers simplifiés et des tâches de régression linéaire. Sa généralisation aux LLM complexes reste débattue.
+
+### Théorie 2 : Sélection bayésienne de tâche
+
+Une autre perspective : le modèle pré-entraîné a absorbé des centaines de milliers de tâches différentes pendant le pré-entraînement. Les exemples dans le prompt servent simplement à "sélectionner" laquelle de ces tâches connues s'applique ici.
+
+<Callout type="paper" title="L'ICL comme reconnaissance, pas apprentissage">
+Selon cette théorie, le modèle ne *apprend* pas vraiment à partir des exemples. Il *reconnait* que les exemples correspondent à un pattern déjà vu pendant le pré-entraînement et l'applique. C'est de la récupération en mémoire, pas de l'apprentissage. Ca expliquerait pourquoi l'ICL fonctionne surtout pour les tâches "standard" et échoue sur les tâches vraiment inédites.
+</Callout>
+
+### Théorie 3 : Composition de compétences
+
+Les grands modèles ont des compétences élémentaires modulaires (grammaire, traduction, arithmétique, formatage...). Les exemples dans le prompt guident la *composition* de ces briques pour résoudre la tâche demandée. C'est moins de l'apprentissage que de l'assemblage.
+
+## Les induction heads : le mécanisme découvert par Anthropic
+
+Les **induction heads** sont la découverte la plus concrète sur le "comment" de l'ICL. Olsson et al. (2022) chez Anthropic ont identifié des paires spécifiques de têtes d'attention qui implémentent un pattern simple mais puissant :
+
+Si le modèle voit dans son contexte la séquence `[A][B]...[A]`, il prédit `[B]` après le second `[A]`.
+
+En clair : "Si j'ai déjà vu ce motif, je sais comment le compléter." C'est le mécanisme de base qui permet de capter et généraliser les patterns des exemples.
+
+<Callout type="paper" title="Une transition de phase au cours de l'entraînement">
+Olsson et al. observent que les induction heads n'existent pas dans les modèles non entraînés. Ils apparaissent lors d'une **transition de phase** pendant l'entraînement : à un certain stade, la loss s'améliore brusquement, les induction heads se forment, et la capacité d'ICL apparaît quasi-instantanément. C'est un exemple direct de capacité émergente observable mécanistiquement.
+</Callout>
+
+
+## Ce qui influence les performances ICL
+
+### Plus d'exemples, mais avec des rendements décroissants
+
+En général, plus d'exemples = meilleures performances. Mais le gain marginal diminue rapidement. Entre 0 et 5 exemples : gain énorme. Entre 15 et 20 exemples : gain quasi-nul pour la plupart des tâches.
+
+### L'ordre des exemples : un détail qui compte
+
+Etonnant mais documenté : l'ordre dans lequel vous présentez les exemples peut changer les performances de 10 a 20 points de pourcentage sur certaines tâches. Les meilleurs ordres sont difficiles à prédire a priori.
+
+### La qualité et la diversité
+
+Des exemples clairs, diversifiés et représentatifs des différents sous-types de la tâche donnent de meilleurs résultats que des exemples redondants. La diversité aide le modèle à généraliser.
+
+### La taille du modèle
+
+L'ICL est une capacité émergente. Les modèles de moins de 1 milliard de paramètres ont des capacités ICL très limitées. C'est à partir de 7-10 milliards que ca devient vraiment fiable.
+
+## Les limites à connaître
+
+**La fenêtre de contexte** : le nombre d'exemples est plafonné par la taille de la fenêtre (ex: 128 000 tokens pour GPT-4). Des exemples détaillés prennent beaucoup de place, ce qui limite rapidement le nombre utilisable.
+
+**Les tâches hors distribution** : l'ICL marche bien pour les tâches qui ressemblent a ce que le modèle a vu pendant le pré-entraînement. Pour une tâche véritablement inédite (un langage de programmation inventé, un système de classification radicalement nouveau), les performances restent limitées.
+
+<Callout type="warning" title="ICL n'est pas un remplacement du fine-tuning">
+Pour une tâche qui nécessite une adaptation profonde et fiable — des milliers d'exemples, un domaine très spécialisé, des contraintes de format strictes — le fine-tuning reste supérieur. L'ICL est excellent pour prototyper rapidement, spécifier un format, ou adapter un comportement simple. Pour une production robuste sur une tâche spécifique, le fine-tuning garde l'avantage.
+</Callout>
+
+**La sensibilité aux artefacts superficiels** : le modèle peut s'accrocher à des patterns superficiels dans les exemples plutôt qu'a la logique profonde. Si tous vos exemples "positifs" commencent par "Je", le modèle pourrait associer "Je" à positif plutôt que de comprendre le contenu émotionnel.
+
+## L'in-context learning dans la pratique
+
+L'ICL est la fondation du **prompt engineering** — l'art de formuler des prompts efficaces. Comprendre l'ICL permet de comprendre pourquoi certaines techniques fonctionnent : fournir des exemples (few-shot), montrer le format de sortie attendu, ou illustrer le niveau de détail voulu.
+
+C'est aussi pourquoi les LLM sont si flexibles : un seul modèle peut être "programmé" pour des centaines de tâches différentes simplement en changeant le prompt. Cette flexibilité, combinée avec les techniques de prompt engineering, est ce qu'on explore dans la section suivante.

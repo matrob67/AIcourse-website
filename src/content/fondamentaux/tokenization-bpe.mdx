@@ -1,0 +1,239 @@
+---
+title: "Tokenization : BPE (Byte Pair Encoding)"
+description: "Comment transformer du texte en séquences de nombres : l'algorithme BPE expliqué simplement."
+---
+
+## L'histoire : du texte au nombre
+
+Les réseaux de neurones ne comprennent que les nombres. Vous, vous lisez "Bonjour le monde". Votre cerveau comprend le langage.
+
+Un modèle de langue voit : [15234, 18203, 91028]. Des nombres.
+
+Comment convertir "Bonjour le monde" en nombres de manière que le modèle comprenne ? C'est le rôle de la **tokenization**.
+
+Cette étape invisible est **critique**. Mauvaise tokenization = modèle qui déraille, coûts élevés, performance mauvaise. Bonne tokenization = tout fonctionne.
+
+Exemple : si "Bonjour" devient 5 tokens au lieu de 1, votre contexte se réduit de 80%. Catastrophe.
+
+
+
+## Les mauvaises solutions (et pourquoi elles échouent)
+
+### Approche 1 : Tokenization par mots
+
+Couper au niveau des espaces. "Le chat dort" = 3 tokens.
+
+**Problèmes énormes** :
+
+1. **Vocabulaire infini** : il existe infiniment de mots. "anticonstitutionnellement", "anticonstitutionnellementsuperfluousissime", noms propres, argot, néologismes. Impossible de tous les stocker.
+
+2. **Mots inconnus** : tout mot hors du vocabulaire devient `[UNK]` (unknown). L'info disparaît. Le modèle voit juste du bruit.
+
+3. **Pas de compréhension morphologique** : "mange", "mangeons", "mangeaient" sont 3 tokens différents. Le modèle ne voit pas la racine "mang-" commune.
+
+Exemple concret : un modèle entraîné sur 50k mots anglais rencontre "anticonstitutionnel" (rare en anglais). [UNK]. Information perdue.
+
+### Approche 2 : Tokenization par caractères
+
+Chaque lettre = 1 token. "chat" = 4 tokens (c, h, a, t).
+
+Avantage : vocabulaire petit (26 lettres + accents + ponctuation = ~50-100 tokens).
+
+Problème : "Bonjour le monde" = 18 tokens au lieu de 3. Les séquences explosent. Le modèle devient très lent, et l'attention devient O(18²) au lieu de O(3²).
+
+### Le compromis : sous-mots
+
+Entre ces deux extrêmes, il y a un **sweet spot** :
+
+Vocabulaire intermédiaire (32k-100k tokens). Les mots fréquents = 1 token. Les mots rares = plusieurs sous-tokens cohérents.
+
+"anticonstitutionnellement" → ["anti", "constitu", "tion", "nel", "lement"]
+
+Chaque morceau est compréhensible. Le modèle généralise. Pas de mots inconnus.
+
+<Callout type="info" title="Le dilemme">
+Trop de vocabulaire = matrice embedding énorme, sparse, inefficace.
+Trop peu = séquences longues, attention lente, mots inconnus.
+Sous-mots = le compromise élégant et utilisé universellement.
+</Callout>
+
+## BPE : Byte Pair Encoding
+
+**BPE** est **l'algorithme dominant**. Inventé en 2016 (Sennrich et al.), utilisé par GPT-2, GPT-3, GPT-4, et quasi tous les LLM populaires.
+
+### L'idée centrale : fusionner les paires fréquentes
+
+L'algorithme est élégamment simple :
+
+1. Commencez avec tous les caractères du corpus comme tokens
+2. Comptez les paires adjacentes (a,b), (b,c), etc.
+3. La paire la plus fréquente devient un nouveau token
+4. Remplacez toutes les occurrences
+5. Recommencez jusqu'à atteindre la taille de vocabulaire désirée
+
+Exemple concret :
+
+```
+Corpus initial : "bas bas bas hug hug pug bug"
+Vocabulaire : [b, a, s, h, u, g]
+
+Iteration 1:
+  Paire (b, a) apparaît 4 fois (dans "bas")
+  Paire (a, s) apparaît 4 fois (dans "bas")
+  Paire (h, u) apparaît 3 fois (dans "hug")
+  → Fusionner (a, s) : créer token "as"
+  Corpus devient : "bas bas bas hug hug pug bug"
+                   ↓  (on a remplacé (a,s) par "as")
+
+Iteration 2:
+  Paire (b, as) apparaît 3 fois
+  Paire (h, u) apparaît 3 fois
+  → Fusionner (b, as) : créer token "bas"
+  Corpus devient : "bas bas bas hug hug pug bug" (avec "bas" comme token unique)
+
+... continuer jusqu'à 50k ou 100k tokens
+```
+
+### L'algorithme détaillé
+
+**Phase 1 : Initialisation**
+
+Vous commencez avec un corpus de texte. Représentez chaque mot comme une séquence de caractères avec un symbole spécial de fin de mot :
+
+```
+Texte: "le chat dort"
+Mot "le":   [l, e, </w>]
+Mot "chat": [c, h, a, t, </w>]
+Mot "dort": [d, o, r, t, </w>]
+```
+
+**Phase 2 : Entraînement (une fois)**
+
+Comptez toutes les paires adjacentes et fusionnez les plus fréquentes :
+
+```
+Tour 1 : Paire (c, h) dans "chat" = fréquente
+         → créer token "ch"
+         corpus devient : [l, e], [ch, a, t], [d, o, r, t]
+
+Tour 2 : Paire (ch, a) = fréquente
+         → créer token "cha"
+         corpus devient : [l, e], [cha, t], [d, o, r, t]
+
+... continuer jusqu'à 50k fusions
+```
+
+Résultat : liste ordonnée de 50k fusions (une stratégie de fusion).
+
+**Phase 3 : Inférence (utilisé ensuite)**
+
+Quand vous avez un nouveau texte "chat":
+1. Décomposer en caractères : [c, h, a, t]
+2. Appliquer les fusions dans l'ordre entraîné
+3. [c, h] → [ch], [ch, a] → [cha], etc.
+4. Résultat final : [cha, t]
+
+Un mot courant = 1-2 tokens. Un mot inconnu = plusieurs tokens. Parfait.
+
+<Callout type="tip" title="Entraînement vs inférence">
+**Entraînement** : analyser un corpus pour trouver les fusions communes (fait une fois, offline).
+**Inférence** : appliquer la liste de fusions à un nouveau texte (fait à chaque fois, online).
+C'est le même algorithme, deux rôles différents.
+</Callout>
+
+### Exemple réel : "inconstitutionnellement"
+
+Prenez ce mot long et rare français.
+
+Corpus d'entraînement français : BPE découvre que "in-" (préfixe), "-tion" (suffixe), "-ment" (suffixe) sont fréquents. Le mot se décompose intelligemment :
+
+```
+"inconstitutionnellement" → ["in", "constitu", "tion", "nelle", "ment"]
+```
+
+Chaque morceau est significatif. Le modèle apprend :
+- "in-" = préfixe de négation (in, inconnu, incapable, ...)
+- "-tion" = suffixe nominal (action, nation, ...)
+- "-ment" = suffixe adverbial (ment, doucement, ...)
+
+Résultat : le modèle généralise. Comprendre "in-" dans "inconstitutionnel" l'aide à comprendre "incapable", même s'il n'a jamais vu ce mot.
+
+C'est la magie de BPE : décomposition morphologique **automatique**, sans supervision.
+
+## Taille du vocabulaire : le grand compromis
+
+L'**unique paramètre** de BPE est la taille finale du vocabulaire (50k ? 100k ?).
+
+| Vocabulaire | Exemple | Longueur séquence | Mémoire | Généralisation |
+|---|---|---|---|---|
+| 8k | Très petit | Longue | Petite | Excellente |
+| 32k-50k | Standard | Moyenne | Moyenne | Bonne |
+| 100k+ | Grand | Courte | Énorme | Moyenne |
+
+**Pourquoi grand vocabulaire = séquence courte ?** C'est contre-intuitif au premier abord. L'analogie : compte en base 2 vs base 10. En base 2 (2 symboles), `42` s'écrit `101010` — 6 chiffres. En base 10 (10 symboles), `42` — 2 chiffres. Plus le "vocabulaire de symboles" est grand, moins tu en as besoin pour représenter la même information.
+
+Même logique pour les tokens : avec un vocabulaire de 8k, `"tokenize"` se découpe en `["to", "ken", "ize"]` = 3 tokens. Avec un vocabulaire de 100k, `"tokenize"` est probablement un seul token = 1 token. Grand vocab → chaque token encode plus de texte → moins de tokens par phrase → séquences plus courtes.
+
+**Tailles dans les modèles réels** :
+- GPT-2 : 50k tokens
+- GPT-4 (tiktoken) : 100k tokens
+- LLaMA : 32k tokens
+
+Le choix dépend du corpus, des langues, et du budget computationnel.
+
+<Callout type="info" title="Le trade-off">
+Vocab 2× plus grand = embedding 2× plus gros = plus de mémoire et de compute. MAIS séquences plus courtes = moins de tokens à traiter, moins d'attention O(n²). Le bénéfice peut compenser dans les bonnes conditions.
+</Callout>
+
+## Byte-level BPE : l'astuce pour l'universalité
+
+**Variante importante** : BPE peut partir des caractères Unicode (sensible aux langues), ou des **octets** (256 valeurs universelles).
+
+Byte-level BPE = partir des 256 octets de la représentation UTF-8.
+
+Résultat : **tout texte humain**, dans n'importe quelle langue, n'importe quel encodage, peut être tokenizé. Zéro tokens inconnus `[UNK]`.
+
+Chinois "你好" ? Tokenize.
+Arabe "السلام عليكم" ? Tokenize.
+Emojis "🚀" ? Tokenize.
+Code Python `def foo():` ? Tokenize.
+
+Utilisé par GPT-2, GPT-3, GPT-4, LLaMA. La solution universelle.
+
+## Limites de BPE (honnêtement)
+
+BPE est excellent, mais pas parfait :
+
+**1. Déterministe mais sous-optimal**
+Une seule stratégie de découpage par mot. Mais peut-être qu'un autre découpage serait meilleur ? BPE ne l'explore jamais. C'est juste le choix glouton d'une greedy strategy.
+
+**2. Dépendant du corpus d'entraînement**
+Un tokenizer entraîné sur 99% anglais, 1% français, tokenize mal le français. Le mot français peut devenir 2-3× plus de tokens. Votre contexte se réduit.
+
+**3. Pas probabiliste**
+BPE donne un et un seul découpage. Pas d'alternatives. Pas d'incertitude. L'algorithme Unigram (alternatif) assigne des probabilités à plusieurs découpages.
+
+<Callout type="tip" title="Dépannage réel">
+Quand votre modèle déraille bizarrement, vérifiez la tokenization **en premier**. Utilisez les playgrounds OpenAI, Hugging Face. C'est souvent là que vivent les bugs invisibles : un mot rare tokenize mal, explose votre contexte, et le modèle devient confus.
+</Callout>
+
+## Pourquoi c'est important
+
+La tokenization est **invisible mais omniprésente**. Elle affecte :
+- La longueur de votre contexte (un mot rare = plusieurs tokens = contexte réduit)
+- L'arithmétique du modèle (nombres tokenisent inconsistamment)
+- La performance en langues non-anglaises (2-3× plus de tokens)
+- Les bugs mystérieux (un mot tokenize mal = le modèle s'effondre)
+
+Comprendre BPE aide à comprendre pourquoi votre modèle se comporte bizarrement. C'est souvent la tokenization.
+
+## Les points clés à retenir
+
+1. **Le problème** : comment coder le texte en nombres ?
+2. **Les approches naïves** : par mots (vocab infini) ou caractères (séquences longues)
+3. **La solution** : sous-mots via BPE
+4. **L'algorithme** : fusionner itérativement les paires les plus fréquentes
+5. **Byte-level BPE** : zéro tokens inconnus, fonctionne pour toutes les langues
+6. **La taille du vocab** : 32k-100k, paramètre critique
+7. **Les limites** : déterministe, dépendant du corpus, pas probabiliste
+8. **La réalité** : la tokenization est source #1 d'erreurs invisibles

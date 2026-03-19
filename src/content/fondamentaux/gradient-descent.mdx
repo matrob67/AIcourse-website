@@ -1,0 +1,161 @@
+---
+title: "Descente de gradient : trouver le minimum"
+description: "Comment l'algorithme de descente de gradient guide l'apprentissage. De la montagne enbrouillée à SGD, momentum et Nesterov."
+---
+
+## Introduction : Descendre une montagne dans le brouillard
+
+Imagine : tu es au sommet d'une montagne dans un brouillard épais. Tu ne vois pas le village en bas. Mais tu sentis une pente sous tes pieds. Tu fais un pas dans la direction où ça descend le plus fort. Puis un autre. Petit à petit, tu descends.
+
+C'est exactement ce que fait la **descente de gradient**. Elle mesure la "pente" (gradient) et se déplace dans la direction opposée pour réduire l'erreur.
+
+
+
+## L'équation fondamentale
+
+```
+poids_nouveau = poids_ancien - (taux d'apprentissage) * gradient
+```
+
+Où :
+- **Taux d'apprentissage** (learning rate, eta) = la taille de ton pas
+- **Gradient** = la direction et la magnitude de la pente
+
+Si le gradient dit "erreur monte fortement à droite", tu te déplaces à gauche (gradient négatif).
+
+
+
+## Le taux d'apprentissage : ton plus grand levier
+
+C'est **l'hyperparamètre qui importe le plus**.
+
+### Trop élevé
+
+Learning rate = 0.1. Tu fais des sauts énormes. Tu sautes par-dessus le minimum. Tes poids oscillent. Ou pire, divergent (explosent vers l'infini). L'erreur monte au lieu de descendre.
+
+### Trop faible
+
+Learning rate = 0.00001. Tu avances à la vitesse d'une limace. L'apprentissage prend des **jours**. Et tu risques de rester bloqué dans un petit minimum local.
+
+### Le Goldilocks
+
+Faut trouver le sweet spot. Trop l'une pas assez de l'autre. En pratique, on commence haut puis on réduit au fur et à mesure (learning rate scheduling).
+
+```
+Époque 1-10 : learning rate = 0.01 (grosse pas pour chercher)
+Époque 10-50 : learning rate = 0.001 (pas moyen)
+Époque 50+ : learning rate = 0.0001 (pas minuscule pour affiner)
+```
+
+## Trois façons de calculer la pente
+
+### Batch Gradient Descent
+
+Tu calcules le gradient sur **tous** tes données avant de faire **une seule mise à jour** des poids.
+
+Avantage : très précis.
+
+Inconvénient : ultra lent. Avec 1 million d'exemples, tu attends longtemps avant la première mise à jour.
+
+Pratique : presque jamais utilisé.
+
+### Stochastic Gradient Descent (SGD)
+
+Tu calcules le gradient sur **un seul exemple** à la fois. Mis à jour après chaque exemple.
+
+Avantage : très rapide.
+
+Inconvénient : bruyant, instable. Les gradients d'un exemple peuvent être bizarres.
+
+Pratique : parfois pour des données streaming.
+
+### Mini-batch SGD (le standard)
+
+Tu calcules le gradient sur **32, 64, ou 128 exemples** à la fois.
+
+Avantage : bon compromis. Assez rapide pour utiliser les GPUs. Assez stable pour apprendre correctement.
+
+Inconvénient : aucun réellement.
+
+Pratique : **c'est ce qu'on utilise toujours**. Quand quelqu'un dit "SGD", il pense en fait mini-batch.
+
+<Callout type="info" title="Taille de batch ?">
+32-256 est standard. Sur GPU, tu peux faire 512 ou plus. Sur petit ordinateur, 32 suffit. Plus grand = plus stable mais moins de mises à jour par époque.
+</Callout>
+
+## Le momentum : éviter les oscillations
+
+Problème avec SGD simple : si la surface d'erreur est en "ravine" (très pentue dans une direction, presque plate dans une autre), le gradient oscille en zigzag au lieu d'aller droit.
+
+C'est comme une bille dans un bol étroit. Elle dévie d'un côté, puis de l'autre, ralentit à chaque virage. Énervant.
+
+Solution : **accumule la vitesse**. Souviens-toi des anciens gradients.
+
+```
+v = 0.9 * v_ancien + gradient
+poids = poids - alpha * v
+```
+
+Intuition : c'est comme une bille qui roule. Elle gagne de l'élan. Les petites oscillations s'annulent, mais l'accélération globale s'accumule.
+
+Coefficient 0.9 = typique. Tu peux essayer 0.99 (plus d'inertie) ou 0.5 (moins).
+
+### Nesterov Accelerated Gradient (NAG)
+
+Petit truc malin : au lieu de calculer le gradient où tu es **maintenant**, calcule-le où tu **serais après le momentum**.
+
+C'est comme faire un pas en avant, regarder la pente là-bas, puis ajuster ta direction. Ça aide à ne pas trop dépasser les minima.
+
+Plus rapide que momentum classique. Utilisé dans les optimiseurs modernes.
+
+## Le paysage d'erreur en haute dimension
+
+En 2D, tu imagines une montagne. Des minima locaux, des plateaux. Simple.
+
+En millions de dimensions (millions de poids), ça devient étrange :
+
+### Points-selles vs minima locaux
+
+En très haute dimension, les vrais minima locaux "pièges" sont rares. La plupart des points stationnaires sont des **points-selles** : une direction descend, une autre monte.
+
+En descendant, tu traverses le point-selle naturellement (continue dans la direction descendante).
+
+
+
+### Vallées d'erreur basse
+
+Les bons minima (avec erreur basse) sont souvent reliés par des "vallées" d'erreur similaire. Il n'y a pas **un** minimum, il y en a des milliers qui sont tous bons.
+
+Ça veut dire : pas besoin de trouver **le** meilleur poids. Tu peux t'arrêter n'importe où dans la bonne vallée.
+
+### Skip connections pour un paysage lisse
+
+Les **réseaux résiduels** (ResNets) utilisent des "skip connections" : les données contournent certaines couches. Résultat : le paysage d'erreur est **beaucoup plus lisse**.
+
+C'est pourquoi on peut entraîner des réseaux très profonds (100+ couches) maintenant. Avant, ça divergeait. Les skip connections rendent la descente de gradient plus robuste.
+
+## L'instabilité en profondeur
+
+Problème : en rétropropagation, les gradients doivent traverser toutes les couches. En couches profonde
+
+s, ils s'amplifient (exploding gradients) ou disparaissent (vanishing gradients).
+
+Solutions :
+
+**Gradient clipping** : limite le gradient si trop grand.
+
+**Initialization intelligente** : Xavier, He initialization. Initialise les poids de sorte que les gradients traverse les couches sans exploser/disparaître.
+
+**Normalisation** : BatchNorm, LayerNorm. Maintient les activations dans une plage saine.
+
+## Résumé pratique
+
+Commence avec SGD + momentum (beta = 0.9) et batch = 64-256.
+
+Learning rate ? Utilise un "learning rate finder" : essaie 0.0001 jusqu'à 0.1, vois où l'erreur descend.
+
+Si tu veux quelque chose plus moderne, utilise **Adam** (prochaine section).
+
+Ajoute un learning rate schedule : commence haut, réduis progressivement.
+
+Simple comme ça et ça marche pour la majorité des cas.

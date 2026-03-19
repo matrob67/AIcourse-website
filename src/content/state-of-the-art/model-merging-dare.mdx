@@ -1,0 +1,138 @@
+---
+title: "DARE, Model Soups et SLERP"
+description: "Techniques avancées de fusion de modèles : DARE utilise le dropout aléatoire sur les task vectors, Model Soups moyenne les checkpoints, et SLERP interpole dans l'espace sphérique."
+---
+
+
+
+## Au-delà de TIES: diversifier les approches de fusion
+
+Le model merging est devenu un art. Après TIES, plusieurs techniques complémentaires ont émergé. Chacune avec sa philosophie pour résoudre les interférences entre modèles.
+
+<ArxivLink id="2311.03099" title="Language Models are Super Mario: Absorbing Abilities from Homologous Models as a Free Lunch (Yu et al., 2023)" />
+
+## DARE: Drop And REscale
+
+### L'intuition contre-intuitive
+
+Vous pouvez **supprimer aléatoirement** 90-99% des modifications apportées par le fine-tuning **sans dégradation significative**.
+
+Les task vectors sont **énormément redondants**.
+
+### L'algorithme
+
+Pour chaque task vector τ:
+
+1. **Drop**: masque de dropout avec probabilité p (ex: p=0.9 = 90% supprimé)
+2. **Rescale**: multiplier ce qui reste par 1/(1-p) pour compenser
+
+```
+τ_dare = (mask(τ, p)) / (1-p)
+```
+
+Ensuite, additionnez les task vectors sparsifiés:
+
+```
+θ_merged = θ_base + Σ λᵢ × τᵢ_dare
+```
+
+<Callout type="paper" title="Résultat contre-intuitif">
+Supprimer 90% des modifications d'un fine-tuning préserve sa performance. Ça démontre une redondance **massive**: seuls quelques paramètres portent l'essentiel.
+</Callout>
+
+
+### Avantage pour la fusion
+
+En ne gardant que 10% de modifications par modèle, les conflits s'effondrent. 10% et 10% chacun = ~1% de chance de conflit sur un même paramètre.
+
+### DARE + TIES: la combinaison gagnante
+
+D'abord appliquez DARE (dropout), puis TIES (résolution de conflits). Souvent plus performant que l'un ou l'autre seul.
+
+## Model Soups: moyenne intelligente
+
+### Concept simple
+
+Au lieu de fusionner modèles fine-tunés sur des tâches différentes, moyennez des **checkpoints du même entraînement** avec hyperparamètres différents.
+
+### Types de soups
+
+- **Uniform soup**: moyenne simple de tous
+- **Greedy soup**: ajoutez progressivement les modèles seulement s'ils améliorent la validation
+- **Learned soup**: apprendre les coefficients de pondération
+
+<Callout type="tip" title="Pratique simple">
+Entraînez le même modèle 5 fois avec seeds ou LR légèrement différents. Moyennez les poids. Le résultat? Presque toujours meilleur que n'importe quel modèle individuel, sans coût d'inférence extra.
+</Callout>
+
+### Pourquoi ça fonctionne: flat mode connectivity
+
+Différents entraînements trouvent des optima connectés par des régions de **low loss** (géométrie plate). La moyenne des poids atterrit dans cette zone plane, offrant meilleure généralisation.
+
+## SLERP: Interpolation Sphérique
+
+### Le problème de la moyenne linéaire
+
+La moyenne arithmétique classique (LERP) diminue la **norme** des vecteurs:
+
+```
+LERP(a, b, 0.5) = 0.5×a + 0.5×b
+```
+
+La norme du résultat < moyenne des normes originales. C'est problématique: la norme encode de l'information.
+
+### La solution: SLERP (Spherical Linear Interpolation)
+
+SLERP interpole le long de l'arc de cercle sur l'hypersphère, **préservant** la norme:
+
+```
+SLERP(a, b, t) = sin((1-t)Ω)/sin(Ω) × a + sin(tΩ)/sin(Ω) × b
+```
+
+Où Ω = angle entre a et b.
+
+<Callout type="info" title="Géométrie préservée">
+SLERP garantit que le vecteur interpolé a une norme proportionnelle à l'original. La distance est parcourue uniformément le long de l'arc. Plus lisse, mieux calibré.
+</Callout>
+
+### Limitation: 2 modèles seulement
+
+SLERP n'est naturellement que pour **2 modèles**. Pour plus, appliquez SLERP séquentiellement ou combiné à d'autres méthodes.
+
+## Tableau comparatif: qui fait quoi
+
+| Méthode | N modèles | Gère conflits | Hyperparamètres | Complexité |
+|---|---|---|---|---|
+| Moyenne simple | N | Non | λᵢ | Minimale |
+| Task Arithmetic | N | Non | λᵢ | Simple |
+| TIES | N | Oui (signes) | λᵢ, density | Moyen |
+| DARE | N | Oui (dropout) | λᵢ, drop rate | Moyen |
+| DARE-TIES | N | Oui (les deux) | λᵢ, density, drop rate | Moyen |
+| SLERP | 2 | Partiel (norme) | t | Simple |
+| Model Soups | N | Non applicable | Sélection | Simple |
+
+## MergeKit: unified toolkit
+
+Arcee AI's MergeKit implémente tout:
+
+```bash
+mergekit-yaml config.yml ./merged_model --cuda
+```
+
+YAML configs pour spécifier méthodes et paramètres par couche. Contrôle granulaire de la fusion.
+
+## Le metapoint: model merging n'est pas magique
+
+<Callout type="warning" title="Imprévisibilité">
+Le model merging est puissant mais imprévisible. Résultats dépendent fortement des modèles source, leurs similarités, et hyperparamètres. Budgetez toujours pour l'évaluation. Les meilleurs modèles fusionnés sur les leaderboards = résultat de dizaines de tentatives.
+</Callout>
+
+## Impact: la communauté utilise massivement
+
+Une proportion significative des meilleurs modèles open-source sont **fusionnés**. Pas entraînés from scratch. Ça démocratise:
+
+Même sans GPU massif, créez un modèle compétitif en fusionnant intelligemment des existants.
+
+---
+
+**TL;DR**: DARE (dropout massif), Model Soups (moyenne intelligente), SLERP (géométrie sphérique). Chacune est un outil dans la boîte de fusion. Expérimentez, évaluez, trouvez votre winner.

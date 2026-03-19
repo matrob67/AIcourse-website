@@ -1,0 +1,182 @@
+---
+title: "CNN : voir avec des convolutions"
+description: "Comment les réseaux convolutifs voient les images. Convolutions, pooling et apprentissage hiérarchique des motifs."
+---
+
+## Introduction : Pourquoi les réseaux de neurones classiques échouent sur les images
+
+Un réseau fully connected (connecté partout) voit une image comme un **long vecteur**.
+
+Exemple : image 100x100 pixels en couleur (RGB) = 30 000 pixel, 3 canaux = 30 000 x 3 = 90 000 valeurs.
+
+Le premier neurone caché a **90 000 entrées**. Avec 1000 neurones cachés, tu as 90 millions de paramètres. Énorme. Lent. Inefficace. Et chaque neurone utilise chaque pixel de l'image, peu importe où.
+
+Les **réseaux convolutifs (CNN)** exploitent une propriété simple : **les pixels proches sont liés**.
+
+
+
+Un bord ou une texture importante n'occupe que quelques pixels. L'apparence d'un motif (un oeil, une roue) est la **même partout** dans l'image. Pas besoin d'apprendre séparément pour chaque position.
+
+Les CNNs sont inspirés du cortex visuel biologique : les neurones ne reçoivent pas l'image entière, juste une petite région locale.
+
+## L'opération de convolution : le cœur du mécanisme
+
+Une **convolution** fait glisser un petit filtre (kernel) sur l'image et calcule un **produit scalaire** (une sorte de score de similarité) à chaque position.
+
+```
+Résultat(i, j) = somme des (Image(i+a, j+b) * Filtre(a, b))
+pour tous les a, b dans le filtre
+```
+
+Le résultat est une **feature map** : une nouvelle "image" qui montre où ce motif particulier apparaît et avec quelle force.
+
+Exemple concret : un filtre qui détecte les bords verticaux :
+
+```
+Filtre = [-1, 0, +1]
+         [-2, 0, +2]
+         [-1, 0, +1]
+
+Ce filtre fait ressortir les changements d'intensité verticaux (bords).
+```
+
+## Les filtres apprennent les motifs
+
+Chaque filtre (typiquement 3x3 ou 5x5) est un ensemble de **poids apprenables**. Pendant l'entraînement, ils se spécialisent naturellement.
+
+### Hiérarchie émergente
+
+**Couches basses** (près de l'entrée) : détectent les primitives **simples**. Bords horizontaux, verticaux, couleurs, contraste.
+
+**Couches moyennes** : combinent les primitives pour détecter des **textures**, des formes simples.
+
+**Couches profondes** : reconnaissent des structures **complexes**. Yeux, roues, visages.
+
+Cette hiérarchie émerge **automatiquement** sans qu'on la code.
+
+<Callout type="info" title="Le partage de poids">
+Le même filtre s'applique **partout** dans l'image. C'est puissant : peu de paramètres (un 3x3 = 9 poids), et le réseau apprend l'**invariance par translation** (un motif est détecté peu importe où il est dans l'image).
+</Callout>
+
+## Stride et padding : contrôler le glissement
+
+### Stride
+
+C'est la taille du **pas** du filtre.
+
+- Stride 1 : le filtre avance d'un pixel à la fois. Feature map de taille similaire.
+- Stride 2 : le filtre avance de 2 pixels. Feature map deux fois plus petite.
+
+Stride plus grand = réduction de taille, moins de calculs, mais on perd de l'information locale.
+
+### Padding
+
+Ajouter des **zéros autour** de l'image.
+
+- Padding "same" : ajoute assez de zéros pour maintenir les dimensions
+- Padding "valid" : pas de zéros, dimensions réduisent naturellement
+
+Padding aide quand tu veux maintenir la taille d'une feature map ou traiter les pixels aux bords.
+
+## Pooling : réduire la résolution
+
+Le **pooling** réduit la taille des feature maps. Trois bénéfices :
+
+1. **Moins de calculs** : les couches suivantes travaillent sur moins de données
+2. **Invariance** : si un motif se déplace un peu, le max reste similaire. Robustesse aux petites translations
+3. **Régularisation implicite** : moins de dimensions = moins de surapprentissage
+
+### Max Pooling
+
+Prend le **maximum** dans chaque fenêtre (2x2 typiquement). Préserve les activations fortes (les motifs saillants).
+
+
+
+### Average Pooling
+
+Prend la **moyenne** dans chaque fenêtre. Utilisé en fin pour convertir les feature maps en un vecteur de taille fixe.
+
+<Callout type="tip" title="Global Average Pooling">
+Au lieu de couches fully connected à la fin, utilise Global Average Pooling : moyenne chaque feature map entière pour obtenir un nombre. Énormément moins de paramètres, limite le surapprentissage. C'est devenu standard.
+</Callout>
+
+## Hiérarchie des représentations : layer by layer
+
+Chaque couche reçoit les feature maps de la couche précédente. Applique plusieurs filtres **en parallèle**. Si une couche a 64 filtres, elle produit 64 feature maps.
+
+
+
+Chaque filtre capture un aspect différent. Ensemble, ils construisent une compréhension complète.
+
+## Champ réceptif : la région qu'on "voit"
+
+Un neurone profond ne regarde pas une seule position. Il "voit" une **région** de l'image d'entrée. Plus tu es profond, plus grande cette région.
+
+C'est le **champ réceptif (receptive field)**. Il grandit avec la profondeur, permettant aux neurones profonds de détecter des objets larges et des patterns globaux.
+
+Exemple : un CNN profond peut avoir un champ réceptif de 100x100 pixels. Chaque neurone dans les couches profondes "voit" une grande zone de l'image.
+
+## Architecture typique d'un CNN
+
+### Partie 1 : extracteur de features
+
+```
+Conv -> ReLU -> Pooling
+  |
+Conv -> ReLU -> Pooling
+  |
+Conv -> ReLU -> Pooling
+```
+
+Les features deviennent progressivement plus abstraites. La résolution diminue.
+
+### Partie 2 : classifieur
+
+```
+Features applatites (de 3D à 1D)
+  |
+Couches fully connected
+  |
+Softmax pour obtenir les probabilités
+```
+
+Ou plus moderne : Global Average Pooling + convolutions 1x1 au lieu de couches fully connected (moins de paramètres).
+
+## Au-delà des images 2D
+
+Les CNNs ne sont pas limités aux images 2D :
+
+**Convolutions 1D** : traite les textes, signaux audio, séquences temporelles. Le filtre glisse sur une dimension.
+
+**Convolutions 3D** : traite les vidéos (spatial + temporal) et l'imagerie médicale volumétrique (IRM, scanner CT).
+
+Le principe reste : exploiter la **structure locale** des données.
+
+## Cas d'usage courants
+
+- **Classification** : est-ce un chat ou un chien ?
+- **Détection** : où sont tous les chats dans l'image ?
+- **Segmentation** : quelle classe pour chaque pixel ?
+- **Reconnaissance faciale** : qui est ce visage ?
+- **Imagerie médicale** : détecter les tumeurs
+- **Véhicules autonomes** : comprendre la route
+- **Style transfer** : appliquer le style d'une peinture à une photo
+
+<Callout type="warning" title="Les CNNs ne sont pas juste pour les images">
+NLP a longtemps utilisé les CNNs pour la classification de texte. Efficaces et simples. Les Transformers ont pris le dessus mais les CNNs restent compétitifs pour certaines tâches.
+</Callout>
+
+## Résumé : pourquoi les CNNs sont révolutionnaires
+
+Les CNNs ont rendus **pratique** l'analyse d'images en rendant le nombre de paramètres raisonnable. Une architecture élégante :
+
+- Peu de paramètres grâce au **partage de poids**
+- Efficace computationnellement
+- Capture naturellement la **structure spatiale** des données
+- Apprend une hiérarchie de motifs automatiquement
+
+C'est pourquoi les CNNs dominent la vision par ordinateur depuis 2012 (AlexNet). C'est un outil incontournable.
+
+## Pourquoi c'est important
+
+Les images sont partout. Les CNNs te donnent les outils pour les analyser. C'est une architecture élégante qui capture l'intuition sur comment les images fonctionnent. Comprendre les CNNs, c'est comprendre un quart du deep learning moderne.

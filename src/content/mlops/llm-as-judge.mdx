@@ -1,0 +1,132 @@
+---
+title: "LLM-as-Judge : les LLM évaluent les LLM"
+description: "Utilisez un LLM comme évaluateur automatique. 80% de corrélation avec les humains. Comparaisons par paires, scoring direct, biais à connaître."
+---
+
+## Le problème : comment évaluer un LLM ?
+
+Les métriques classiques (BLEU, ROUGE) mesurent la similarité avec une référence. Mais une réponse peut être excellente sans ressembler à la référence. Et vice-versa.
+
+L'évaluation humaine = gold standard mais **lente et coûteuse**. Évaluer 1 000 réponses = jours de travail, milliers de dollars.
+
+Le paradigme **LLM-as-Judge** : utiliser un LLM puissant (GPT-4, Claude) comme évaluateur automatique. Les études montrent **80-85% de corrélation** avec les humains. Suffisant pour beaucoup de cas.
+
+<Callout type="info" title="L'intuition simple">
+Si un LLM est assez capable de comprendre et juger la qualité d'une réponse, utilisez-le comme proxy pour l'humain. Évaluez 1 000 réponses en minutes vs jours.
+</Callout>
+
+
+## Modes d'évaluation
+
+### Scoring direct
+
+Le LLM-juge évalue une seule réponse sur une échelle (1-5 ou 1-10) selon des critères.
+
+**Avantages** : simple, rapide, un seul appel API
+
+**Limites** : les scores absolus sont souvent calibrés high (tendance à donner des notes élevées)
+
+### Comparaison par paires (Pairwise)
+
+Le LLM-juge compare deux réponses (A vs B) et indique laquelle est meilleure, avec justification. **Beaucoup plus fiable** que le scoring direct.
+
+**Avantages** : plus aligné avec les jugements humains
+
+**Limites** : O(n^2) comparaisons pour n modèles, plus coûteux
+
+### Référence-guided
+
+Le LLM-juge a une réponse de référence (or standard) et évalue la similitude.
+
+**Avantages** : plus précis quand une référence existe
+
+**Limites** : faut une bonne référence de départ
+
+<Callout type="paper" title="MT-Bench et le LLM-as-Judge">
+MT-Bench a popularisé ça : GPT-4 comme juge classait les modèles très similaire aux classements humains (Chatbot Arena). C'est validé par les votes réels.
+</Callout>
+
+## Critères d'évaluation
+
+Le choix des critères = crucial. Communs :
+
+### Généraux
+- **Pertinence** : répond-il à la question?
+- **Exactitude** : factuellement correct?
+- **Complétude** : couvre-t-il tous les aspects?
+- **Clarté** : bien écrit et compréhensible?
+- **Concision** : longueur appropriée?
+
+### Spécifiques
+- **Fidélité** (RAG) : fidèle aux documents sources?
+- **Sécurité** : évite contenu dangereux?
+- **Suivi d'instructions** : respecte les contraintes du prompt?
+- **Tonalité** : bon ton pour le contexte?
+
+## Les biais du LLM-as-Judge
+
+### Biais de position
+
+Le LLM-juge favore **généralement la première** réponse (ou parfois la dernière). Solution : évaluer chaque paire deux fois en inversant, moyenner.
+
+### Biais de verbosité
+
+Les LLM-juges préfèrent **les réponses plus longues**, même quand elles ne sont pas meilleures. Solution : critère explicite de concision.
+
+### Biais d'auto-favoritisme
+
+Un LLM note mieux les réponses qu'il aurait générées lui-même. Solution : utiliser un juge différent du modèle évalué.
+
+### Biais de complaisance
+
+Les LLM-juges donnent des notes élevées par défaut. Scores concentrés entre 7 et 9/10. Solution : utiliser pairwise, donner des exemples de mauvaises réponses, exiger justification.
+
+### Biais de format
+
+Les réponses bien formatées (listes, titres, code) reçoivent des notes meilleures. Solution : exemple de réponse bien formatée mais mauvaise sur le fond.
+
+<Callout type="warning" title="L'inflation des scores">
+Le plus grand biais : tout est noté 7+ par défaut. Pour combattre : pairwise > scoring direct, donnez du contexte de mauvaises réponses, demandez justification en chaîne d'idées.
+</Callout>
+
+## Techniques avancées
+
+### Chain-of-Thought evaluation
+
+Demandez au juge de **raisonner étape par étape** avant de noter :
+1. Analyser la question et ce qu'une bonne réponse doit contenir
+2. Examiner la réponse sur chaque critère
+3. Justifier chaque point
+4. Donner le score final
+
+Améliore significativement la qualité.
+
+### Multi-judge (panel)
+
+Utilisez **plusieurs LLMs** comme juges, aggrégez (vote majorité, moyenne). Réduit les biais individuels.
+
+### Rubric-based evaluation
+
+**Grille détaillée** avec descriptions précises de chaque score. Réduit la subjectivité.
+
+<Callout type="tip" title="Le prompt d'évaluation est critical">
+La qualité du LLM-as-Judge dépend ÉNORMÉMENT du prompt d'évaluation. Un prompt vague = résultats incohérents. Un prompt détaillé avec critères explicites, exemples pour chaque niveau, et demande de justification = beaucoup plus fiable.
+</Callout>
+
+## Frameworks et outils
+
+- **RAGAS** : pour les systèmes RAG (faithfulness, relevance, etc.)
+- **DeepEval** : open source avec métriques LLM-as-Judge prédéfinies
+- **Promptfoo** : outil d'évaluation de prompts avec LLM-as-Judge
+- **LangSmith Evaluators** : intégrés à LangSmith
+
+## Bonnes pratiques
+
+- **Calibrer** : comparer LLM-judge vs humains sur un petit échantillon
+- **Critères documentés** : explicites et partagés
+- **Atténuer les biais** : pairwise, plusieurs juges, inversion d'ordre
+- **Exiger justification** : avant la note
+- **Juge puissant** : au moins aussi capable que les modèles évalués
+- **Combiner avec humains** : pour les cas critiques, l'humain complète le LLM
+
+Le LLM-as-Judge c'est pas parfait mais c'est infiniment mieux que rien. Et c'est économiquement viable.

@@ -1,0 +1,168 @@
+---
+title: "Test-Time Compute Scaling"
+description: "Le scaling du compute au moment de l'inférence est un nouveau paradigme qui améliore les performances en investissant plus de calcul lors de la génération, plutôt que lors de l'entraînement."
+---
+
+
+## Un nouvel axe : penser plutôt que grandir
+
+Historiquement, améliorer un LLM = plus de paramètres, plus de données d'entraînement, plus de GPU à l'entraînement.
+
+C'était linéaire : plus gros = meilleur.
+
+Avec **test-time compute scaling**, on casse ce modèle. Vous pouvez garder le même modèle et l'améliorer en lui donnant **plus de temps pour réfléchir**.
+
+<Callout type="info" title="Le paradigme inverse">
+Au lieu de "quel modèle est assez gros pour répondre ?", demandez "combien de temps de réflexion je dois donner au modèle pour une bonne réponse ?".
+</Callout>
+
+## Les dimensions du calcul de test
+
+### 1. Tokens de raisonnement
+
+Le modèle génère des tokens intermédiaires de réflexion avant la réponse :
+
+- **o1/o3** : tokens cachés, invisibles
+- **DeepSeek-R1** : réflexion visible
+- **Claude extended thinking** : bloc "thinking" structuré
+
+Plus de tokens = plus de réflexion = meilleure réponse.
+
+### 2. Sampling multiple (self-consistency)
+
+Au lieu de 1 réponse, générez N réponses indépendantes avec température > 0 :
+
+- **Self-consistency** : vote majoritaire
+- **Best-of-N** : sélectionnez la meilleure (reward model)
+- **Revision itérative** : améliorez la réponse étape par étape
+
+### 3. Recherche d'arbre (tree search)
+
+Explorez plusieurs chemins de raisonnement :
+
+- **Tree of Thoughts** : BFS/DFS sur branches
+- **MCTS** : Monte Carlo Tree Search guidée par rewards
+- **Beam search** : garde les K meilleures branches
+
+## Coin technique : les lois d'échelle du test-time
+
+Empiriquement, quand vous doublez le compute de test, vous gagnez quoi ?
+
+```
+Doubler les tokens reasoning : gain log-linéaire (beaucoup au début, puis ralentit)
+Doubler les samples (self-consistency) : gain d'environ √2 (le gain ralentit aussi)
+Rendements diminuent mais restent significatifs
+```
+
+**Résultat clé** : un modèle 7B avec 1000 samples peut surpasser un modèle 70B avec 1 sample sur certaines tâches.
+
+### Comparaison : test-time vs training-time
+
+| Approche | Quand | Impact |
+|---|---|---|
+| Plus de paramètres | Entraînement | Toutes tâches |
+| Plus de données | Entraînement | Toutes tâches |
+| Plus de test-time compute | Inférence | Raisonnement surtout |
+
+<Callout type="paper" title="Le test-time compute gagne sur raisonnement">
+Un modèle taille moyenne avec budget test-time énorme peut **surpasser 10x plus grand** sur maths/code/logique. Mais pas sur connaissances factuelles ou créativité.
+</Callout>
+
+## Stratégies pratiques
+
+### Compute optimale
+
+Vous avez un budget fixe d'inférence. Comment l'utiliser ?
+
+**Options** :
+- 1 long raisonnement (lots de tokens)
+- 10 raisonnements courts (moins de tokens chacun, vote)
+- Arbre de recherche structuré
+
+Dépend de la difficulté :
+
+```
+Facile : 1 CoT court suffit
+Moyen : self-consistency N=10
+Difficile : long CoT OU arbre de recherche
+```
+
+### Compute adaptatif
+
+Investir différent selon la difficulté :
+
+```
+1. Générez réponse rapide
+2. Mesurez confiance du modèle (ex: log-likelihood)
+3. Si confiance basse : plus de compute (plus de samples, raisonnement plus long)
+```
+
+<Callout type="tip" title="Heuristique simple pour détecter difficulté">
+Générez 3 réponses rapides. Si elles concordent ? Retournez immédiatement. Si elles divergent ? Problème difficile — investissez plus de compute.
+</Callout>
+
+## Implémentations
+
+### Best-of-N avec reward model
+
+```python
+def best_of_n(prompt, model, reward_model, n=10):
+    responses = [model.generate(prompt, temperature=0.7) for _ in range(n)]
+    scores = [reward_model.score(prompt, r) for r in responses]
+    return responses[argmax(scores)]
+```
+
+Générez beaucoup, gardez la meilleure selon un modèle d'évaluation.
+
+### Révision itérative
+
+```python
+def iterative_revision(prompt, model, max_iterations=3):
+    response = model.generate(prompt)
+    for i in range(max_iterations):
+        critique = model.generate(f"Critique cette réponse : {response}")
+        if "correct" in critique.lower():
+            break
+        response = model.generate(f"Améliore basé sur : {critique}")
+    return response
+```
+
+Générez, critiquez, améliorez, répétez.
+
+## Les limites réelles
+
+### Coût
+
+N=10 samples = **10 fois plus cher**. N=100 = 100 fois plus cher.
+
+Vous devez décider : vaut-il la peine ?
+
+### Latence
+
+Plus de compute = plus d'attente. Problème pour apps interactives. Si deadline est 500ms, vous ne pouvez pas faire 100 samples.
+
+### Rendements décroissants
+
+À un certain point, plus de compute aide très peu. Dépend du modèle et du problème.
+
+<Callout type="warning" title="Pas une baguette magique">
+Le test-time compute aide surtout pour le **raisonnement** — tâches vérifiables où le modèle peut itérer.
+
+Pour "quel est le capital de la Suisse ?" (connaissance mémorisée), plus de compute = rien.
+
+Pour rédaction créative (style subjectif), plus de compute = plutôt pire (le modèle pense trop).
+
+C'est un outil ciblé, pas universel.
+</Callout>
+
+## L'importance conceptuelle
+
+Test-time compute scaling a changé la question fondamentale.
+
+Avant : "Quel modèle acheter ?"
+
+Après : "Quel modèle, avec quel budget de réflexion, pour ce problème ?"
+
+C'est une transition vers une **intelligence adaptative** qui alloue les ressources intelligemment selon la tâche.
+
+C'est la direction majeure de l'IA depuis 2024-2025, et ça s'accélère en 2026.

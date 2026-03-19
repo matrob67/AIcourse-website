@@ -1,0 +1,113 @@
+---
+title: "Évaluation post fine-tuning"
+description: "Méthodes pratiques pour vérifier qu'un modèle fine-tuné fonctionne bien et n'a rien oublié de son savoir initial."
+---
+
+## Le problème : le modèle oublie tout
+
+Imaginez un élève excellent qui apprend à devenir expert en pâtisserie. Super ! Mais s'il oublie toutes les maths en chemin, c'est un désastre. Exactement ce qui arrive au fine-tuning : en forçant un modèle à exceller sur une tâche spécifique, on risque de casser ses capacités générales.
+
+<Callout type="warning" title="Le piège du loss faible">
+Une loss d'entraînement qui diminue ne signifie pas que tout va bien. C'est comme un élève qui bachoté pour l'examen final en oubliant le reste du programme. On doit tester partout, pas juste sur la tâche ciblée.
+</Callout>
+
+## Les trois piliers de l'évaluation
+
+### 1. La tâche cible
+
+Vérifier que le modèle fait vraiment bien ce pour quoi on l'a entraîné :
+
+- **Classification** : accuracy, F1-score
+- **Génération de texte** : BERTScore, ROUGE
+- **Suivre des instructions** : AlpacaEval (test sur 805 instructions)
+- **Code** : HumanEval (résoudre 164 problèmes de programmation)
+
+### 2. Les capacités générales
+
+Tester que le modèle n'a rien oublié :
+
+- **Raisonnement** : ARC (160 questions de physique)
+- **Connaissances** : MMLU (15 500 questions sur tous les sujets)
+- **Mathématiques** : GSM8K (problèmes de maths de primaire)
+
+### 3. Sécurité et comportement
+
+Vérifier qu'il n'est pas devenu toxique ou bizarre :
+
+- **Toxicité** : RealToxicityPrompts (200 prompts qui testent la sécurité)
+- **Refus** : le modèle refuse-t-il toujours les requêtes dangereuses ?
+
+<Callout type="info" title="La recette d'or">
+Testez minimum sur 3 dimensions : votre tâche cible (100%), un benchmark de capacités générales (30-50%), un test de sécurité (20-30%). C'est assez pour détecter les gros problèmes.
+</Callout>
+
+
+
+## Les juges automatiques (LLM-as-Judge)
+
+Au lieu de faire lire manuellement 1000 réponses par un humain (trop cher et lent), on utilise un **autre LLM pour juger**. GPT-4 peut noter si la réponse d'un Mistral est bonne.
+
+**Avantages :**
+- Rapide et pas cher
+- Réplicable (même prompt = mêmes résultats)
+
+**Pièges à connaître :**
+- Le juge préfère souvent la première réponse (biais de position)
+- Les réponses longues et bavârdes sont favorisées
+- GPT-4 note mieux les réponses qui ressemblent à GPT-4
+
+<Callout type="tip" title="Bonnes pratiques">
+Utilisez un juge plus puissant que votre modèle (GPT-4 pour évaluer Mistral). Mélangez l'ordre des réponses. Demandez au juge d'expliquer son raisonnement. Deux juges c'est mieux qu'un.
+</Callout>
+
+## Détecter la catastrophe oubli
+
+Comparez les scores avant et après fine-tuning :
+
+| Benchmark | Avant | Après | Changement |
+|---|---|---|---|
+| Votre tâche | 45% | 85% | +40% ✓ |
+| MMLU | 62% | 61% | -1% ✓ |
+| GSM8K | 55% | 54% | -1% ✓ |
+
+Une baisse de 1-2% est normal (juste un peu d'oubli). Au-delà de 5%, il y a problème.
+
+**Signaux d'alerte :**
+- Perte importante sur MMLU (oubli des connaissances)
+- Textes deviennent incohérents sur de longs passages
+- Réponses plus toxiques ou bizarres
+- Hallucinations qui n'existaient pas avant
+
+## Les outils pratiques
+
+### lm-evaluation-harness (le couteau suisse)
+
+```bash
+lm_eval --model hf \
+    --model_args pretrained=./my_finetuned_model \
+    --tasks mmlu,gsm8k,hellaswag \
+    --batch_size 8
+```
+
+Testez tout d'un coup.
+
+### Évaluation personnalisée
+
+Créez votre propre test :
+- **20-50 exemples** que le modèle n'a jamais vus
+- **Cas limites** (textes bizarres, questions pièges)
+- **Variantes** (même question, formulée différemment)
+
+<Callout type="warning" title="Attention à la triche">
+Si vos données d'entraînement contiennent des questions du benchmark d'évaluation, les résultats sont pourris. Vérifiez qu'il n'y a pas de chevauchement. Utilisez des benchmarks privés ou dynamiques si vous êtes paranoïaque.
+</Callout>
+
+## Workflow recommandé (5 étapes)
+
+1. **Test rapide** : quelques exemples manuels (1 heure)
+2. **Benchmark rapide** : AlpacaEval ou MT-Bench (1-2 heures)
+3. **Batterie complète** : lm-eval-harness sur 4 benchmarks (4-6 heures)
+4. **Révision humaine** : 50-100 exemples lus par un expert (2-4 heures)
+5. **Tests de robustesse** : textes bizarres, longueurs variables, autres langues (1 heure)
+
+Au total : un jour de travail pour être sûr de ce qu'on a.

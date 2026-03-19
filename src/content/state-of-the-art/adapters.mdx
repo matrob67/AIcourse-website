@@ -1,0 +1,95 @@
+---
+title: "Adapters : les précurseurs du PEFT"
+description: "Les adapter modules, introduits en 2019, sont les pionniers du Parameter-Efficient Fine-Tuning. Comprendre leur fonctionnement et leur héritage dans les techniques modernes."
+---
+
+## Avant LoRA, il y avait les Adapters
+
+LoRA est partout aujourd'hui. Mais en 2019, avant qu'on le découvre, il y avait déjà une idée: les **adapters**. Google Research a dit "pourquoi modifier les poids existants? Et si on ajoutait juste de petits modules entraînables entre les couches?"
+
+<ArxivLink id="1902.00751" title="Parameter-Efficient Transfer Learning for NLP (Houlsby et al., 2019)" />
+
+## L'idée simple: des mini-modules en parallèle
+
+Au lieu de changer les gros poids du modèle pré-entraîné, vous insérez des petits réseaux entraînables. Le modèle original reste gelé. C'est comme ajouter des "écluses" de spécialisation.
+
+### Structure d'un adapter
+
+Un adapter est un petit réseau en forme de **goulot d'étranglement**:
+
+1. Prenez l'entrée (dimension d, ex: 768 pour BERT)
+2. Réduisez-la à dimension m (ex: 64) — down-projection
+3. Appliquez une activation (ReLU/GELU)
+4. Agrandissez-la back à d — up-projection
+5. Ajoutez le résultat à l'entrée (skip connection)
+
+```
+adapter(x) = x + up_proj(activation(down_proj(x)))
+```
+
+<Callout type="info" title="Les chiffres">
+Pour BERT-base (d=768, m=64): seulement 2 × 768 × 64 = 98 304 paramètres par adapter. C'est de la dinde pour une couche Transformer complète qui en a des millions.
+</Callout>
+
+### Où les mettre?
+
+Deux adapters par couche Transformer:
+1. Après l'attention (après la projection de sortie)
+2. Après le FFN (feed-forward network)
+
+Mais un seul adapter après le FFN suffit souvent, selon les travaux ultérieurs.
+
+## Pourquoi les adapters fonctionnent?
+
+Le pré-entraînement apprend des **représentations générales** du langage. Fine-tuner ne veut pas dire tout recommencer. Ça veut dire: apprenez de petites **transformations** pour adapter ces représentations à votre tâche.
+
+<Callout type="paper" title="Résultats réels">
+Sur GLUE, les adapters avec seulement 3,6% des paramètres de BERT atteignent 99,6% des performances du fine-tuning complet. Ça démontre que la majorité des paramètres n'a pas besoin de bouger.
+</Callout>
+
+## Adapters vs LoRA: le match
+
+| Aspect | Adapters | LoRA |
+|---|---|---|
+| Ajout | Modules entre couches | Matrices low-rank dans couches |
+| Latence inférence | Augmentée (modules séquentiels) | Aucune (peut fusionner) |
+| Paramètres (7B) | 0,3% | 0,1% |
+| Non-linéarité | Oui (activation) | Non (linéaire) |
+| Fusion possible | Non | Oui |
+
+<Callout type="warning" title="L'inconvénient: latence">
+Les adapters **ajoutent du temps d'inférence** car ce sont des couches extra qui calculent séquentiellement. Avec LoRA, vous pouvez "fusionner" et faire disparaître le coût. Impossible avec adapters (à cause de la non-linéarité). C'est pourquoi LoRA a gagné.
+</Callout>
+
+## Des descendants intéressants
+
+**AdapterFusion**: combinez plusieurs adapters entraînés sur différentes tâches. Un mécanisme d'attention apprend à les mélanger. Puissant pour multi-tâche.
+
+**AdapterHub**: une plateforme communautaire où partager des adapters. Chacun code une compétence (langue, domaine, tâche) et on les compose.
+
+## Cas d'usage clé: multilingue
+
+Adapter brille particulièrement pour la traduction croisée:
+1. Modèle de base: entraîné sur l'anglais
+2. Language adapter pour le français (capture la syntaxe francophone)
+3. Task adapter pour NER
+4. Combinaison: NER en français sans données NER en français!
+
+<Callout type="tip" title="Composition de compétences">
+C'est l'avantage majeur des adapters: **modularité**. Adapter "français" + Adapter "NER" = NER en français. Sans entraîner directement ce mix. Ça, LoRA ne le fait pas aussi élégamment.
+</Callout>
+
+
+
+## Héritage: les fondations du PEFT
+
+Bien que LoRA domine aujourd'hui, les adapters ont établi les principes:
+- Geler le modèle de base
+- N'entraîner que de petits ajouts
+- Initialiser près de l'identité pour ne pas perturber
+
+La bibliothèque `adapters` (ex-AdapterHub) reste vivante et supporte adapters classiques, prefix tuning, LoRA, et leurs mélanges.
+
+---
+
+**Perspective historique**: Les adapters n'ont pas gagné la bataille contre LoRA (cause latence). Mais ils ont gagné la guerre conceptuelle: le PEFT existe aujourd'hui parce que les adapters ont prouvé que ça fonctionne.

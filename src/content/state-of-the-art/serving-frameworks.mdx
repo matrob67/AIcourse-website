@@ -1,0 +1,95 @@
+---
+title: "Frameworks de serving : vLLM, TGI, Triton, SGLang"
+description: "Comparaison des principaux frameworks de serving de LLM en production : vLLM, Text Generation Inference (TGI), NVIDIA Triton, et SGLang. Architecture, forces et cas d'usage."
+---
+
+
+
+## Le défi : servir un LLM rapidement
+
+Faire tourner un modèle sur votre machine personnelle c'est facile : `model.generate()`. En **production**, c'est l'enfer. 100 utilisateurs veulent une réponse en même temps. Vous faites comment ?
+
+Les frameworks de serving gèrent la mémoire, la file d'attente, le batching intelligent, et l'accélération GPU. Quatre solution dominantes se battent.
+
+<Callout type="info" title="Le choix dépend de votre contexte">
+vLLM pour la flexibilité, TGI si vous avez une pipeline Hugging Face, Triton si vous avez plusieurs modèles, SGLang si vous faites de l'agentic complexe.
+</Callout>
+
+## vLLM : le couteau suisse
+
+vLLM est le plus populaire. Inventé à Berkeley, maintenant stable.
+
+**Son truc spécial** : **PagedAttention**. Habituellement, le KV cache (la mémoire que vous gardez pour accélérer) est un bloc de RAM continu. Oups, un utilisateur arrive avec un contexte plus long : réallouer = gaspillage. PagedAttention découpe le cache en petites pages comme un système d'exploitation. Résultat : gestion mémoire 10× meilleure.
+
+**Bonus** : prefix caching (si 10 utilisateurs posent des questions sur le même document, le cache du document est réutilisé).
+
+```bash
+vllm serve mistralai/Mistral-7B-v0.1 \
+    --tensor-parallel-size 2 \
+    --max-model-len 32768 \
+    --enable-prefix-caching
+```
+
+## TGI : la simplicité Hugging Face
+
+TGI c'est le serveur de Hugging Face, écrit en Rust pour être rapide et sûr.
+
+**Avantage** : vous avez une pipeline Hugging Face ? Une commande Docker et c'est fait. Zéro configuration.
+
+```bash
+docker run --gpus all -p 8080:80 \
+    ghcr.io/huggingface/text-generation-inference:latest \
+    --model-id mistralai/Mistral-7B-v0.1 \
+    --num-shard 2
+```
+
+Ouais, c'est juste une commande. TGI gère tout automatiquement : quantification, sharding, API.
+
+<Callout type="tip" title="Pour un premier déploiement">
+TGI = le chemin le plus rapide du notebook Jupyter à l'API en production. Pas parfait pour tout, mais 80% des cas : TGI suffit.
+</Callout>
+
+## NVIDIA Triton : le couteau suisse des modèles
+
+Triton n'est pas juste pour les LLM — c'est la plateforme généraliste de NVIDIA. Vous pouvez servir : LLM (via TensorRT-LLM), embeddings, rerankers, classifieurs, tout sur le même serveur.
+
+**Forces** : A/B testing, canary deployments, métriques Prometheus, versioning des modèles.
+**Faiblesse** : config XML complexe, pas fait spécifiquement pour les LLM.
+
+Utilisez Triton si vous avez **un écosystème complet** de modèles à servir. Sinon, c'est overkill.
+
+## SGLang : le challenger modéré
+
+SGLang est le nouveau venu, optimisé pour les **workflows structurés et agentiques**.
+
+Truc spécial : **RadixAttention**, une meilleure gestion du KV cache basée sur un arbre Radix. Résultat : prefix caching optimal (meilleur que PagedAttention dans certains cas).
+
+Bonus : génération structurée native (JSON schemas, regex constraints) sans overhead.
+
+```python
+import sglang as sgl
+
+@sgl.function
+def multi_turn(s, question):
+    s += sgl.user(question)
+    s += sgl.assistant(sgl.gen("answer", max_tokens=256))
+```
+
+SGLang c'est parfait si vous faites des **agents multi-appels** avec des réponses structurées.
+
+## Le tableau comparatif
+
+| Aspect | vLLM | TGI | Triton | SGLang |
+|---|---|---|---|---|
+| Facilité d'install | pip install | docker run | Complexe | pip install |
+| Performance brute | Très bien | Bien | Excellente | Très bien |
+| Prefix caching | Bon | Partiel | Oui | Meilleur |
+| Génération structurée | Oui | Oui | Non | Natif |
+| Multi-modèles | Non | Non | Oui | Non |
+| API OpenAI | Oui | Presque | Wrapper | Oui |
+
+<Callout type="warning" title="C'est un marché qui bouge vite">
+Les benchmarks de 2024 sont déjà obsolètes en 2025. Ces frameworks évoluent chaque mois. Testez sur **vos données réelles** avec les versions latest avant de choisir.
+</Callout>
+
+**Conseil pratique** : commencez par TGI (Docker = zéro setup) ou vLLM (pip install = 30 secondes). Changez seulement si vous avez un besoin spécifique que le premier ne couvre pas.

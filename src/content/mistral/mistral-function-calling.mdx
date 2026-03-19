@@ -1,0 +1,131 @@
+---
+title: "Function Calling"
+description: "Appels de fonctions avec l'API Mistral : définition d'outils en JSON Schema, routage automatique, appels parallèles et patterns d'intégration."
+---
+
+
+
+## Function Calling : donner des mains à votre IA
+
+Un LLM seul ne peut que générer du texte. Il ne connaît pas la météo. Il ne peut pas interroger votre base de données. Il ne peut pas envoyer un email.
+
+**Function Calling** = le modèle peut **appeler des outils** définis par vous. Soudainement, il a des mains. Il peut interagir avec le monde réel.
+
+### Le flux
+
+1. Vous définissez des outils (fonctions) avec descriptions et paramètres
+2. L'utilisateur pose une question qui demande un outil
+3. Le modèle identifie le bon outil et génère les arguments
+4. Votre app **exécute** la fonction (le modèle ne l'exécute pas)
+5. Vous retournez le résultat au modèle
+6. Le modèle répond en intégrant le résultat
+
+<Callout type="info" title="Important : qui exécute quoi ?">
+Le modèle ne « exécute » pas la fonction. Il génère du JSON descriptif : « appelle la fonction X avec les args Y ». C'est **votre app** qui exécute. Le modèle = cerveau. Votre app = mains.
+</Callout>
+
+### Définition des outils
+
+En JSON Schema dans la requête API.
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "get_weather",
+    "description": "Obtient la météo actuelle pour une ville donnée",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string",
+          "description": "Le nom de la ville"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["celsius", "fahrenheit"],
+          "description": "Unité de température"
+        }
+      },
+      "required": ["city"]
+    }
+  }
+}
+```
+
+**Bonnes pratiques** :
+- Descriptions claires aident le modèle à choisir le bon outil
+- Décrire les paramètres avec format/contraintes
+- Utiliser `enum` pour les valeurs fixes
+- Limiter à ~20 outils (trop = confusionel)
+
+### Appels parallèles
+
+Mistral supporte l'appel de **plusieurs outils en parallèle**.
+
+Exemple : « Compare la météo de Paris et Londres »
+→ Le modèle génère deux appels `get_weather` ensemble
+→ Vous exécutez les deux en parallèle
+→ Retournez les deux résultats
+→ Le modèle compare
+
+**Avantage** : moins d'allers-retours = latence réduite.
+
+<Callout type="tip" title="Parallélisation = latency boost">
+Sans appels parallèles : chaque outil = un aller-retour complet. Avec : plusieurs outils en un seul aller-retour. Massif pour la performance.
+</Callout>
+
+### Patterns
+
+**Outil unique** : un seul outil défini, le modèle l'utilise quand c'est pertinent.
+Cas d'usage : chatbot support qui consulte une KB.
+
+**Multi-outils** : plusieurs outils, le modèle choisit le bon.
+Cas d'usage : assistant qui gère agenda, emails, tâches, recherche.
+
+**Chaîné** : résultat d'un outil = entrée d'un autre.
+Cas d'usage : chercher un client → consulter ses commandes → générer rapport.
+
+**Agentique** : le modèle planifie une séquence, exécute autonomement, adapte en fonction des résultats.
+Cas d'usage : agent qui analyse un problème, recherche, calcule, propose solution.
+
+### Gestion des erreurs
+
+**Mauvais outil choisi** : le modèle choisit l'outil inapproprié.
+Solution : meilleures descriptions, exemples.
+
+**Paramètres invalides** : le modèle génère des args mauvais.
+Solution : validation côté serveur, renvoyez un message d'erreur explicatif au modèle.
+
+**Outil échoue** : la fonction externe échoue (API down, data inexistante).
+Solution : renvoyez l'erreur formatée au modèle pour qu'il s'adapte ou informe l'utilisateur.
+
+<Callout type="warning" title="Sécurité : valider TOUJOURS">
+Un user malveillant peut tenter de manipuler le modèle pour appeler une fonction non autorisée. Validez les arguments côté serveur. Implémenter l'autorisation. Limiter les actions destructives (pas de delete sans confirmation humaine).
+</Callout>
+
+### Comparaison avec concurrents
+
+| Fonctionnalité | Mistral | OpenAI | Anthropic | Google |
+|---|---|---|---|---|
+| Function calling | Oui | Oui | Oui | Oui |
+| Appels parallèles | Oui | Oui | Oui | Oui |
+| JSON Schema | Oui | Oui | Oui | Oui |
+| Force tool use | Oui | Oui | Oui | Oui |
+| Streaming appels | Oui | Oui | Oui | Oui |
+
+Mistral est compatible standard. Migrer = facile.
+
+### Cas d'usage réels
+
+**E-commerce** : chercher catalogue → vérifier stock → calculer frais → passer commande.
+
+**RH** : consulter soldes congés → vérifier politiques → créer demandes.
+
+**Data** : interroger DBs → générer graphiques → exporter rapports.
+
+**Finance** : récupérer cours bourse → calculer indicateurs → générer analyses.
+
+---
+
+**Function Calling** = transformer le modèle en agent capable d'agir sur le monde. C'est powerful.

@@ -1,0 +1,157 @@
+---
+title: "GloVe et FastText : au-delà de Word2Vec"
+description: "GloVe exploite les stats globales du corpus, FastText gère les mots inconnus avec des sous-mots. Deux extensions qui corrigent les limites de Word2Vec."
+---
+
+## L'histoire: deux problèmes, deux révolutions
+
+Word2Vec était brillant, mais incomplet. Deux équipes y ont vu des failles et se sont lancées des défis.
+
+**GloVe** (2014, Stanford): "Word2Vec regarde localement, juste la fenêtre autour. Pourquoi pas utiliser les **statistiques globales** du corpus entier?"
+
+**FastText** (2017, Facebook): "Word2Vec et GloVe sont cool, mais un mot qu'on n'a jamais vu? Ils craquent. Pourquoi pas décomposer les mots en petits morceaux?"
+
+
+
+## GloVe: la vue d'ensemble contre la myopie
+
+### Le problème de Word2Vec que GloVe voit
+
+Word2Vec passe une fenêtre glissante (5-10 mots) sur un corpus et apprend des contextes locaux. C'est efficace, mais ça ignore la **structure globale** des statistiques.
+
+Exemple: les mots "glace" et "vapeur" sont des opposés. Si tu regardais leur corpus entier:
+- "glace" + "solide" = super fréquent (la glace est solide)
+- "vapeur" + "solide" = rare (la vapeur n'est pas solide)
+- Ratio: "solide est 100x plus probable avec glace qu'avec vapeur"
+
+Ces ratios **contiennent énormément d'information** sur le sens. Word2Vec ne les capture pas, car il oublie ce qu'il a vu la phrase avant.
+
+### La stratégie: construire et factoriser une matrice
+
+GloVe construit d'abord une **matrice énorme de co-occurrence**: cas (i, j) = combien de fois le mot i et le mot j apparaissent ensemble dans le corpus. Pour un corpus de 10 milliards de mots et 400 000 mots de vocabulaire, c'est... beaucoup. Mais exploitable.
+
+Puis, au lieu d'utiliser la matrice brute (coûteuse), GloVe cherche des vecteurs denses qui **reproduisent** ces comptes de co-occurrence:
+
+```
+Objectif: vec(mot_i) · vec(mot_j) ≈ log(co-occurrence_count(i,j))
+```
+
+L'idée: le produit scalaire de deux vecteurs doit refléter la fréquence relative. C'est une **factorisation matricielle** — on cherche des vecteurs bas-rang qui aproximent les statistiques.
+
+### Le résultat: le meilleur des deux mondes
+
+**Les anciennes méthodes** (LSA) utilisaient la matrice entière mais étaient lentes (décomposition singulière). **Word2Vec** était rapide mais ne regardait que localement. **GloVe** entraîne des vecteurs par gradient (rapide) mais en utilisant les statistiques globales du corpus (meilleur signal).
+
+<Callout type="tip" title="Les embeddings GloVe en chiffres">
+Pre-trained sur Wikipedia (6 milliards de mots) et Common Crawl (840 milliards). Les vecteurs de 300 dimensions ont long dominé les benchmarks de similarité de mots. Avant BERT, GloVe était le standard dans l'industrie.
+</Callout>
+
+### Les résultats
+
+Les embeddings GloVe pré-entraînés sur Wikipedia (6 milliards de mots) ont été **le standard** pendant des années. GloVe rivalise avec Word2Vec sur les analogies et surtout sur la **similarité de mots**.
+
+## FastText: résoudre le problème du vocabulaire infini
+
+### Le problème qui tue Word2Vec et GloVe
+
+Imagine que tu as entraîné Word2Vec ou GloVe sur un corpus français standard. Les deux modèles ont 300 000 mots dans leur table de lookup. Maintenant, tu vois un mot qui n'a jamais été vu: "anticonstitutionnellement", ou un terme technique "géolocalisation", ou une faute: "pomme" au lieu de "pomme".
+
+Réponse du modèle: "Je ne connais pas ce mot. Pas d'embedding."
+
+C'est catastrophique pour:
+- Les langues morphologiquement riches (turc: 20+ formes par verbe, finnois: quasi infini)
+- Les corpus spécialisés (termes médicaux, scientifiques rares)
+- Les réseaux sociaux (typos, néologismes à chaque seconde)
+- Les noms propres régionaux
+
+Word2Vec et GloVe craquent face à l'inconnu.
+
+### La solution géniale: décomposer les mots en morceaux
+
+**FastText** (Facebook, 2017) renverse le paradigme. Au lieu d'avoir un vecteur par mot, tu as:
+- Des vecteurs pour les **morceaux de mots** (n-grammes de caractères)
+- L'embedding final d'un mot = **somme des vecteurs de ses morceaux**
+
+Pour "pommes" (avec n-grammes de taille 3-6):
+
+```
+Morceaux: <po, pom, pomm, pomme, ommes, mmes, mes, es>
+(< et > marquent le début/fin)
+
+embedding("pommes") = somme de tous les vecteurs de ces morceaux
+```
+
+### Pourquoi ça marche pour les mots inconnus
+
+Nouveau mot "pommier"?
+
+```
+Morceaux: <po, pom, pomm, ommi, mmi, mier, ier, er>
+```
+
+"po", "pom" sont **partagés** avec "pommes". Même si "pommier" n'a jamais été vu, ses morceaux existent dans d'autres mots. L'embedding résultant = une combinaison de morceaux connus = **raisonnablement pertinent**, même pour du complètement nouveau.
+
+### Le talent caché: les fautes d'orthographe
+
+"pommes" vs. "pomms" (typo):
+
+```
+pommes: <po, pom, pomm, ommes, mmes>
+pomms:  <po, pom, pomm, omms, mms>
+```
+
+70% des morceaux sont identiques! Les embeddings sont proches, donc une recherche sémantique ne rate pas les typos.
+
+<Callout type="tip" title="FastText excelle où les morphologies explosent">
+En finnois ou en turc, un seul verbe peut avoir 20-30 formes. Word2Vec devrait connaître chaque une. FastText? Un seul radical + ses morceaux. Couverture parfaite avec une table 100x plus petite.
+</Callout>
+
+## Les trois en un tableau
+
+| Critère | Word2Vec | GloVe | FastText |
+|---|---|---|---|
+| Regarde | Localement (fenêtre) | Globalement (tout) | Localement |
+| Mots inconnus? | Non | Non | Oui (sous-mots) |
+| Morphologie | Faible | Faible | Excellente |
+| Vitesse | Rapide | Modéré | Modéré |
+| Mots fréquents | Bon | Très bon | Bon |
+| Mots rares | Faible | Faible | Bon |
+
+
+
+## Le fossé qui restera: embeddings statiques vs contextuels
+
+Ici, une limitation fondamentale: Word2Vec, GloVe, FastText produisent un **seul vecteur par mot**, peu importe le contexte.
+
+"Avocat" (le fruit) et "avocat" (le juriste) = **même embedding**. C'est un problème majeur. Le modèle confond les deux sens.
+
+### La révolution contextuelle
+
+Entre 2018 et 2024, le NLP s'est converti aux **embeddings contextuels**.
+
+- **ELMo** (2018): utilise les couches cachées d'un réseau LSTM bidrectionnel. Chaque occurrence d'un mot produit un embedding légèrement différent selon son contexte.
+- **BERT** (2018): utilise l'attention Transformer bidirectionnelle. "L'avocat plaide" vs. "L'avocat mûr" génèrent des vecteurs complètement différents pour "avocat".
+- **GPT** (2018+): même idée avec attention causale (unilatérale pour la génération).
+
+**Le résultat**: performances **100x meilleures** sur presque toutes les tâches NLP (classification, extraction, similarité, etc.).
+
+Les embeddings statiques? Fossiles, pour la plupart.
+
+<Callout type="warning" title="Mais les statiques ne sont pas morts">
+Dans certains cas spécifiques, les embeddings statiques restent utiles:
+- **Latence ultra-critique**: un lookup de table = 1 milliseconde. BERT = 100ms. Pour des applis temps réel (moteurs de recherche, recommendations), ça compte.
+- **Mémoire limitée**: une table GloVe = 1 GB. BERT = 400 MB de poids + calcul. Pour du edge (téléphone), statique gagne.
+- **Langues pauvres en données**: pour le bambara ou le lao, un corpus d'entraînement BERT est inexistant. Un embedding statique pré-entraîné (même cross-lingue) peut sauver.
+- **Exploration rapide**: visualiser 100 000 embeddings en t-SNE pour explorer un corpus. Rapide, intuif, toujours utilisé.
+</Callout>
+
+## Pourquoi c'est important
+
+GloVe et FastText ont montré deux directions distinctes:
+- **GloVe**: utiliser les statistiques **macroscopiques** (combien de fois les mots co-apparaissent globalement) améliore les embeddings. C'est différent de Word2Vec qui regarde localement.
+- **FastText**: décomposer les mots en morphèmes ou n-grammes résout les vocabulaires infinis et gère les langues complexes avec élégance.
+
+Ces deux insights **perdurent** dans les modèles modernes. BERT utilise une vision globale (attention bidirectionnelle voit le texte entier). Les tokenizers modernes (BPE, WordPiece) se reposent sur des décompositions de caractères comme FastText.
+
+Ensemble, Word2Vec, GloVe, FastText forment le **fondement conceptuel de 15 ans de NLP**.
+

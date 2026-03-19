@@ -1,0 +1,244 @@
+---
+title: "BART : débruitage et génération de texte"
+description: "BART fusionne compréhension (encoder bidirectionnel) et génération (decoder auto-régressif) avec pré-entraînement par débruitage. Excellence en résumé et traduction."
+---
+
+## L'autoencoder qui sait parler
+
+**BART** (Bidirectional and Auto-Regressive Transformers, Facebook 2019) est encoder-decoder pré-entraîné de manière originale: comme un **autoencoder débruiteur** (denoising autoencoder).
+
+Concept simple:
+1. Prends un texte
+2. Ajoute du **bruit** (masque, supprime, permute)
+3. L'encoder regarde le texte bruyant
+4. Le decoder régénère le texte **original**
+
+C'est BERT (comprendre du texte bruité) + GPT (générer du texte) fusionnés. L'encoder doit comprendre malgré le bruit, le decoder doit créer une sortie cohérente.
+
+
+
+## Architecture: encoder-decoder asymétrique
+
+**Encoder** (côté compréhension):
+- Comme BERT: attention bidirectionnelle complète
+- Regarde le texte bruyant dans son intégrité
+- Produit une représentation interne riche
+
+**Decoder** (côté génération):
+- Comme GPT: attention causale (voit le passé uniquement)
+- Génère token par token
+- **Cross-attention**: regarde aussi l'encoder (fusion des deux forces)
+
+Les tailles:
+```
+BART-base:  6 couches encoder + 6 couches decoder = 140M params
+BART-large: 12 couches encoder + 12 couches decoder = 400M params
+```
+
+<Callout type="tip" title="BART vs T5: deux approches de débruitage">
+**BART**:
+- Reconstruire le **texte entier** après corruption
+- Coûteux (cible longue = plus d'apprentissage)
+- Donne une compréhension très complète et nuancée
+
+**T5**:
+- Reconstruire juste les **spans masqués** (cible courte)
+- Plus efficace en compute
+- Moins de signal pour l'alignement encoder-decoder
+
+Deux philosophies: BART = "comprends tout et régénère", T5 = "comprends selectively et remplis les trous". Complémentaires.
+</Callout>
+
+## Coin technique: cinq stratégies de corruption testées
+
+Le key insight de BART: **pas une seule façon de corrompre le texte**. Les auteurs testent cinq:
+
+### 1. Token Masking (comme BERT)
+Remplace tokens individuels par `[MASK]`.
+
+```
+Original: "Le chat noir dort"
+Bruyant:  "Le [MASK] noir [MASK]"
+```
+
+**Verdict**: Efficace mais basique.
+
+### 2. Token Deletion
+Supprime simplement des tokens. Le modèle doit deviner **quoi** manque ET **où**.
+
+```
+Original: "Le chat noir dort"
+Bruyant:  "Le noir dort"           (perte "chat")
+```
+
+**Verdict**: Difficile. Le modèle doit inférer la position aussi.
+
+### 3. Text Infilling (remplacer spans)
+Remplace des **séquences** de tokens par **un seul** `[MASK]`.
+
+```
+Original: "Le chat noir dort"
+Bruyant:  "Le [MASK] dort"         (un seul [MASK] remplace "chat noir")
+```
+
+**Verdict**: Très efficace. Le modèle doit reconstruire plusieurs tokens, pas juste un.
+
+### 4. Sentence Permutation
+Mélange l'ordre des **phrases** (pas tokens).
+
+```
+Original: "Chat dort. Maître lit."
+Bruyant:  "Maître lit. Chat dort."
+```
+
+**Verdict**: Force le modèle à comprendre la cohérence inter-phrase.
+
+### 5. Document Rotation
+Coupe le document à un point aléatoire et le rotate.
+
+```
+Original: "Le chat dort sur canapé"
+Bruyant:  "sur canapé Le chat dort"
+```
+
+**Verdict**: Force une compréhension du flux narratif.
+
+### La recette gagnante (empirique)
+
+Après ablation, BART utilise:
+- **Text infilling** (le plus efficace) + **Sentence Permutation** (force la cohérence)
+- ~30% des tokens corrompus (équilibre: assez de signal, pas trop d'information perdue)
+- Spans de longueur Poisson (moyenne 3 tokens) — réaliste
+
+**Données**: Même corpus que RoBERTa (160 Go de texte de qualité)
+
+<Callout type="tip" title="Pourquoi text infilling gagne">
+Token masking = trop facile (le modèle apprend juste "replacer des mots"). Text infilling = dur (le modèle doit générer, pas juste classifier). Les tâches dures en entraînement → meilleures représentations.
+</Callout>
+
+
+
+## Forces: excellente génération
+
+### Résumé abstractif (la tâche phare de BART)
+
+BART **explose les records** en résumé, particulièrement le résumé abstractif (générer, pas extraire).
+
+```
+Entrée (article):    [1000 mots sur la politique de santé]
+BART-large output:   [4 lignes cohérentes resumant les points clés]
+Métrique ROUGE:      Nouveau state-of-the-art
+```
+
+Pourquoi? Le pré-entraînement text-infilling est **idéal** pour le résumé. Le modèle apprend à:
+- Comprendre un long texte bruyant (encoder)
+- Générer un court texte cohérent (decoder)
+
+Exactement la tâche de résumé.
+
+Benchmarks CNN/DailyMail et XSum: BART a battu tout le monde à la publication.
+
+### Question-Answering générative
+
+Pas des QA "extractives" (trouve le span de réponse). Mais "génératives" (construire la réponse à partir du texte).
+
+```
+Contexte: "[Article sur les insectes]"
+Question: "Comment les fourmis communiquent-elles?"
+Réponse à générer: "Les fourmis échangent des phéromones chimiques..."
+```
+
+BART surpasse les encoders car elle doit **générer**, pas classifier.
+
+### Traduction: approche créative
+
+Pour la traduction (anglais vers français), BART ne peut pas utiliser directement l'encoder pré-entraîné en anglais.
+
+Approche: garder l'encoder et decoder principaux (pré-entraînés), ajouter un **petit encodeur spécialisé** sur la langue source.
+
+```
+Texte français → Petit encoder spécialisé → Représentation intermédiaire
+→ BART decoder principal (english-tuned) → Texte anglais
+```
+
+Résultat? Marche mieux qu'un naïf. Approche créative de la traduction multilingue.
+
+<Callout type="tip" title="Génération vs classification: outils différents">
+**BART**: pour générer du texte nouveau (résumé, traduction, réécriture)
+**BERT**: pour classifier/extraire (sentiment, NER, extraction)
+
+Les gens demandent souvent "BERT ou BART?". Réponse: "Quelle est la tâche?" Génération → BART. Classification → BERT.
+</Callout>
+
+## Fine-tuning BART: adaptation par tâche
+
+### Seq2seq (traduction, résumé)
+
+C'est l'usage naturel de BART:
+
+```
+Fine-tune sur paires (texte source, résumé/traduction cible)
+Entraîner à prédire la cible donnée source
+Inférence: passer source à encoder+decoder, générer
+```
+
+Naturel. Aucun trick.
+
+### Classification (oui, c'est possible!)
+
+Intéressant: BART peut aussi classifier. Comment?
+
+```
+Entrée: [Texte à classifier]
+Encoder: traite la phrase complète
+Decoder: génère la classe en texte (p.ex., "positif", "neutre", "négatif")
+```
+
+Mais comment utilise-tu la sortie? Deux approches:
+
+1. **Génération**: Laisse decoder générer "positif" (token par token) et tu choisis le premier token
+2. **Embeddings**: Utilise la représentation du dernier token du decoder comme embedding, passe par couche linéaire
+
+L'approche 2 est plus courante: exploite la bidirectionnalité de l'encoder + la nature générartive du decoder.
+
+## mBART: BART multilingue
+
+**mBART** (Facebook 2021) = BART étendu à **25 langues**.
+
+Même pré-entraînement par débruitage, mais sur corpus parallèle multilingue. L'encoder et decoder apprennent des représentations partagées entre langues.
+
+**Résultat**:
+- Traduction excellent, même pour paires low-resource (peu de données parallèles)
+- Zero-shot: traduire du turc vers le croate sans données turc-croate
+- Tâches cross-linguales (classification multilingue, etc.)
+
+<Callout type="tip" title="L'écosystème encoder-decoder 2024">
+- **T5**: polyvalent (text-to-text pour tout)
+- **BART**: résumé/génération premium
+- **mBART/mT5**: multilingue
+- **GPT-style**: decoder-only pour flexibilité brute
+
+Choix de l'architecture dépend du problème. Encoder-decoder reste imbattable pour transformation ciblée (résumé, traduction, extraction), mais decoder-only domine pour la flexibilité.
+</Callout>
+
+## Tableau comparatif
+
+| Aspect | BERT (enc) | GPT (dec) | BART (enc-dec) |
+|---|---|---|---|
+| Attention | Bidirectionnel | Causal | Bi + causal |
+| Force | Compréhension | Génération libre | Génération ciblée |
+| Output | Vecteurs/labels | Texte libre | Texte guidé |
+| Tâche phare | Classification | Dialogue | Résumé, traduction |
+
+## Pourquoi c'est important
+
+BART démontre que **le débruitage diversifié** (au lieu d'une seule stratégie) produit un modèle encoder-decoder robuste et polyvalent. Text infilling prépare le modèle à **reconstruire du sens**, ce qui est exactement la tâche de résumé ou traduction.
+
+Bien que les LLM decoder-only (GPT, Claude) dominent pour la flexibilité brute, **BART reste le choix intelligent** en production pour:
+- Résumé high-quality
+- Traduction
+- Réécriture / paraphrase
+- Extraction générative
+
+BART a prouvé que encoder-decoder n'est pas "mort", juste **spécialisé**. Pour une transformation ciblée de texte, BART bât les décodeurs génériques.
+

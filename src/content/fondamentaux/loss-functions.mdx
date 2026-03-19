@@ -1,0 +1,162 @@
+---
+title: "Fonctions de perte : le signal qui guide l'apprentissage"
+description: "Comprendre MSE, cross-entropy, triplet loss et autres. Comment choisir la bonne perte pour ta tâche."
+---
+
+## Introduction : La perte c'est ton objectif
+
+La **fonction de perte** mesure "combien tu te trompes". Le nombre unique qui dit : "Modèle, tu es nul (perte haute) ou bon (perte basse)".
+
+C'est **crucial** : le choix de la perte définit littéralement ce que ton modèle apprend. Change la perte = change complètement le comportement.
+
+Exemple : une perte qui pénalise les erreurs légères uniformément vs une qui écrase les erreurs énormes. Deux modèles totalement différents.
+
+
+
+## MSE : pour prédire des nombres
+
+**Mean Squared Error**. Pour la régression (prédire un nombre continu).
+
+```
+MSE = moyenne de (prédiction - réalité)²
+```
+
+Exemple : tu prédis le prix d'une maison.
+- Maison 1 : tu dis 400k, c'est 400k. Erreur = 0. Contribution à MSE = 0.
+- Maison 2 : tu dis 500k, c'est 450k. Erreur = 50k. Contribution = (50k)² = 2.5 milliards.
+- Maison 3 : tu dis 405k, c'est 400k. Erreur = 5k. Contribution = (5k)² = 25 millions.
+
+### Pourquoi le carré ?
+
+Le carré pénalise **fortement** les gros erreurs. Une erreur de 10 vaut 100 fois plus qu'une erreur de 1 (10² vs 1²).
+
+C'est bien si les gros erreurs sont catastrophiques (prédire 100k au lieu de 0 pour un prix, c'est dingue).
+
+C'est mal si tu as des **outliers bizarres** (un appartement à 10M d'euros distortionne complètement la MSE).
+
+### Variante : MAE
+
+**Mean Absolute Error** :
+
+```
+MAE = moyenne de |prédiction - réalité|
+```
+
+Pas de carré. Linéaire. Une erreur de 10 vaut juste 10 fois plus qu'une erreur de 1.
+
+Plus "douce" avec les outliers. Utilise si tes données ont des valeurs bizarres.
+
+## Cross-Entropy : classification
+
+### Binary Cross-Entropy (2 classes)
+
+Pour classifier entre 2 catégories (spam vs pas spam, chat vs pas chat).
+
+```
+BCE = -(y * log(prédiction) + (1-y) * log(1-prédiction))
+```
+
+Où y = 0 ou 1 (vraie classe), prédiction entre 0 et 1.
+
+
+
+**Pourquoi pas MSE ?** Avec MSE et une activation sigmoïde, quand tu prédis 0.01 pour une vraie valeur de 1, le gradient est faible (peu de correction).
+
+Avec cross-entropy, log(0.01) = -4.6. C'est énorme ! Le modèle est brutalement pénalisé d'être confiant ET faux.
+
+### Categorical Cross-Entropy (3+ classes)
+
+Pour 3, 5, 10 catégories.
+
+```
+Loss = -somme de (vraie_classe * log(probabilité_prédite))
+```
+
+Le modèle produit un score pour chaque classe. Un softmax les convertit en probabilités qui somment à 1.
+
+<Callout type="info" title="Implémentation stable">
+Combines jamais softmax puis log séparément. Utilise `cross_entropy_with_logits` ou `log_softmax`. C'est mathématiquement équivalent mais numériquement plus stable (avoid log de nombres minuscules).
+</Callout>
+
+## Contrastive Loss : apprendre la similarité
+
+Parfois tu ne veux pas que le modèle prédit une classe ou une valeur. Tu veux qu'il apprenne un **espace de représentation** : les choses similaires s'y retrouvent proches, les choses différentes s'y retrouvent éloignées. C'est la base des systèmes de reconnaissance et de recherche par similarité.
+
+Utilisations :
+- Reconnaissance faciale : les embeddings de deux photos du même visage doivent être proches, même si les conditions d'éclairage changent
+- Recherche d'images similaires : la requête et les résultats pertinents doivent être proches dans l'espace
+- Embeddings de texte : deux phrases qui signifient la même chose doivent être proches
+
+```
+Loss = (si différent) * distance² + (si pareil) * max(0, marge - distance)²
+```
+
+Les éléments d'une même classe sont attirés ensemble. Les éléments de classes différentes sont repoussés — mais seulement jusqu'à une certaine marge. Au-delà, la pénalité est nulle : inutile de les repousser infiniment loin, il suffit qu'ils soient assez distincts.
+
+## Triplet Loss : entraîner avec des triplets
+
+Variation : prends 3 exemples : l'**ancre**, un **positif** (même classe) et un **négatif** (classe différente).
+
+```
+Loss = max(0, distance(ancre, positif) - distance(ancre, négatif) + marge)
+```
+
+Force l'ancre à être plus proche du positif que du négatif. Si ça réussit déjà, loss = 0. Si ça échoue, pénalité.
+
+### Le défi
+
+Le choix des triplets est **crucial**. Les triplets trop faciles (négatif tellement loin qu'on le détecte facilement) n'apprennent rien.
+
+Les bons triplets sont les négatifs difficiles : des exemples négatifs qui ressemblent beaucoup au positif mais n'appartiennent pas à la même classe. Ce sont eux qui forcent le modèle à affiner ses représentations.
+
+## Focal Loss : quand une classe est rare
+
+Problème classique : détection d'objets. 99.9% des régions de l'image ne contiennent rien. Un modèle bête qui prédit "rien" partout a 99.9% d'accuracy.
+
+Inutile.
+
+**Focal Loss** réduit l'importance des cas **faciles à bien classer** :
+
+```
+Loss = -(1 - prédiction)^2 * log(prédiction)
+```
+
+Le facteur (1 - prédiction)^2 est 1 si tu es très confiant et faux (besoin d'apprendre), proche de 0 si tu es correct (déjà bon, pas besoin d'apprendre).
+
+Résultat : ton modèle ignore les cas faciles et focus sur les difficiles.
+
+<Callout type="tip" title="Utilisée au-delà de la détection">
+Partout où tu as un énorme déséquilibre de classes : détection de fraude (99.9% légitime), diagnostics de maladies rares, détection d'anomalies. Focal loss aide le modèle à pas devenir "paresseux".
+</Callout>
+
+## InfoNCE : l'apprentissage contrastif moderne
+
+Les modèles comme **CLIP** (qui joint vision + texte) et **SimCLR** (pour l'apprentissage auto-supervisé) utilisent **InfoNCE**.
+
+C'est une cross-entropy appliquée aux similarités entre représentations :
+
+```
+Loss = -log(exp(sim_positive / T) / somme(exp(sim_j / T)))
+```
+
+Où T (température) contrôle le "piquant" : plus T grand = apprentissage plus doux.
+
+Intuition : maximise la similarité avec le positif, minimise avec les négatifs. Comme triplet loss mais plus stable.
+
+## Tableau récapitulatif
+
+| Tâche | Perte à utiliser | Notes |
+|---|---|---|
+| Prédire nombre continu | MSE, MAE ou Huber | MSE par défaut, MAE si outliers |
+| 2 classes | Binary cross-entropy | Avec activation sigmoïde en sortie |
+| 3+ classes | Categorical cross-entropy | Avec softmax en sortie |
+| Apprendre embedding | Contrastive, Triplet, InfoNCE | InfoNCE est moderne et stable |
+| Classe très rare (déséquilibre extrême) | Focal loss | Ignore les cas faciles |
+
+<Callout type="tip" title="Le choix de la perte peut surpasser l'architecture">
+Une bonne perte permet même aux réseaux simples de rivaliser avec les complexes. Une mauvaise perte détruit le meilleur réseau. C'est un domaine de recherche actif, notamment en apprentissage auto-supervisé.
+</Callout>
+
+## Pourquoi c'est important
+
+La fonction de perte est l'objectif que tu déclares formellement au modèle. C'est littéralement le seul signal qu'il reçoit pour s'améliorer. Un mauvais choix de perte, et le modèle optimise la mauvaise chose : il performe bien en entraînement, mais échoue en production parce qu'il n'a jamais appris ce qui compte vraiment. Prendre le temps de choisir la bonne perte pour ta tâche est souvent plus décisif que de chercher une meilleure architecture.

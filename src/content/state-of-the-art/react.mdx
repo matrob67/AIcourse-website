@@ -1,0 +1,112 @@
+---
+title: "ReAct : Reasoning + Acting"
+description: "Le pattern ReAct alterne raisonnement (Thought) et action (Act) pour résoudre des tâches complexes, permettant aux LLM de planifier et d'agir de manière structurée."
+---
+
+
+
+## Le problème : le raisonnement seul hallucine
+
+Chain-of-thought (CoT) : le LLM « réfléchit à haute voix ». C'est mieux que zéro raisonnement, mais ça peut inventer n'importe quoi.
+
+Si le LLM ne vérifie jamais ses réponses contre le monde réel, il fabrique joyeusement des infos.
+
+**ReAct** (Reasoning + Acting) combine réflexion et action : le LLM réfléchit, **agit** (appelle un outil), observe le résultat RÉEL, puis réfléchit à nouveau.
+
+<ArxivLink id="2210.03629" title="ReAct: Synergizing Reasoning and Acting in Language Models (Yao et al., 2022)" />
+
+<Callout type="info" title="L'insight clé">
+La réflexion seule peut halluciner. L'action seule est aveugle. ReAct les combine : réfléchir ET vérifier contre la réalité.
+</Callout>
+
+## Le cycle : Thought → Action → Observation
+
+```
+Q: Quel âge a le président français actuel ?
+
+Thought 1: Je dois chercher qui est président en 2024.
+Action 1: search("président France 2024")
+Observation 1: Emmanuel Macron est président depuis 2017.
+
+Thought 2: Maintenant son âge. Besoin de sa date de naissance.
+Action 2: search("Emmanuel Macron date naissance")
+Observation 2: Né le 21 décembre 1977.
+
+Thought 3: 1977 → 2024 = 46 ans.
+Action 3: finish("Emmanuel Macron, 46 ans.")
+```
+
+### Les trois étapes
+
+**Thought** : le LLM raconte son raisonnement. Pourquoi fait-il ça ? Qu'est-ce qu'il sait ? Qu'est-ce qu'il cherche ?
+
+**Action** : appel à un outil avec paramètres spécifiques.
+
+**Observation** : le résultat RÉEL, réinjecté au LLM.
+
+## Pourquoi ça marche
+
+**Ancrage dans la réalité** : les observations forcent le LLM à se confronter aux faits. Ça réduit les hallucinations.
+
+**Traçabilité** : vous voyez pourquoi le LLM a pris chaque décision. Si ça échoue, vous savez où.
+
+**Flexibilité** : les questions simples se résolvent en 1-2 étapes, les complexes en 5-10. Le LLM s'adapte.
+
+<Callout type="paper" title="Résultats">
+ReAct surpasse le CoT seul sur HotPotQA (questions multi-hop) et FEVER (vérification factuelle). L'avantage : moins d'erreurs factuelles grâce à l'ancrage par les observations.
+</Callout>
+
+## Code simple
+
+```python
+from langchain.agents import create_react_agent
+from langchain.tools import Tool
+
+tools = [
+    Tool(name="search",
+         func=search_fn,
+         description="Recherche web"),
+    Tool(name="calc",
+         func=calc_fn,
+         description="Calcul math"),
+]
+
+agent = create_react_agent(llm, tools, prompt)
+result = agent.invoke({
+    "input": "Population France au carré ?"
+})
+```
+
+## Variantes
+
+**ReAct + auto-réflexion** : après chaque action, le LLM évalue si le résultat est satisfaisant.
+
+```
+Thought: Le résultat n'est pas assez précis, reformulez.
+```
+
+**ReAct + planning** : d'abord élaborer un plan, puis le suivre.
+
+```
+Plan: 1) Chercher X  2) Chercher Y  3) Combiner  4) Répondre
+```
+
+**ReWOO** (Reasoning Without Observation) : planifier toutes les actions d'avance, les exécuter en parallèle, synthétiser. Plus rapide mais moins adaptatif.
+
+<Callout type="tip" title="ReAct est le défaut">
+Pour la plupart des agents, ReAct est le point de départ recommandé. Simple, traçable, flexible. Essayez les alternatives seulement si ReAct montre des limitations concrètes.
+</Callout>
+
+## Pièges
+
+**Boucles infinies** : l'agent répète les mêmes actions. Solution : limiter les itérations, détecter les répétitions.
+
+**Coût token** : chaque itération ajoute au contexte. 10 itérations = contexte énorme et cher.
+
+**Erreurs en cascade** : une mauvaise observation au début = chaîne de raisonnement faussée.
+
+<Callout type="warning" title="Qualité des outils">
+La fiabilité dépend autant des outils que du LLM. Un outil de recherche qui retourne du bruit ou une API qui plante sabote tout. Investissez dans des outils robustes avec erreurs claires.
+</Callout>
+
+ReAct c'est devenu le paradigme fondamental des agents LLM modernes. LangChain, LlamaIndex, AutoGen — tous implémentent une variante de ReAct comme base.

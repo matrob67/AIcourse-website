@@ -1,0 +1,140 @@
+---
+title: "Infrastructure d'entraînement"
+description: "Les GPU NVIDIA Hopper avec HBM3e, l'entraînement distribué à grande échelle, et les estimations de coûts computationnels pour les modèles Mistral."
+---
+
+
+
+## Les fermes GPU de Mistral : où la magie se fabrique
+
+Entraîner un modèle de 675 milliards de paramètres? C'est pas du gaming sur ton RTX 4090. C'est 1000 GPU H100 en parallèle, pendant 6 mois. Ça coûte des centaines de millions de dollars.
+
+C'est ce qu'a Mistral pour faire ses modèles. Voici comment ça marche.
+
+### Le matériel : GPU NVIDIA Hopper
+
+Les modèles récents de Mistral (notamment Mistral Large 3) sont entraînés sur des GPU NVIDIA de la génération Hopper, principalement les H100 et H200.
+
+#### NVIDIA H100
+
+Le H100 est le GPU de référence pour l'entraînement de LLM depuis 2023.
+
+| Spécification | Valeur |
+|--------------|--------|
+| Architecture | Hopper (GH100) |
+| Cœurs CUDA | 16 896 |
+| Tensor Cores | 528 (4e génération) |
+| Mémoire HBM3 | 80 Go |
+| Bande passante mémoire | 3,35 TB/s |
+| Performance FP16 | 989 TFLOPS (avec sparsity) |
+| Performance BF16 | 989 TFLOPS (avec sparsity) |
+| TDP | 700W |
+| Interconnexion | NVLink 4.0 (900 GB/s) |
+
+#### NVIDIA H200
+
+Le H200 est une évolution du H100 avec une mémoire HBM3e plus rapide et plus grande.
+
+| Spécification | H100 | H200 |
+|--------------|------|------|
+| Mémoire | 80 Go HBM3 | 141 Go HBM3e |
+| Bande passante | 3,35 TB/s | 4,8 TB/s |
+| Capacité accrue | - | +76% de mémoire |
+
+<Callout type="info" title="Pourquoi HBM3e est crucial pour le MoE">
+L'architecture MoE nécessite de charger rapidement les poids de différents experts pour chaque token. La bande passante mémoire (4,8 TB/s sur H200 vs 3,35 TB/s sur H100) est le facteur limitant pour cette opération. HBM3e offre un gain de 43% en bande passante, se traduisant directement en une amélioration du throughput d'entraînement pour les modèles MoE.
+</Callout>
+
+### Organisation des clusters
+
+L'entraînement de modèles comme Mistral Large 3 (675B paramètres) nécessite des clusters de milliers de GPU interconnectés.
+
+#### Topologie réseau
+
+Les GPU sont organisés en une hiérarchie d'interconnexions.
+
+**Intra-nœud :** 8 GPU H100/H200 par nœud, connectés via NVLink 4.0 (900 GB/s bidirectionnels entre chaque paire de GPU). NVSwitch permet une communication all-to-all à pleine bande passante.
+
+**Inter-nœud :** Les nœuds sont connectés via InfiniBand NDR (400 Gb/s par port), avec une topologie fat-tree qui maximise la bande passante agrégée.
+
+**À l'échelle :** Un cluster typique pour l'entraînement d'un modèle frontier comprend entre 1 000 et 10 000 GPU, répartis sur des centaines de nœuds.
+
+### Parallélisme multi-dimensionnel
+
+L'entraînement d'un modèle de 675B paramètres ne peut pas tenir sur un seul GPU (même 141 Go d'HBM3e sont insuffisants). Le modèle, les données et le calcul sont distribués sur de multiples GPU via plusieurs formes de parallélisme.
+
+#### Data Parallelism (DP)
+
+Chaque GPU (ou groupe de GPU) traite un sous-ensemble différent du batch de données avec une copie du modèle. Les gradients sont moyennés entre les répliques. C'est la forme de parallélisme la plus simple et la plus scalable.
+
+#### Tensor Parallelism (TP)
+
+Les opérations matricielles individuelles (multiplications de matrices dans les couches attention et FFN) sont découpées et distribuées sur plusieurs GPU au sein d'un même nœud. Cela nécessite une communication inter-GPU à très faible latence (NVLink).
+
+#### Pipeline Parallelism (PP)
+
+Le modèle est découpé en étages (stages), chaque étage contenant un sous-ensemble de couches. Les micro-batches circulent entre les étages comme dans un pipeline industriel, permettant de maximiser l'utilisation de chaque GPU.
+
+#### Expert Parallelism (EP)
+
+Spécifique aux modèles MoE, l'Expert Parallelism distribue les différents experts sur différents GPU. Les tokens sont routés vers le GPU hébergeant l'expert sélectionné via une communication all-to-all.
+
+<Callout type="paper" title="Combinaison des parallélismes">
+En pratique, ces formes de parallélisme sont combinées. Un setup typique pourrait utiliser TP=8 (8 GPU par groupe de tenseurs, intra-nœud), PP=4 (4 étages de pipeline), EP=8 (8 groupes d'experts), et DP=N (N répliques de données). L'optimisation de cette configuration est un art qui nécessite une compréhension profonde des trade-offs réseau/calcul/mémoire.
+</Callout>
+
+### Optimisations d'entraînement
+
+#### Mixed Precision Training
+
+L'entraînement utilise des précisions mixtes : les calculs forward et backward sont effectués en BF16 (bfloat16) ou FP16, tandis que les poids maîtres sont maintenus en FP32 pour la stabilité numérique. Les Tensor Cores des H100 sont optimisés pour BF16, offrant des performances maximales dans ce format.
+
+#### Gradient Checkpointing
+
+Pour réduire la mémoire nécessaire, le gradient checkpointing recalcule les activations intermédiaires pendant le backward pass au lieu de les stocker. Cela échange du calcul contre de la mémoire, réduisant l'empreinte mémoire d'un facteur 3-5x au prix d'environ 30% de calcul supplémentaire.
+
+#### ZeRO (Zero Redundancy Optimizer)
+
+Les techniques ZeRO (développées par Microsoft DeepSpeed) répartissent les états de l'optimiseur (moments Adam), les gradients et les poids du modèle entre les GPU, éliminant la redondance et réduisant l'empreinte mémoire par GPU.
+
+### Estimations de coûts computationnels
+
+Bien que Mistral ne communique pas ses coûts exacts, nous pouvons estimer les ordres de grandeur.
+
+#### Mistral 7B
+
+- **Estimation :** 1 000-5 000 GPU-heures H100
+- **Coût cloud estimé :** 2-10 millions de dollars
+- **Durée probable :** quelques jours sur un cluster de 256 GPU
+
+#### Mixtral 8x7B
+
+- **Estimation :** 10 000-50 000 GPU-heures H100
+- **Coût cloud estimé :** 20-100 millions de dollars
+- **Durée probable :** 1-2 semaines sur un cluster de 512+ GPU
+
+#### Mistral Large 3
+
+- **Estimation :** 100 000+ GPU-heures H100/H200
+- **Coût cloud estimé :** 50-150+ millions de dollars
+- **Durée probable :** plusieurs semaines sur un cluster de 2 000+ GPU
+
+<Callout type="warning" title="Estimations approximatives">
+Ces estimations sont basées sur des modèles de coûts publics et des extrapolations à partir de modèles de taille comparable. Les coûts réels dépendent de nombreux facteurs : prix des GPU (location vs propriété), efficacité de l'entraînement, nombre de tokens d'entraînement, nombre de reprises après pannes, etc.
+</Callout>
+
+### Mistral Compute : l'infrastructure propre
+
+Avec le datacenter Mistral Compute situé en Essonne, Mistral AI dispose de sa propre infrastructure d'entraînement, réduisant sa dépendance aux fournisseurs cloud. Ce datacenter, équipé de GPU NVIDIA de dernière génération, permet un contrôle total sur l'entraînement et garantit la souveraineté des données.
+
+### Défis opérationnels
+
+L'entraînement à grande échelle pose des défis opérationnels significatifs.
+
+**Pannes matérielles.** Sur un cluster de milliers de GPU, les pannes sont statistiquement fréquentes. Des mécanismes de checkpointing et de reprise automatique sont essentiels.
+
+**Stabilité numérique.** L'entraînement de modèles MoE à grande échelle peut être numériquement instable. Le réglage des hyperparamètres (learning rate, warmup, perte de load balancing) est critique.
+
+**Efficacité du cluster.** L'utilisation effective des GPU (MFU - Model FLOPs Utilization) dépasse rarement 50% sur les grands clusters en raison des communications réseau et des déséquilibres de charge. Optimiser ce ratio est un enjeu majeur.
+
+L'infrastructure d'entraînement est un avantage compétitif stratégique. L'investissement de Mistral dans sa propre capacité de calcul, combiné à son partenariat avec NVIDIA, lui permet de maintenir un rythme d'innovation élevé.

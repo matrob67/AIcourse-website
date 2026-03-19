@@ -1,0 +1,193 @@
+---
+title: "Prompt Management : LangSmith et Humanloop"
+description: "Gérer, versionner et optimiser les prompts en production : LangSmith, Humanloop, et les bonnes pratiques de prompt management pour les applications LLM."
+---
+
+## L'histoire : le prompt qui a cassé la prod
+
+Imaginez : vous avez déployé un chatbot pour le service client. Lundi, il répond bien. Mercredi, vous changez **une seule phrase** du prompt système pour être plus amical. Soudain, 50% des utilisateurs se plaignent que le bot donne des réponses bizarres.
+
+Vous demandez au développeur : "C'est quoi qui a changé ?"
+Il répond : "Je sais pas, c'était hardcodé dans le code, quelqu'un a peut-être changé une line."
+
+Panique.
+
+C'est l'histoire de **100 startups IA**. Et c'est pour ça qu'on a besoin du prompt management.
+
+## Le problème : le prompt est le nouveau code
+
+Dans les applications classiques, le "code" c'est les 10 000 lignes Python qui manipulent les données. Dans les applications IA, le "code" c'est **le prompt**. Changer le prompt change le comportement du système autant (voire plus) que changer le code.
+
+Pourtant, beaucoup d'équipes gèrent les prompts comme ça :
+
+```python
+system_prompt = """Tu es un assistant sympathique.
+Tu aides les gens.
+Tu es honnête.
+"""
+```
+
+C'est hardcodé dans le code. Pas de version. Pas d'historique. Pas de test. Ça marche pour les prototypes. En production ? C'est une catastrophe.
+
+<Callout type="info" title="Le prompt est le nouveau modèle">
+Penser au prompt comme du code c'est l'ancienne mentalité. Le prompt c'est plutôt comme **le modèle de machine learning** dans l'ère classique. Vous n'aviez pas un modèle codé en dur. Vous aviez un **modèle versionnné, testé, entraîné**. Le prompt c'est pareil. C'est un artefact qu'on doit gérer sérieusement.
+</Callout>
+
+
+## Les défis concrets
+
+### Versioning : qui a changé quoi quand ?
+
+Vous avez 5 prompts en production. L'un a été changé hier. Lequel ? Par qui ? Pourquoi ? Sans un système de versioning, vous êtes perdu.
+
+### Tester les changements
+
+Comment savoir si un nouveau prompt est meilleur ? Vous pouvez pas juste le mettre en production et attendre les plaintes. Vous avez besoin de tester sur un dataset de questions réelles.
+
+### Les non-tech veulent itérer
+
+Les product managers, les domain experts, ils veulent changer les prompts. Mais demander aux développeurs de modifier le code pour chaque tiny change ? C'est lent. Il faudrait une interface sans code.
+
+### Déployer indépendamment
+
+Déployer un nouveau prompt ne devrait pas nécessiter de redéployer toute l'app. C'est comme changer un paramètre de configuration, pas recompiler le code entier.
+
+## LangSmith : la plateforme complète de LangChain
+
+### Vue d'ensemble
+
+**LangSmith** est l'outil créé par LangChain pour manager les prompts, tester les chaînes LLM, et observer ce qui se passe en production.
+
+### Prompt Hub : la base de données de prompts
+
+LangSmith a un "Hub" : une bibliothèque centralisée de tous vos prompts. Chaque prompt est versionné. Quand vous modifiez un prompt, vous créez une nouvelle version. LangSmith vous montre exactement ce qui a changé (une interface de diff).
+
+Les prompts sont tagués :
+- `dev` : en développement, expérimental
+- `staging` : testé, pas encore en prod
+- `production` : actif, utilisé par les vrais utilisateurs
+
+Quand vous êtes sûr qu'une version est bonne, vous promotionne-la en prod. Pas de redéploiement. L'app récupère le prompt actif de LangSmith.
+
+### Le Playground : testez sans code
+
+Un playground est une interface où vous pouvez taper un prompt et un input, et voir la réponse immédiatement. Vous testez 10 variantes du prompt. Celle-ci donne une réponse trop longue. Celle-là donne une réponse trop courtoise. Vous ajustez et trouvez la bonne.
+
+### Évaluation : testez à l'échelle
+
+Vous créez un **dataset d'évaluation** : 100 questions réelles que vos clients pourraient poser, avec les réponses attendues.
+
+Pour chaque nouveau prompt, LangSmith :
+- L'exécute sur les 100 questions
+- Évalue les réponses (exactitude, pertinence)
+- Vous montre si la nouvelle version est meilleure que l'ancienne
+
+C'est comme avoir des tests unitaires pour votre prompt.
+
+### Tracing : voir ce qui se passe
+
+Quand un utilisateur pose une question, LangSmith trace **chaque étape** :
+- Le prompt qui a été utilisé
+- L'appel à l'API OpenAI
+- Le parsing de la réponse
+- L'appel à la base de données
+- Le temps pris à chaque étape
+- Le coût en tokens
+
+Vous voyez où ça ralentit, où ça coûte cher, où ça rate.
+
+<Callout type="tip" title="Le workflow typique">
+(1) Vous changez un prompt dans le Playground sur le dataset de test. (2) Vous voyez que l'exactitude passe de 85% à 91%. (3) Vous comparez les coûts (pas plus cher). (4) Vous promotionne le prompt en staging. (5) Vous testez avec des vrais utilisateurs pendant 1 semaine. (6) Vous promotionne en production. (7) Vous continuez à monitorer les métriques en production. Tout sans toucher au code de votre app.
+</Callout>
+
+## Humanloop : pour les équipes qui veulent collaborer
+
+### Vue d'ensemble
+
+**Humanloop** est une plateforme faite pour les équipes produit où tout le monde doit travailler ensemble : ingénieurs, product managers, domain experts.
+
+### Éditeur visuel avec prévisualisations
+
+Au lieu d'un prompt brut en JSON, Humanloop a un **éditeur drag-and-drop** :
+- Variables (comme `{{user_input}}`)
+- Conditionnels
+- Boucles
+- Preview en temps réel
+
+Les non-développeurs peuvent construire des prompts complexes sans toucher au code.
+
+### A/B testing : testez deux prompts en parallèle
+
+Humanloop propose une fonctionnalité que LangSmith n'a pas : **le A/B testing en production**.
+
+Vous versionnez deux prompts. 50% des utilisateurs reçoivent le prompt A. 50% reçoivent le prompt B. Humanloop mesure qui a le meilleur taux de satisfaction. La version gagnante devient la nouvelle baseline.
+
+C'est comme avoir des utilisateurs qui testent à l'aveugle pour vous.
+
+### Analytics : qui utilise quoi
+
+Humanloop montre un dashboard :
+- Combien de requêtes par jour
+- Le coût en tokens
+- Le taux de satisfais des utilisateurs (thumbs up/down)
+- Les erreurs et exceptions
+
+Vous voyez si le nouveau prompt ne va pas coûter 5x plus cher.
+
+<Callout type="paper" title="Prompt-as-Config">
+Humanloop popularise l'approche "Prompt-as-Config" : le prompt est traité comme une **configuration**, pas du code. L'app fetch le prompt actif via l'API Humanloop. Les product managers peuvent changer la config sans que les dev redéploient quoi que ce soit. C'est comme changer les variables d'environnement sans redémarrer le serveur.
+</Callout>
+
+## Comparaison : LangSmith vs Humanloop
+
+| Ce que vous veux faire | LangSmith | Humanloop |
+|---|---|---|
+| Versionner les prompts | Oui, excellent | Oui, excellent |
+| Tester les prompts | Oui, sur des datasets | Oui, A/B testing en prod |
+| Observer ce qui se passe | Excellent (tracing détaillé) | Bon (analytics de haut niveau) |
+| Les non-dev peuvent changer les prompts | Limité | Excellent |
+| Intégré avec LangChain | Native | Via SDK |
+| Pricing | Freemium (gratuit pour tester) | Payant |
+
+**Pour résumer** :
+- **LangSmith** : meilleur pour les ingénieurs qui veulent observer chaque détail
+- **Humanloop** : meilleur pour les équipes où product/marketing veulent itérer vite
+
+## Autres outils (mentions honorables)
+
+### PromptLayer
+Simple logging et versioning de prompts. Bon pour les petites équipes.
+
+### Portkey
+Une gateway (un routeur) pour les appels aux LLM, avec prompt management intégré. Utile si vous utilisez plusieurs LLM.
+
+### Braintrust
+Focus sur l'évaluation automatique des prompts. Surtout pour les équipes qui ont besoin de métriques très avancées.
+
+## Pourquoi c'est important : l'histoire de la startup qui a échoué
+
+Une startup a construit un chatbot avec des prompts hardcodés dans le code. Au bout de 6 mois :
+- Chaque changement de prompt = 1 semaine de process (design -> code -> test -> deploy)
+- 5 bugs en production parce que personne ne savait quel prompt était actif
+- Les product managers criaient parce qu'ils voulaient itérer plus vite
+- Les dev criaient parce qu'ils étaient surchargés de changements
+
+Avec un outil de prompt management :
+- Les changements de prompt = 5 minutes
+- Versioning = 0 bugs
+- Les product managers peuvent itérer seuls (moins de travail pour les dev)
+- Le temps de réaction passe de 1 semaine à 1 jour
+
+C'est la différence entre une startup qui stagne et une startup qui pivote.
+
+<Callout type="warning" title="Le piège du hardcoding">
+Hardcoder les prompts marche. Vraiment. C'est facile. Mais dès que vous avez plus de 1-2 prompts en production, ça devient chaos. Investir dans un outil de prompt management dès le départ c'est comme investir dans une VCS (git) pour le code. Ça paraît overkill au départ. Ça sauve des vies au bout de 6 mois.
+</Callout>
+
+## Les bonnes pratiques
+
+- **Versionner chaque changement**, même les petits. Parce qu'au bout d'un an, vous avez 100 versions et vous pouvez voir l'évolution.
+- **Tester avant de déployer**. Créez un dataset d'évaluation representatif et grandissant. Chaque nouveau prompt est testé automatiquement.
+- **Documenter les décisions**. Pourquoi avez-vous changé le prompt ? Qu'est-ce qui ne marchait pas ? Qu'est-ce que vous avez essayé d'autres ? Ça aide les futurs vous.
+- **Séparer le prompt du code**. Le prompt est un artefact qu'on deploy séparéement.
+- **Monitorer en production**. Une métrique qu'on ne mesure pas c'est comme si elle n'existait pas. Regardez le taux de satisfais, le coût, la latence. Les choses évoluent.

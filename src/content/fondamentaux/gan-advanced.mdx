@@ -1,0 +1,161 @@
+---
+title: "Architectures GAN avancées : StyleGAN, CycleGAN, WGAN"
+description: "Les architectures GAN avancées : DCGAN, WGAN avec la distance de Wasserstein, StyleGAN avec le style mixing, et CycleGAN pour la traduction d'images non appariées."
+---
+
+## Après le GAN vanilla : innover ou disparaître
+
+Le GAN original souffre de problèmes bien connus : instabilité à l'entraînement, mode collapse (le générateur apprend à produire quelques exemples convaincants au lieu de toute la diversité réelle), et des gradients erratiques qui rendent le réglage des hyperparamètres cauchemardesque. Les années 2015-2021 ont été une course effrénée à la stabilité et à la qualité, avec chaque architecture cherchant à résoudre un problème précis du GAN vanilla.
+
+
+
+## DCGAN (2015) : les fondations convolutives
+
+### Les lignes directrices qui ont sauvé les GAN
+
+Radford et al. : "voici comment faire des GAN convolutifs qui fonctionnent".
+
+**Les règles fondatrices** :
+- **Pas de pooling** : utilisez convolutions stridées (stride 2) pour réduire
+- **Batch normalization** partout (sauf sortie G, entrée D)
+- **Zéro couches entièrement connectées** (sauf sortie/entrée)
+- **ReLU en G** (sauf sortie : tanh), **LeakyReLU en D**
+
+Ces principes, simples à formuler, ont transformé l'entraînement des GAN. Avant DCGAN, les GAN convolutifs s'effondraient constamment — gradients qui explosent, mode collapse, résultats flous. Après, les pratiques DCGAN sont devenues le socle de référence que tous les GAN suivants ont hérité et perfectionné.
+
+<Callout type="tip" title="L'espace latent du DCGAN">
+DCGAN a montré : l'espace z a structure arithmétique. z_homme_lunettes - z_homme + z_femme ≈ z_femme_lunettes. Sans supervision ! Découverte : G apprend des représentations sémantiques.
+</Callout>
+
+## WGAN (2017) : distance de Wasserstein
+
+### Le problème mathématique fondamental
+
+La loss originale utilise divergence Jensen-Shannon. En haute dimension, si réel et généré ont supports disjoints (quasi toujours), la divergence **sature** : aucun gradient utile au générateur. Gradient vanishing dans la loss elle-même !
+
+### Wasserstein = Earth Mover's Distance
+
+Alternative : distance de Wasserstein. "Coût minimal pour transformer une distribution en une autre."
+
+Avantages :
+- **Gradient significatif** même distributions disjointes
+- **Continu et différentiable**
+- **Corrélé avec qualité** des images (la loss brute n'était pas)
+
+### Le critique
+
+D devient un "critique" (pas discriminateur). Pas de sigmoid en sortie. Assigne un **score sans borne** à chaque donnée.
+
+
+
+```
+Loss = E_x[D(x)] - E_z[D(G(z))]  (à maximiser pour D)
+```
+
+La différence des scores moyens ≈ distance de Wasserstein.
+
+Contrainte : D doit être **1-Lipschitz** (gradients bornés).
+
+**Weight clipping** (original) : poids en [-c, c]. Simple mais problématique.
+
+**Gradient penalty (WGAN-GP)** : pénalité sur ||gradient de D||. Préféré, plus stable.
+
+<Callout type="paper" title="Impact WGAN">
+Compréhension théorique profonde. Loss corrélée avec qualité ! Entraînement stabilisé. Moins de réglage fou d'hyperparamètres. Transformateur.
+</Callout>
+
+## StyleGAN (2019) : synthèse contrôlée
+
+### Innovation : style-based generator
+
+NVIDIA. Redéfini la qualité, spécialement visages humains (1024×1024 ultra-réalistes).
+
+Innovation clé : **générateur basé sur le style** = contrôle sans précédent.
+
+### Architecture radicale
+
+**Mapping Network** : MLP 8-couches transforme z en w dans espace latent intermédiaire W.
+
+Avantage : W est plus **découplé** : chaque dimension tend à contrôler une caractéristique sémantique distincte, sans interférence avec les autres.
+
+**Synthesis Network** : constante apprise (pas bruit en entrée). Couches appliquent transformations contrôlées par w via **AdaIN** (Adaptive Instance Normalization).
+
+Contrôle détaillé : chaque couche peut utiliser w différent.
+
+**Noise injection** : bruit stochastique ajouté à chaque résolution pour détails fins (pores peau, cheveux, texture).
+
+### Style mixing : la magie
+
+Grâce à séparation z ↔ w ↔ synthèse, tu peux mixer :
+
+- **Basse résolution** (4×4-8×8) : structure globale (pose, forme du visage, présence de lunettes)
+- **Moyen** (16×16-32×32) : features intermédiaires (coiffure, yeux)
+- **Haute** (64×64+) : détails fins (couleur, microstructure)
+
+Tu utilises w_1 en basse, w_2 en moyen, w_3 en haute. Blend styles, génère créativité. Technique jamais vue avant.
+
+<Callout type="info" title="Progressive growing">
+StyleGAN hérite de ProGAN : entraînement commence 4×4, couches ajoutées progressivement jusqu'à 1024×1024. Apprendre structure d'abord, détails après. Stabilise. StyleGAN2 a arrêté ça, autres améliorations.
+</Callout>
+
+### StyleGAN2/3
+
+**StyleGAN2** : corrige les artefacts en forme de gouttes d'eau qui apparaissaient dans certaines générations, et améliore la régularisation de l'espace latent.
+
+**StyleGAN3** : résout les problèmes d'aliasing lors des transformations (translation, rotation), introduisant une équivariance stricte qui rend les animations bien plus naturelles.
+
+## CycleGAN (2017) : traduction sans paires
+
+### Le problème réaliste
+
+Pour transformer cheval → zèbre, on aurait besoin de paires (même scène, deux versio ns). Rare. CycleGAN : traduction à partir de **collections non-appariées**.
+
+### Architecture
+
+Deux générateurs + deux discriminateurs :
+- G_AB : domaine A → B
+- G_BA : domaine B → A
+- D_A : discrimine vrais A vs traduits A
+- D_B : discrimine vrais B vs traduits B
+
+### Cycle consistency loss
+
+**L'innovation** : si tu traduis A → B → A, tu dois retrouver A.
+
+```
+L_cycle = ||G_BA(G_AB(x_A)) - x_A|| + ||G_AB(G_BA(x_B)) - x_B||
+```
+
+Cette contrainte + adversarial loss = génération qui préserve le contenu, change le style.
+
+<Callout type="tip" title="Applications magiques">
+Photos → Monet style. Été → hiver. Cheval → zèbre. Domaine adaptation (simulation → réalité). Imagerie médicale (IRM → CT). Révolutionné la traduction d'image.
+</Callout>
+
+## Autres architectures notables
+
+### Pix2Pix
+
+Traduction image-à-image **avec paires d'entraînement**. Générateur U-Net, discriminateur PatchGAN (classe des patches, pas l'image entière).
+
+Applications : segmentation → photo, croquis → image, colorisation.
+
+### BigGAN
+
+BigGAN applique une leçon simple mais puissante : la taille fait la qualité. Des batchs massifs (2048 images au lieu de 64), des modèles bien plus larges, davantage de canaux dans chaque couche de convolution. La conditionnement par classe y est bien plus prononcé — le générateur sait exactement quelle catégorie produire.
+
+Le résultat parle de lui-même : des générations conditionnelles sur ImageNet d'une fidélité sans précédent pour les GAN. Ce n'est pas une nouveauté architecturale, c'est la preuve qu'avec suffisamment de ressources de calcul, les GAN peuvent atteindre une qualité visuelle remarquable.
+
+<Callout type="paper" title="L'héritage post-GAN">
+Diffusion models surpassé les GAN pour images haute-res. Mais les innovations GAN survivent :
+- Espace W de StyleGAN (découplage des attributs)
+- Distance Wasserstein (metriques stables)
+- Cycle consistency (traduction non-appariée)
+- Même dans diffusion models modernes, ces principes réapparaissent.
+</Callout>
+
+## Résumé
+
+Chaque architecture GAN avancée répond à une limitation précise. DCGAN a posé les bonnes pratiques convolutives qui ont stabilisé l'entraînement. WGAN a résolu le problème mathématique fondamental en remplaçant la divergence Jensen-Shannon par la distance de Wasserstein, donnant enfin un signal de gradient utilisable. StyleGAN a séparé le contenu du style grâce à l'espace W, permettant un contrôle sans précédent à chaque résolution. CycleGAN a éliminé le besoin de paires d'images annotées grâce à la cohérence cyclique.
+
+Les modèles de diffusion ont depuis surpassé les GAN pour la génération haute résolution. Mais les idées introduites ici — découplage des attributs, distances de Wasserstein, cohérence cyclique — continuent d'influencer l'architecture des modèles génératifs modernes. Comprendre ces GAN, c'est comprendre les problèmes que toute la génération de modèles suivante a cherché à résoudre.

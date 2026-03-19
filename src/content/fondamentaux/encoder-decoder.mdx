@@ -1,0 +1,229 @@
+---
+title: "Architecture encoder-decoder complète"
+description: "Comment l'encoder et le decoder du Transformer interagissent pour transformer une séquence en une autre."
+---
+
+## L'histoire : une machine à traduire en deux étapes
+
+Imaginez une traductrice professionnelle qui traduit de l'anglais au français.
+
+**Étape 1 : La compréhension**
+Elle lit la phrase en anglais dans sa totalité : "The black cat is sleeping on the couch." Elle la comprend, capture tous les détails : qui fait quoi, quelle nuance, quel contexte.
+
+**Étape 2 : La génération**
+Elle génère maintenant la traduction en français, mot par mot, en se référant mentalement à la phrase anglaise qu'elle a comprise : "Le chat noir dort sur le canapé."
+
+C'est **exactement** ce que l'architecture encoder-decoder du Transformer fait.
+
+- **L'encoder** = la compréhension (lire, analyser, mémoriser)
+- **Le decoder** = la génération (produire la traduction mot par mot)
+
+C'était l'architecture originale du Transformer (2017). Aujourd'hui, certains modèles n'en utilisent qu'une partie, mais l'idée reste centrale.
+
+
+
+## L'encoder : l'analyseur
+
+L'encoder est un **stack** (pile) de 6 couches identiques (dans le Transformer original). Chaque couche a le même rôle :
+
+### Couche 1 : Multi-Head Self-Attention
+
+Chaque token regarde **tous les autres tokens** de la phrase. C'est **bidirectionnel** : le mot peut voir à gauche ET à droite. Contrairement à un RNN qui lit séquentiellement, le Transformer voit la phrase entière d'un coup.
+
+Pourquoi ? Parce que comprendre une phrase demande de voir le contexte global. En une seule passe, tous les tokens se communiquent l'info pertinente.
+
+### Couche 2 : Feed-Forward Network
+
+Après l'attention, chaque token passe indépendamment par un petit réseau de neurones :
+
+```
+output = ReLU(token × W_1 + b_1) × W_2 + b_2
+```
+
+Ce réseau **stocke la connaissance factuelle** (comme une mémoire). Il traite chaque position indépendamment.
+
+### Couche 3 : Résiduelle + Normalisation
+
+Après chaque opération, on ajoute l'entrée à la sortie (skip connection) et on normalise :
+
+```
+output = Normalisation(input + Attention(input))
+output = Normalisation(output + FFN(output))
+```
+
+Pourquoi ? Les skip connections permettent aux gradients de **circuler librement** pendant l'entraînement. Sans elles, les 6 couches seraient instables. Avec elles, vous pouvez empiler 100+ couches sans problème.
+
+<Callout type="info" title="Pourquoi 6 couches ?">
+6, c'est arbitraire et empirique. Aujourd'hui, les gros modèles en ont 80-100. Plus de couches = plus de capacité, mais aussi plus lent et plus coûteux. C'est un trade-off.
+</Callout>
+
+## Le decoder : le générateur
+
+Le decoder aussi a 6 couches, mais chaque couche a **3 sous-parties** (vs 2 pour l'encoder) :
+
+### Partie 1 : Masked Self-Attention (attention masquée)
+
+Comme l'encoder, sauf qu'il y a une restriction : le token à la position t ne peut voir **que** les positions 1, 2, ..., t. Il ne peut **pas** regarder les positions futures.
+
+Pourquoi ? Pendant l'entraînement, on montre le texte complet au decoder avec un masque qui cache le futur. Cela empêche le decoder de "tricher" en regardant la réponse qu'il doit produire.
+
+Pendant la génération (inférence), c'est naturel : on génère mot par mot, donc le futur n'existe pas encore.
+
+### Partie 2 : Cross-Attention (l'interaction encoder-decoder)
+
+C'est LA partie magique. Le decoder demande à l'encoder : "En regardant toute la phrase source, quel token générer ?"
+
+```
+Queries (Q) : viennent du decoder (le texte en cours de generation)
+Keys (K) et Values (V) : viennent de l'encoder (la phrase source)
+```
+
+À chaque pas, le decoder utilise **l'intégralité du contexte source** pour décider quel mot générer. Extraordinaire.
+
+### Partie 3 : Feed-Forward Network
+
+Identique à celui de l'encoder. Chaque position traite l'info indépendamment.
+
+
+
+## Le pipeline complet
+
+```
+TEXT SOURCE (ex: anglais)
+    |
+    v
+Tokenizer + Embedding de tokens
+    |
+    v
+Positional Encoding (ajouter l'info de position)
+    |
+    v
+ENCODER (6 couches)
+    | - Self-attention bidirectionnelle
+    | - Feed-forward
+    |
+    v
+Representation RICHE de la phrase source (un vecteur par token)
+    |
+    |------------------[CROSS-ATTENTION]--> utilise dans le decoder
+    |
+    v
+TEXT CIBLE (ex: francais, decale d'un token)
+    |
+    v
+Tokenizer + Embedding de tokens
+    |
+    v
+Positional Encoding
+    |
+    v
+DECODER (6 couches)
+    | - Self-attention MASQUEE (regarde que le passe)
+    | - CROSS-ATTENTION (regarde la source)
+    | - Feed-forward
+    |
+    v
+Linear projection (convertir vecteur en probabilites)
+    |
+    v
+Softmax
+    |
+    v
+Probabilite pour CHAQUE TOKEN du vocabulaire
+```
+
+À l'entraînement, vous montrez la cible complète avec un masque. À l'inférence, vous générez token par token.
+
+## Entraînement vs Inférence : deux modes
+
+### Mode Entraînement : Teacher Forcing (apprentissage forcé)
+
+Vous montrez au decoder la traduction **complète**, mais avec un masque qui cache le futur :
+
+```
+Encoder:
+  Lit "The black cat is sleeping"
+  Produit une representation de la phrase
+
+Decoder (avec masque):
+  Lit "Le chat noir dort" (la cible)
+  A chaque position, predit le prochain mot
+  Position 1 : prediction "Le" -> vraie reponse "chat"
+  Position 2 : prediction "chat" -> vraie reponse "noir"
+  Position 3 : prediction "noir" -> vraie reponse "dort"
+
+  PARALLELISABLE : tous les tokens en une passe
+  TRES RAPIDE
+```
+
+**Teacher forcing** = vous montrez la réponse attendue (comme un enseignant qui guide l'étudiant). C'est l'astuce qui rend l'entraînement ultra-rapide.
+
+### Mode Inférence : Génération Auto-Régressive
+
+Après l'entraînement, le decoder doit générer **sans voir la réponse** :
+
+```
+Encoder:
+  Lit la phrase source
+  La traite une fois
+
+Decoder (generation):
+  Commence avec un token speciale <START>
+  Demande : "Quel est le premier mot ?"
+  Le model dit "Le"
+  Ajoute "Le" a l'historique
+  Demande : "Quel est le prochain ?"
+  Le model dit "chat"
+  Continue...
+
+  SEQUENTIEL : un token a la fois
+  LENT : N iterations pour N tokens
+```
+
+Auto-régression = chaque token depend des précédents. Génération naturelle mais lente.
+
+<Callout type="tip" title="Pourquoi encoder-decoder vs decoder-seul ?">
+Le Transformer original (encoder-decoder) est conçu pour la traduction. Mais les recherches ont montré qu'on peut aussi :
+- **Encoder-only** (BERT) : compréhension ultra, génération zéro
+- **Decoder-only** (GPT) : génération ultra, compréhension (indirecte)
+Aujourd'hui, presque tous les LLM sont decoder-only pour la flexibilité.
+</Callout>
+
+## Comparaison des trois architectures
+
+| Type | Attention | Pré-entraînement | Force | Exemples |
+|---|---|---|---|---|
+| Encoder-only | Bidirectionnelle | MLM (masquer tokens) | Compréhension | BERT, RoBERTa |
+| Decoder-only | Causale | CLM (prédire suivant) | Génération | GPT, LLaMA, Mistral |
+| Encoder-Decoder | Les deux | Span corruption | Traduction, résumé | T5, BART, Flan-T5 |
+
+## Pourquoi le decoder-only domine maintenant
+
+Les LLM modernes (GPT-4, Claude, LLaMA, Mistral) utilisent **decoder-only**, pas encoder-decoder. Pourquoi ?
+
+1. **Simplicité** : une seule pile de couches au lieu de deux, pas besoin de cross-attention
+2. **Scaling** : plus facile à paralléliser massivement sur GPU
+3. **Unification** : un seul modèle fait tout (compréhension ET génération)
+4. **Données** : vous n'avez pas besoin de paires source-cible. N'importe quel texte suffit.
+
+Encoder-decoder était conçu pour la traduction (pairs de phrases). Mais les LLM modernes font bien plus : répondre à des questions, écrire du code, traduire, résumer, créer. Un decoder-only flexible suffit.
+
+T5 et BART gardent l'encoder-decoder, mais ce sont des exceptions rares.
+
+## Pourquoi c'est important
+
+L'architecture encoder-decoder révèle les **trois composants clés** du Transformer :
+1. L'**encoder** : analyser et comprendre
+2. La **cross-attention** : connecter encoder et decoder
+3. Le **decoder** : générer avec contexte
+
+Comprendre ces parties individuellement aide à comprendre comment fonctionne **tout** modèle Transformer, decoder-only ou non.
+
+## Les points clés à retenir
+
+1. **Encoder** = compréhension (bidirectionnelle, tout voit tout)
+2. **Decoder** = génération (masqué, regarde le passé seul)
+3. **Cross-attention** = la connexion entre eux (decoder regarde source)
+4. **Teacher forcing** = entraînement rapide en parallèle
+5. **Auto-régression** = inférence lente, token par token
+6. **Decoder-only** = standard moderne des LLM (GPT, LLaMA)

@@ -1,0 +1,139 @@
+---
+title: "Text-to-Image : Stable Diffusion, SDXL, Flux"
+description: "Les modèles de génération d'images à partir de texte : Stable Diffusion et ses évolutions, SDXL, et la nouvelle génération Flux. Architecture, utilisation et écosystème."
+---
+
+## La révolution : créer des images à partir de mots
+
+Imaginez dire "une forêt tropicale à l'aube, rayon de soleil, papillons" et une IA génère une belle image photoréaliste en quelques secondes. C'était impossible il y a 3 ans. Aujourd'hui c'est banal. **Les modèles text-to-image** ont démocratisé la création d'images : pas besoin d'être photographe ou illustrateur.
+
+
+
+<Callout type="info" title="L'écosystème text-to-image">
+Il y a deux mondes : **propriétaire** (DALL-E 3 d'OpenAI, Midjourney, Imagen de Google) et **open-source** (Stable Diffusion, SDXL, Flux). Les modèles open-source ont catalysé une communauté massive : des milliers de LoRA (adaptations fines), d'extensions, de variations. L'écosystème open-source est devenu énorme.
+</Callout>
+
+## Stable Diffusion : le fondateur
+
+### Comment ça marche
+
+Stable Diffusion utilise un **Latent Diffusion Model** — un modèle qui opère dans un espace compressé au lieu de l'espace pixel brut (beaucoup plus efficace) :
+
+1. **VAE Encoder** : compresse une image 512×512 en un espace latent 64×64
+2. **UNet** : réseau de débruitage qui opère dans cet espace latent
+3. **Text Encoder** : convertit le texte (prompt) en un vecteur (utilise CLIP)
+4. **VAE Decoder** : reconstruit l'image depuis l'espace latent
+
+
+### Le processus de génération en 4 étapes
+
+1. Commencer avec du bruit aléatoire
+2. Le UNet prédit "quel bruit retirer à cette étape"
+3. Retirer ce bruit, étape par étape
+4. Le text embedding guide ce processus (génère ce qui correspond au texte)
+5. Après T étapes (20-50 généralement), décoder et obtenir l'image finale
+
+### Les versions principales
+
+- **SD 1.5** (2022) : 860M paramètres, 512×512, la plus populaire (des milliers de fine-tunes)
+- **SD 2.1** (2022) : nouveau text encoder, résultats moins stables
+- **SDXL** (2023) : 6.6B paramètres, 1024×1024, qualité bien meilleure
+- **SD 3** (2024) : architecture DiT (Diffusion Transformer), triple text encoder
+
+## SDXL : le standard actuel
+
+SDXL apporte plusieurs améliorations majeures sur SD 1.5 :
+
+- **Résolution native de 1024×1024** (vs 512×512) = plus de détails
+- **Deux UNets** : un base model pour la composition, un refiner pour les détails fins
+- **Dual text encoders** : CLIP ViT-L + OpenCLIP ViT-bigG = meilleure compréhension du prompt
+- **Conditionnement enrichi** : transmet aussi la taille originale de l'image, le crop, la cible esthétique
+
+<Callout type="tip" title="SDXL en production">
+SDXL reste le plus utilisé en production. Pourquoi ? Bon compromis qualité/vitesse/coût, et surtout un écosystème fou : des milliers de LoRA communautaires permettent de générer des styles spécifiques (manga, pixel art, photo vintage) sans entraîner un modèle complet.
+</Callout>
+
+## Flux : la nouvelle génération
+
+Flux, développé par Black Forest Labs (les créateurs originaux de Stable Diffusion), représente une avancée majeure :
+
+### Quoi de nouveau
+
+- **Diffusion Transformer (DiT)** au lieu du UNet (plus puissant, plus moderne)
+- **Flow Matching** au lieu du DDPM classique (plus efficace, plus stable à entraîner)
+- **T5-XXL comme text encoder** (meilleure compréhension des prompts complexes)
+- **Attention multimodale** : fusion profonde texte-image dans le transformer
+
+### Les trois variantes
+
+- **Flux.1 [pro]** : meilleure qualité, API uniquement
+- **Flux.1 [dev]** : open-weight, usage non-commercial
+- **Flux.1 [schnell]** : peut générer en 1-4 étapes, temps quasi-réel, Apache 2.0 (entièrement libre)
+
+### Avantages de Flux
+
+- Suit mieux les instructions ("générer exactement cela")
+- Génère du texte dans les images (Stable Diffusion fait ça mal)
+- Anatomie humaine plus réaliste
+- Gère mieux les compositions complexes avec plusieurs objets
+
+## Techniques clés
+
+### Classifier-Free Guidance (CFG)
+
+La principale technique pour contrôler si l'image suit bien le prompt :
+
+```
+ε_guided = ε_uncond + w × (ε_cond - ε_uncond)
+```
+
+Où w (guidance scale) contrôle la "force du guidage". Augmentez w et l'image suit le prompt plus fidèlement. Trop, et vous obtenez des artefacts.
+
+**Coin technique intuitive** : c'est comme avoir deux prédictions : une qui ignore le texte (ε_uncond), une qui le suit (ε_cond). On interpole entre les deux : 100% ε_uncond = ignorer le prompt (image étrange), 100% ε_cond = suivre obsessivement le prompt (artefacts), w=7-12 = bon compromis.
+
+Valeurs typiques :
+- w=7-12 pour Stable Diffusion (élevé = très fidèle au prompt)
+- w=3.5 pour Flux (plus bas car Flux suit mieux naturellement)
+
+### Noise Schedules (comment bruiter)
+
+L'algorithme de débruitage affecte vitesse et qualité :
+
+- **DDPM** : 1000 étapes, qualité maximale mais lent
+- **DDIM** : 20-50 étapes, déterministe (même seed = même image)
+- **Euler** : 20-30 étapes, bon compromis
+- **DPM++ 2M Karras** : 20-30 étapes, standard pour Stable Diffusion
+- **Flow Matching** (Flux) : 4-50 étapes, très efficace
+
+### LoRA : personnaliser sans réentraîner
+
+LoRA (Low-Rank Adaptation) est un petit modèle qu'on "ajoute" à Stable Diffusion pour la spécialiser :
+
+- **Style LoRA** : générer dans un style artistique spécifique (Van Gogh, pixel art, anime)
+- **Character LoRA** : générer un personnage de manière cohérente
+- **Concept LoRA** : ajouter un concept visuel qu'on invente (un animal fantastique)
+
+Les LoRA sont petits (10-100 MB) et applicables à n'importe quel modèle base.
+
+<Callout type="warning" title="Éthique et légalité">
+La génération d'images soulève des questions sérieuses : deepfakes, reproduction de styles d'artistes sans consentement, génération de contenu trompeur. Les modèles responsables intègrent des filtres de sécurité et le watermarking automatique. Utilisez responsablement.
+</Callout>
+
+## L'écosystème : outils pour générer
+
+- **ComfyUI** : interface node-based pour workflows complexes (la plus puissante)
+- **Automatic1111** : interface web complète pour Stable Diffusion (la plus populaire)
+- **Diffusers** (Hugging Face) : bibliothèque Python pour intégration programmatique
+- **CivitAI** : plateforme géante de partage de modèles et LoRA
+
+L'écosystème est mature et communautaire. Des centaines de variables et extensions sont disponibles gratuitement.
+
+## Perspective
+
+La génération d'images évolue vers :
+- **Architectures Transformer** (DiT) plutôt que CNN (UNet)
+- **Méthodes d'entraînement plus efficaces** (Flow Matching plutôt que DDPM)
+- **Génération en temps réel** (Flux schnell : 1-4 étapes)
+- **Contrôle fin** (ControlNet pour la pose, IP-Adapter pour la cohérence personnage)
+
+Le futur c'est des modèles rapides et contrôlables capable de générer en 1-2 secondes, avec un contrôle pixel-level si souhaité.

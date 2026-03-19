@@ -1,0 +1,164 @@
+---
+title: "Métriques avancées : ROC, AUC, calibration"
+description: "Dépasser les métriques simples. Courbes ROC, AUC et vérifier que tes probabilités sont vraies."
+---
+
+## Introduction : Aller au-delà du binaire
+
+Accuracy, precision, recall évaluent une **décision binaire** (0 ou 1) à un seuil fixe (généralement 0.5).
+
+Mais ton modèle ne produit pas juste 0 ou 1. Il produit une **probabilité** entre 0 et 1. Les métriques avancées évaluent la qualité de ces probabilités.
+
+
+
+## La matrice de confusion : voir la structure des erreurs
+
+La **matrice de confusion** croise les vraies classes et les prédictions.
+
+Pour 2 classes (spam/pas spam), c'est une matrice 2x2 :
+
+
+
+Pour K classes, c'est une matrice KxK. La diagonale = correct. Hors-diagonale = erreurs.
+
+<Callout type="tip" title="Lire la matrice">
+Les lignes sont les vraies classes, les colonnes les prédictions. En reconnaissance de chiffres manuscrits, tu vois souvent que 4 est confondu avec 9 (visuellement similaires).
+</Callout>
+
+**Variantes utiles** :
+- **Spécificité** = TN / (TN + FP) = proportion de négatifs bien détectés
+- **Taux de faux positifs (FPR)** = FP / (FP + TN) = taux de fausses alarmes
+
+## La courbe ROC : voir tout le compromis
+
+La courbe **ROC** (Receiver Operating Characteristic) trace le **recall** (TPR, axe Y) en fonction du **taux de faux positifs** (FPR, axe X) en variant le seuil de 0 à 1.
+
+**Comment la construire** :
+
+- Seuil = 1 : ne prédis jamais positif. TPR=0, FPR=0. Point (0,0).
+- Seuil = 0 : prédis toujours positif. TPR=1, FPR=1. Point (1,1).
+- Modèle parfait : courbe qui passe par (0,1) : recall parfait sans faux positifs.
+- Modèle aléatoire : la diagonale (0,0) à (1,1).
+
+
+<Callout type="info" title="Interprétation">
+Plus la courbe "monte" vers le coin supérieur gauche, meilleur est le modèle. Une courbe sur la diagonale = aléatoire. En dessous = pire qu'aléatoire (inverse tes prédictions).
+</Callout>
+
+## AUC : résumer la ROC en un nombre
+
+L'**AUC** (Area Under the Curve) est l'aire sous la courbe ROC. Entre 0 et 1.
+
+- **AUC = 1.0** : parfait. Existe un seuil qui sépare les classes parfaitement.
+- **AUC = 0.5** : aléatoire. Pas mieux que le hasard.
+- **AUC = 0.0** : inversé. Parfait si tu inverses tes prédictions.
+
+**Interprétation probabiliste** : AUC = probabilité qu'un exemple positif aléatoire reçoive un score plus élevé qu'un exemple négatif aléatoire.
+
+**Avantages** :
+- Indépendante du seuil
+- Robuste aux classes déséquilibrées
+- Permet de comparer des modèles
+
+**Limitation** :
+- Donne le même poids à toutes les zones du graphique. Mais un FPR de 0.8 n'est rarement acceptable en pratique (80% de fausses alarmes c'est nul).
+
+## Courbe Precision-Recall : pour les classes rares
+
+Quand une classe est très rare (détection de fraude, diagnostics rares), la courbe ROC peut être trompeuse.
+
+La courbe **Precision-Recall** est meilleure pour ces cas. Elle trace **precision** (axe Y) en fonction de **recall** (axe X).
+
+**AUC-PR** résume cette courbe. Un modèle aléatoire a une AUC-PR égale à la **proportion de positifs** (pas 0.5 comme ROC). Ça la rend plus discriminante pour les classes rares.
+
+<Callout type="warning" title="ROC vs Precision-Recall">
+Classes équilibrées ? ROC/AUC.
+Classe très rare et tu veux la détecter ? Precision-Recall/AUC-PR.
+</Callout>
+
+## Calibration : tes probabilités sont-elles vraies ?
+
+Ton modèle produit un score entre 0 et 1. On l'interprète comme "probabilité d'être positif".
+
+Mais l'est-ce vraiment ?
+
+Un modèle est **calibré** si un score de 0.8 signifie réellement "80% de chance d'être positif". Quand tu regardes beaucoup de prédictions avec score 0.8, 80% sont correctes.
+
+**Exemple**:
+- Modèle dit 0.8 pour 100 cas
+- 80 sont corrects -> bien calibré
+- 50 seulement sont corrects -> surconfiant
+
+<Callout type="info" title="Les réseaux de neurones sont généralement surconfiants">
+Ils prédisent "99% sûr" mais ont raison que 85% du temps. BatchNorm et les architectures profondes amplifient ce problème. La calibration est importante en production.
+</Callout>
+
+## Diagramme de fiabilité : voir la calibration
+
+Tu groupes les prédictions par niveau de confiance (0-0.1, 0.1-0.2, ..., 0.9-1.0) et tu traces la vraie fréquence de positivité pour chaque groupe.
+
+
+
+Un modèle parfait = droite diagonale.
+
+Au-dessus = sous-confiant (moins certain qu'il devrait l'être).
+En dessous = surconfiant.
+
+## Brier score : métrique scalaire
+
+Le **Brier score** mesure la calibration en un nombre :
+
+```
+Brier = moyenne de (probabilité_prédite - vraie_classe)²
+```
+
+Plus bas = meilleur. C'est essentiellement la MSE appliquée aux probabilités.
+
+## Recalibration post-hoc
+
+Si ton modèle est mal calibré, tu peux le fixer **sans retravailler le modèle**.
+
+### Temperature Scaling
+
+La plus simple. Utilise un paramètre T :
+
+```
+proba_calibrée = softmax(logits / T)
+```
+
+T > 1 "adoucit" les probabilités (réduit la surconfiance). T = 1 = rien. T = 0.5 = beaucoup plus doux.
+
+Apprend le T idéal sur un jeu de validation. Seul paramètre à optimiser.
+
+### Platt Scaling
+
+Apprend une sigmoïde entre les logits et la vraie classe. Plus flexible que temperature scaling.
+
+### Isotonic Regression
+
+Non-paramétrique, très flexible. Apprend une fonction monotone arbitraire.
+
+## Résumé des outils
+
+| Outil | Ce qu'il mesure | Quand |
+|---|---|---|
+| Matrice de confusion | Patterns d'erreurs par classe | Toujours |
+| Courbe ROC / AUC | Discrimination globale | Classes équilibrées |
+| Courbe PR / AUC-PR | Discrimination sur classe rare | Classes déséquilibrées |
+| Diagramme de fiabilité | Qualité des probabilités | Quand les probs importent (santé, etc.) |
+| Brier score | Calibration + discrimination | Métrique scalaire |
+
+## Évaluation complète
+
+Pour une vraie évaluation rigoureuse :
+
+1. **Matrice de confusion** : vois la structure des erreurs
+2. **Courbe ROC ou PR** : comprends le compromis à différents seuils
+3. **Calibration** : tes probs sont-elles vraies ?
+4. **Mériques scalaires** (AUC, F1) : permet de comparer et sélectionner
+
+Les graphiques te permettent de **comprendre** les forces et faiblesses réelles. Les scalaires te permettent de **comparer** objectivement.
+
+## Pourquoi c'est important
+
+Une bonne métrique te force à aller au-delà des apparences. Un AUC de 0.95 paraît excellent. Mais si ton modèle est surconfiant de dingue, c'est problématique en production. Évalue proprement.

@@ -1,0 +1,131 @@
+---
+title: "CUDA, cuDNN, NCCL : le moat logiciel de NVIDIA"
+description: "Pourquoi personne ne peut concurrencer NVIDIA. L'écosystème CUDA qui domine le deep learning depuis 15 ans."
+---
+
+## Le secret de NVIDIA n'est pas le hardware, c'est le logiciel
+
+Les GPU NVIDIA sont bons, mais **le vrai moat c'est CUDA**. Un écosystème logiciel de 15 ans d'investissement. Plus de 900 bibliotèques optimisées. 4 millions de développeurs dépendants.
+
+Quand vous tapez `model.cuda()` en PyTorch, ça active une chaîne logicielle incroyablement sophistiquée : runtime CUDA, cuBLAS pour les matrices, cuDNN pour le deep learning, NCCL pour multi-GPU. Le tout optimisé et testé pour chaque génération de puce.
+
+<Callout type="info" title="Le nombre CUDA">
+CUDA c'est depuis 2006. En 2025-2026 : plus de 4 millions de devs, 900+ libs accélérées, 3000+ applis. C'est cet écosystème qui justifie le surcoût des GPU NVIDIA vs les alternatives.
+</Callout>
+
+
+
+## CUDA : la fondation
+
+**CUDA** = Compute Unified Device Architecture. C'est à la fois un langage et une plateforme pour programmer les GPU.
+
+### Comment ça marche
+
+Vous écrivez des **kernels** (fonctions GPU exécutées par des milliers de threads). Les threads sont organisés :
+
+- **Threads** : unité minimale
+- **Warps** : 32 threads exécutant la même instruction
+- **Blocks** : threads partageant de la mémoire
+- **Grid** : l'ensemble complet
+
+### CUDA Toolkit : ce qu'il contient
+
+- **nvcc** : compilateur
+- **CUDA Runtime** : gestion mémoire, lancement
+- **Bibliothèques** : cuBLAS, cuFFT, cuRAND, cuSPARSE
+- **Tools** : Nsight pour le profiling
+
+<Callout type="tip" title="Les praticiens ML n'écrivent jamais de CUDA">
+Vous utilisez PyTorch/TensorFlow qui appellent CUDA en coulisse. Mais comprendre CUDA aide pour le debugging et l'optimisation. C'est du "pourquoi c'est lent" stuff.
+</Callout>
+
+## cuBLAS : l'algèbre linéaire GPU
+
+**cuBLAS** = BLAS (Basic Linear Algebra Subroutines) pour GPU. C'est là que vivent les multiplications de matrices.
+
+Le deep learning c'est essentiellement du GEMM (General Matrix Multiply). Un réseau de neurones = plein de multiplications matricielles.
+
+cuBLAS optimise chaque GEMM selon :
+- La taille des matrices
+- Le type de données (FP32, FP16, BF16, FP8, INT8)
+- L'architecture GPU cible
+- Les Tensor Cores
+
+**cuBLASLt** = version flexible pour opérations custom, fusion d'opérations, layouts non-standard.
+
+## cuDNN : deep learning spécialisé
+
+**cuDNN** = bibliothèque d'opérations deep learning optimisées.
+
+Ce qu'il fait :
+
+- **Convolutions** : forward, backward (multiples algos)
+- **Attention** : scaled dot-product optimisé
+- **Normalisation** : BatchNorm, LayerNorm, GroupNorm
+- **Activations** : ReLU, GELU, SiLU
+- **Pooling** : max, average, adaptive
+- **Softmax** : standard et log-softmax
+
+### Fusion d'opérations (kernel fusion)
+
+Au lieu d'exécuter : matmul → bias → activation séparément (3 lancements kernel, 3 lectures/écritures HBM), fusionne tout en un seul kernel. Réduit drastiquement les accès mémoire.
+
+<Callout type="paper" title="Fusion c'est life-changing">
+La fusion d'opérations accélère de 2-4x. C'est critique pour les modèles modernes où les opérations sont petites et nombreuses.
+</Callout>
+
+## NCCL : la communication multi-GPU
+
+**NCCL** (NVIDIA Collective Communications) gère la communication entre GPU, au sein d'un nœud (NVLink) ou entre nœuds (InfiniBand/RoCE).
+
+### Opérations collectives
+
+- **AllReduce** : chaque GPU contribue un tenseur, tous reçoivent la somme (pour data parallelism)
+- **AllGather** : chaque GPU partage, tous reçoivent
+- **ReduceScatter** : réduction puis distribution
+- **Broadcast** : un GPU envoie à tous
+- **AllToAll** : chaque GPU envoie différemment (expert parallelism)
+
+### Optimisations automatos
+
+NCCL détecte la topologie (NVLink? InfiniBand? PCIe?) et choisit les algos :
+
+- **Ring** : GPU forment une chaîne
+- **Tree** : hiérarchie en arbre
+- **SHARP** : agrégation in-network sur switches
+
+<Callout type="warning" title="La communication = le goulot d'étranglement">
+À plusieurs centaines de GPU, la communication peut représenter 30-50% du temps total. C'est pourquoi NVIDIA investit dans NVLink, NVSwitch, InfiniBand. L'optimisation réseau est aussi importante que le GPU lui-même.
+</Callout>
+
+## TensorRT : optimisation pour l'inférence
+
+**TensorRT** transforme un modèle entraîné en moteur d'inférence ultra-optimisé :
+
+- **Fusion de couches** : combinez opérations successives
+- **Quantization** : INT8/FP8 automatique
+- **Optimisation mémoire** : réutilisation de buffers
+- **Sélection de kernels** : benchmark chaque opération
+- **Plugins** : opérations custom optimisées
+
+**TensorRT-LLM** = version LLM, avec KV-cache paginé, continuous batching, attention optimisée.
+
+## Triton : le challenger open source
+
+**Triton** (OpenAI) : écrivez des kernels GPU en Python pur, pas CUDA C++. Simplifie énormément l'écriture de kernels performants.
+
+FlashAttention (l'optimisation d'attention révolutionnaire) a été écrite en CUDA puis portée en Triton. Unsloth, vLLM l'utilisent. C'est l'alternative moderne au CUDA C++ brut.
+
+## La stack au complet en action
+
+Quand vous entraînez PyTorch sur GPU :
+
+1. **PyTorch** : API Python, autograd
+2. **ATen** : tensor ops en C++
+3. **cuDNN** : opérations DL
+4. **cuBLAS** : matrices
+5. **NCCL** : communication multi-GPU
+6. **CUDA Runtime** : gestion mémoire
+7. **CUDA Driver** : interface hardware
+
+C'est cette intégration verticale complète qui rend NVIDIA imbattable. Concurrencer tout ça d'un coup = impossible.

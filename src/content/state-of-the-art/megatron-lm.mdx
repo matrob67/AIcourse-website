@@ -1,0 +1,138 @@
+---
+title: "Megatron-LM (NVIDIA)"
+description: "Présentation de Megatron-LM, le framework d'entraînement distribué de NVIDIA qui combine Tensor, Pipeline et Data Parallelism pour entraîner les plus grands modèles de langage."
+---
+
+
+
+## L'infrastructure pour les titans : Megatron-LM
+
+Megatron-LM est le toolkit de NVIDIA pour entraîner les modèles les plus énormes du monde. C'est le framework utilisé par NVIDIA pour entraîner les modèles de base. À grande échelle, c'est souvent plus performant que ZeRO ou FSDP parce qu'il est construit spécifiquement pour le hardware NVIDIA (NVLink, InfiniBand, Tensor Cores).
+
+## Le parallélisme 3D
+
+Megatron organise les GPU en trois dimensions :
+
+```
+GPU_ID = (tensor_rank, pipeline_rank, data_rank)
+```
+
+- **Tensor Parallelism (TP)** : au sein d'un noeud DGX (8 GPU avec NVLink)
+- **Pipeline Parallelism (PP)** : entre noeuds (via InfiniBand)
+- **Data Parallelism (DP)** : répliques complètes du pipeline
+
+Pour un modèle de 175B sur 1024 GPU (128 noeuds DGX H100) :
+- TP = 8 (chaque noeud)
+- PP = 16 (entre 16 noeuds)
+- DP = 8 (8 répliques du pipeline)
+- Total : 8 × 16 × 8 = 1024 GPU
+
+<Callout type="info" title="Pourquoi 3D et pas 2D">
+Avec seulement TP et DP, tu divises par NTP × NDP. Mais TP a besoin de NVLink (intra-noeud), DP dilate ta surface de communication. PP permet de descendre à moins de GPU par réplique, ce qui réduit DP et améliore l'efficacité.
+</Callout>
+
+## Optimisations Megatron-LM
+
+### Tensor Parallelism ultra-optimisé
+
+Megatron minimise les communications dans le TP :
+- Partitionne les poids du MLP en colonnes puis en lignes
+- Fusionne les non-linéarités (GELU, ReLU) avec la matmul
+- Seulement 2 all-reduce par couche Transformer dans le forward (vs 4 naïvement)
+
+Ça réduit la latence de communication de façon drastique.
+
+### Sequence Parallelism intégré
+
+SP partitionne les opérations non-TP (LayerNorm, dropout) le long de la séquence. Ça élimine la redondance des activations sans surcoût de communication.
+
+<Callout type="paper" title="SP dans Megatron">
+Le SP intelligent de Megatron utilise reduce-scatter et all-gather au lieu des all-reduce du TP, avec le même volume total de communication. Ça te libère la mémoire des activations gratuitement.
+</Callout>
+
+### Pipeline Parallelism avancé
+
+Megatron supporte plusieurs stratégies de scheduling :
+- **1F1B** : forward et backward alternés
+- **Interleaved 1F1B** : couches non-contiguës pour réduire la bulle
+- **Virtual pipeline stages** : simule plus de stages que de GPU physiques
+
+### Context Parallelism natif
+
+Support natif pour les longues séquences (100K+ tokens).
+
+## Optimisations d'entraînement
+
+### Mixed precision avancée
+
+```
+BF16 (forward/backward) + FP32 (maître + accumulation)
+FP8 (Transformer Engine sur H100)
+```
+
+### Activation checkpointing sélectif
+
+Au lieu de checkpointer toutes les couches, Megatron te permet de choisir. En pratique : checkpoint l'attention (coûteuse en mémoire), garde les activations du MLP.
+
+<Callout type="tip" title="Checkpointing intelligent">
+Ça réduit la mémoire de ~40% tout en n'ajoutant que ~20-30% de calcul. C'est un excellent compromis.
+</Callout>
+
+### Communication/computation overlap
+
+Simultanément :
+- All-reduce DP pendant le backward
+- Prefetch des paramètres PP pendant le calcul
+- All-gather TP pendant les opérations non-TP
+
+Tout ça masque la latence de communication.
+
+## Performances réelles
+
+### Scaling efficiency (MFU : Model FLOPs Utilization)
+
+| Configuration | MFU | Notes |
+|--------------|-----|--------|
+| 8 GPU (1 noeud, TP=8) | 95-98% | Near peak |
+| 64 GPU (8 noeuds, TP=8 + PP=8) | 88-95% | Excellent |
+| 1024 GPU (3D: 8×16×8) | 75-85% | Bon (communication) |
+| 4096+ GPU | 60-75% | Limité par communication |
+
+Sur DGX H100 + InfiniBand HDR, Megatron-LM atteint 150-180 TFLOP/s par GPU (peak = 990 TFLOP/s en BF16). C'est 15-18% du peak, ce qui pour du scaling distribué, c'est remarquable.
+
+<Callout type="warning" title="MFU vs utilisation GPU">
+MFU mesure les FLOP utiles du modèle vs théorique. 50%+ est excellent pour l'entraînement. Les 50% manquants : communications, opérations non-matmul, bulle de pipeline, memory bandwidth limits.
+</Callout>
+
+## Écosystème
+
+### NeMo Framework
+
+NeMo est la couche haute de NVIDIA au-dessus de Megatron-LM :
+- Configuration YAML simplifiée (pas besoin de coder Python)
+- Recettes pré-faites pour LLM, multimodal, ASR
+- Intégration avec NVIDIA NGC et Base Command
+
+### Modèles utilisant Megatron-LM
+
+- **BLOOM** (BigScience) : 176B paramètres
+- **Falcon** (TII) : adapté de Megatron
+- Nombreux modèles propriétaires industriels
+- Baseline pour les recherches d'entraînement distribué
+
+### Compétiteurs
+
+| Framework | Développeur | Force principale |
+|-----------|------------|------------------|
+| Megatron-LM | NVIDIA | Performance maximale |
+| DeepSpeed | Microsoft | ZeRO, facilité d'usage |
+| FSDP | Meta/PyTorch | Intégration PyTorch |
+| ColossalAI | HPC-AI | Facilité, multi-backend |
+
+<Callout type="info" title="Quand choisir Megatron-LM">
+Si tu as une réserve de GPU NVIDIA (DGX, cluster InfiniBand) et que la performance est critique, Megatron-LM est la référence. C'est plus complexe à configurer mais tu gagnes 10-20% de performance vs DeepSpeed/FSDP. Pour les startups avec 8-64 GPU, FSDP est probablement mieux.
+</Callout>
+
+## Résumé
+
+Megatron-LM est le framework le plus performant pour l'entraînement distribué des LLM sur GPU NVIDIA. Le parallélisme 3D, les optimisations hardware-aware et la communauté NVIDIA en font le choix pour les projets de très grande échelle. C'est complexe, mais la performance en vaut la peine à grande échelle.

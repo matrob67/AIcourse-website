@@ -1,0 +1,132 @@
+---
+title: "Transfer learning en vision"
+description: "Comment réutiliser des modèles pré-entraînés sur ImageNet pour de nouvelles tâches de vision par ordinateur, avec les stratégies de feature extraction et de fine-tuning."
+---
+
+## Le génie du transfer learning
+
+Imaginez : vous apprenez à jouer du piano. Puis on vous demande d'apprendre l'accordéon. Vous ne recommencez pas de zéro à comprendre comment faire vibrer l'air ou lire une partition. Vous réutilisez ce que vous savez déjà : les notes, les rythmes, la coordination des mains. De même en IA, un modèle entraîné sur **14 millions d'images** d'ImageNet a appris des représentations universelles de ce qu'est une image : bords, textures, formes, compositions. On réutilise ces connaissances pour nos tâches spécifiques, même si on n'a que 100 photos à disposition.
+
+
+
+## Pourquoi ImageNet est magique
+
+ImageNet = 14 millions d'images, 20 000+ catégories. Le subset ILSVRC ? **1,2 million d'images**, 1 000 catégories. Chiens, voitures, plantes, tout.
+
+Un CNN entraîné sur ImageNet a appris des filtres pour :
+- **Couches basses** : bords, textures, contrastes → universel partout
+- **Couches hautes** : formes d'objets, visages, textures fines → spécifique aux images naturelles
+
+Quand vous avez un problème "reconnaître des types de fleurs", le CNN sait déjà "c'est quoi des pétales, des couleurs, des formes". Il reste juste à lui apprendre "cette combinaison = tulipe".
+
+<Callout type="info" title="Pourquoi ça marche">
+Les features visuelles basses (bords, textures) sont **identiques** si vous regardez des chiffres, des feuilles ou des roches. Seules les couches hautes changent. Le transfer learning exploite cette hiérarchie.
+</Callout>
+
+
+
+## Stratégie 1 : Extraction de caractéristiques (l'approche rapide)
+
+Vous bloquez littéralement le modèle pré-entraîné : pas de changement de poids.
+
+Procédure :
+1. Charger ResNet-50 pré-entraîné sur ImageNet
+2. **Geler tous les poids** (freeze = pas de gradient)
+3. Supprimer la dernière couche (qui classait en 1 000 classes ImageNet)
+4. Ajouter une couche dense : 1 000 → votre nombre de classes
+5. Entraîner **seulement** cette couche dense
+
+Résultat : vous apprenez une simple régression logistique sur des features "déjà parfaites". C'est **rapide** (une seule couche), demande **peu de données** (pas d'overfitting car peu de paramètres), et fonctionne quand votre tâche ressemble à ImageNet.
+
+<Callout type="tip" title="Astuce vitesse">
+Pré-calculez les features de toutes vos images une seule fois. Puis entraînez simplement. 1000× plus rapide qu'entraîner le CNN à chaque époque.
+</Callout>
+
+## Stratégie 2 : Fine-tuning (le vrai apprentissage)
+
+Au lieu de bloquer, on "dégèle" partiellement. Le modèle s'adapte à vos données.
+
+Procédure :
+1. Charger ResNet-50, remplacer la couche de classification
+2. **Dégeler les poids** : réactiver les gradients sur toutes les couches, mais avec un **taux d'apprentissage très faible** (100 fois moins qu'une couche dense neuve)
+3. Entraîner tout le modèle
+
+Pourquoi ultra-faible learning rate ? Les poids du modèle pré-entraîné sont déjà bons. Un gros gradient les détruit. Un tout petit gradient les ajuste délicatement.
+
+### Fine-tuning en deux phases
+
+Phase 1 : Couches basses figées, entraîner juste les couches hautes avec LR standard
+Phase 2 : Dégeler progressive, entraîner tout avec LR très faible
+
+Même mieux : **learning rates discriminatifs** : couches proches de la sortie = LR haut (à adapter), couches de base = LR bas (préserver universel).
+
+
+
+## Choisir sa stratégie
+
+### Petit dataset + tâche similaire
+
+200 photos de races de chiens → **Feature extraction**. Vous avez peu de données, et le modèle connaît déjà les chiens.
+
+### Grand dataset + tâche similaire
+
+50 000 photos d'oiseaux → **Fine-tuning complet**. Vous avez assez de données pour spécialiser. Le modèle va apprendre "les nuances des oiseaux".
+
+### Petit dataset + tâche différente
+
+500 radiographies → **Feature extraction sur couches basses seulement**. Les bords et textures (bas) restent utiles. Les formes d'objets du quotidien (hautes) sont bruitées.
+
+### Grand dataset + tâche très différente
+
+Photos satellite (structures géométriques, pas d'objets naturels) → envisagez un entraînement **depuis zéro** ou un ajustement fin agressif. Les représentations apprises sur ImageNet peuvent apporter plus de bruit que d'information utile pour ce type de données.
+
+<Callout type="info" title="Règle empirique d'or">
+En pratique, l'ajustement fin fonctionne dans 95% des cas, même quand le domaine semble très éloigné d'ImageNet. Les représentations de bas niveau (bords, contrastes, textures locales) s'appliquent à presque toutes les images. Essayez toujours le transfer learning avant d'entraîner depuis zéro.
+</Callout>
+
+## Bonnes pratiques pour réussir
+
+### Normalisation
+
+Vos images doivent être **normalisées exactement comme ImageNet** (même moyenne, même écart-type pour chaque canal RGB). Sinon, le modèle hallucine. Typiquement : ImageNet mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225].
+
+### Taille des entrées
+
+ResNet attend 224×224. Vision Transformer : 384×384. Inception : 299×299. Redimensionnez ou centrez-cropez sans distortion.
+
+### Data augmentation
+
+Indispensable avec petit dataset. Rotations (5-10°), retournements, recadrages, jitter de couleur.
+
+### Choix du modèle de base
+
+- **ResNet-50** : bon partout, par défaut
+- **EfficientNet-B4** : meilleur perf/calcul, recommandé faible ressources
+- **Vision Transformer** : génial avec données massives, risqué en petit dataset
+
+### Hyperparamètres
+
+- Taux d'apprentissage : 1e-5 à 1e-4 pour l'ajustement fin (100 à 1000 fois moins qu'un entraînement depuis zéro)
+- Batch size : aussi gros que GPU permet
+- Early stopping : surveillez la validation, arrêtez avant le surapprentissage
+
+<Callout type="tip" title="Transfer learning partout maintenant">
+BERT, GPT, LLaMA : tous pré-entraînés sur des corpus massifs puis adaptés à des tâches spécifiques. C'est le paradigme dominant en IA. Le principe est identique à la vision : pré-entraîner sur un grand corpus généraliste pour apprendre des représentations universelles, puis spécialiser sur votre tâche avec peu de données. Ce modèle s'applique à la vision, au texte, à l'audio, et à presque tous les domaines.
+</Callout>
+
+## Outils modernes
+
+PyTorch fournit `torchvision.models` avec tous les classiques pré-entraînés. Hugging Face `transformers` offre la même chose pour les modèles de vision plus récents. En pratique : charger le modèle, remplacer la couche de classification, lancer l'entraînement. Voici la structure de base :
+
+```
+from torchvision import models
+model = models.resnet50(pretrained=True)
+model.fc = nn.Linear(2048, num_classes)
+# freeze all but last
+for p in model.parameters():
+    p.requires_grad = False
+model.fc[].requires_grad = True
+# train
+```
+
+Voilà le transfer learning. Pré-entraînement géant, affinage chirurgical.

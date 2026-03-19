@@ -1,0 +1,140 @@
+---
+title: "Function Calling : conception et patterns"
+description: "Le function calling permet aux LLM d'appeler des fonctions structurées avec des paramètres typés. Comprendre la conception, les patterns et les bonnes pratiques."
+---
+
+## Qu'est-ce que c'est vraiment ?
+
+Le LLM ne peut faire qu'une chose : générer du texte. Mais parfois vous voulez qu'il appelle votre code (chercher en base, faire un calcul, envoyer un email).
+
+**Function calling** c'est une interface standardisée : vous décrivez les fonctions disponibles, le LLM génère un JSON structuré disant « j'appelle cette fonction avec ces paramètres », et votre code exécute.
+
+<Callout type="info" title="Qui exécute vraiment ?">
+Le LLM ne « exécute » rien. Il génère une **spécification** : « `{"name": "get_weather", "arguments": {"city": "Paris"}}`». Votre app l'exécute, retourne le résultat, et le LLM l'intègre dans sa réponse.
+</Callout>
+
+## Anatomie
+
+### Décrire une fonction
+
+```json
+{
+  "name": "get_weather",
+  "description": "Obtenir la météo d'une ville",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "city": {
+        "type": "string",
+        "description": "Nom de la ville"
+      },
+      "unit": {
+        "type": "string",
+        "enum": ["celsius", "fahrenheit"],
+        "description": "Unité température"
+      }
+    },
+    "required": ["city"]
+  }
+}
+```
+
+### Flux
+
+1. User : « Quel temps à Paris ? »
+2. LLM → app : `{"name": "get_weather", "arguments": {"city": "Paris", "unit": "celsius"}}`
+3. App exécute → retourne : `{"temp": 18, "condition": "nuageux"}`
+4. LLM → user : « Il fait 18°C à Paris, nuageux. »
+
+
+
+## Règles de conception
+
+**Noms clairs** : `search_company_database`, pas `query` ou `tool1`.
+
+**Descriptions précises** : c'est votre seule chance d'expliquer au LLM ce que la fonction fait, quand l'utiliser, ce qu'elle retourne.
+
+**Paramètres bien typés** : strings, numbers, booleans, enums. Pas d'ambiguïté.
+
+**Retours informatifs** :
+```json
+// Bon
+{"status": "success", "results": [...], "count": 42}
+
+// Mauvais
+{"data": null}  // Le LLM ne sait pas si c'est vide ou une erreur
+```
+
+<Callout type="tip" title="Règle des 5 outils">
+Un LLM fonctionne mieux avec 3-7 outils bien conçus qu'avec 50 outils vagues. Trop d'outils = confusion, plus d'erreurs. Au-delà de 10, pensez routing ou hiérarchie.
+</Callout>
+
+## Patterns avancés
+
+**Appels parallèles** : les modèles modernes peuvent appeler plusieurs fonctions en parallèle si elles sont indépendantes.
+
+```
+User: "Météo à Paris et Tokyo ?"
+LLM → [get_weather("Paris"), get_weather("Tokyo")]  // parallèle
+```
+
+**Appels séquentiels** : résultat d'un appel = paramètre du suivant.
+
+```
+1. search_user("Jean") → {id: 123}
+2. get_orders(user_id=123) → [...]
+```
+
+**Structured output** : utiliser function calling pour forcer un output structuré (plutôt qu'une fonction réelle).
+
+```json
+{
+  "name": "extract_entities",
+  "parameters": {
+    "properties": {
+      "persons": {"type": "array", "items": {"type": "string"}},
+      "organizations": {"type": "array"}
+    }
+  }
+}
+```
+
+## Support par modèle
+
+| Modèle | Support | Parallèle | Qualité |
+|---|---|---|---|
+| GPT-4 / 4o | Natif | Oui | Excellente |
+| Claude 3.5 | Natif | Oui | Excellente |
+| Mistral Large | Natif | Oui | Très bonne |
+| Gemini | Natif | Oui | Très bonne |
+
+<Callout type="paper" title="Natif > prompt engineering">
+Le function calling natif utilise du fine-tuning pour générer du JSON valide. C'est bien plus fiable que demander en texte au LLM de produire du JSON.
+</Callout>
+
+## Erreurs courantes
+
+1. **Paramètres invalides** : LLM passe string quand number attendu
+2. **Hallucination** : LLM invente une fonction inexistante
+3. **Mauvais outil** : LLM choisit le mauvais tool
+4. **Paramètres manquants** : oubli d'un paramètre requis
+
+**Stratégies de recovery** :
+- Renvoyer l'erreur au LLM pour correction
+- Valider les paramètres avant exécution
+- Fallback : essayer une approche alternative
+
+<Callout type="warning" title="Sécurité">
+Function calling donne au LLM du pouvoir réel. Validez toujours les paramètres, limitez les permissions, sandboxez les exécutions. Un LLM manipulé par prompt injection pourrait tenter d'appeler des fonctions dangereuses.
+</Callout>
+
+## Bonnes pratiques
+
+1. Commencer avec peu d'outils, ajouter progressivement
+2. Tester chaque tool avec inputs variés et malformés
+3. Documenter les tools comme une API publique
+4. Logger tous les appels (debug + audit)
+5. Timeouts sur chaque exécution
+6. Limiter le nombre d'appels par conversation
+
+Function calling c'est la clé des agents modernes. Bien conçu, c'est simple et robuste.

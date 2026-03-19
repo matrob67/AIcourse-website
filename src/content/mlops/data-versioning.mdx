@@ -1,0 +1,129 @@
+---
+title: "Versionning des données : DVC et LakeFS"
+description: "Versionnez vos datasets comme du code. DVC pour les projets individuels, LakeFS pour les data lakes d'entreprise."
+---
+
+## Pourquoi Git ne suffit pas
+
+Git c'est merveilleux pour le code. Mais un dataset de 50 GB dans Git ? Impossible. Les praticiens ML se retrouvent avec des données sans historique, sans traçabilité.
+
+"Quel dataset exact a été utilisé pour entraîner ce modèle en prod ?" → silence gêné.
+
+<Callout type="info" title="Le coût de la non-reproductibilité">
+Sans versioning des données, vous ne pouvez pas reproduire une expérience ancienne. C'est un cauchemar pour l'audit, la conformité, le debugging. Vous ne pouvez pas répondre : "quel dataset a produit ce modèle?"
+</Callout>
+
+
+
+## DVC : Git pour les données
+
+**DVC** = Data Version Control. S'ajoute à Git pour gérer les fichiers volumineux et les pipelines.
+
+### Comment ça marche
+
+1. Vous avez `data/dataset.parquet` (50 GB)
+2. Vous faites `dvc add data/dataset.parquet`
+3. DVC calcule un **hash** et crée un fichier `.dvc` (quelques octets)
+4. Le `.dvc` va dans Git. Le vrai fichier va dans remote storage (S3, GCS, etc.)
+5. `dvc pull` récupère les fichiers correspondant aux hashes
+
+C'est un peu comme Git LFS, mais optimisé pour le ML.
+
+### Pipelines DVC
+
+Vous définez un `dvc.yaml` :
+
+```yaml
+stages:
+  preprocess:
+    cmd: python preprocess.py
+    deps:
+      - raw/data.csv
+    outs:
+      - processed/data.parquet
+  train:
+    cmd: python train.py
+    deps:
+      - processed/data.parquet
+    outs:
+      - model.pkl
+```
+
+DVC exécute seulement les étapes dont les inputs ont changé. C'est du caching intelligent.
+
+<Callout type="tip" title="Reproduisibilité totale">
+Code (Git) + données (DVC) + env (Docker) + hyperparamètres (MLflow) = reproductibilité complète. Vous pouvez revenir à n'importe quel point et recréer exactement l'état du projet.
+</Callout>
+
+### Remote storage
+
+DVC supporte : S3, GCS, Azure Blob, SSH, HDFS, HTTP, Google Drive, etc. Flexible.
+
+### Forces et limites
+
+**Bon pour** : projets individuels/petites équipes, versionning par fichier
+
+**Pas bon pour** : pas de branches de données, collaboration complexe, fine-grained versioning
+
+## LakeFS : Git pour vos data lakes
+
+**LakeFS** = apporter Git **directement** au data lake. Pas une couche au-dessus, c'est un serveur autonome.
+
+### Architecture simple
+
+LakeFS se place comme un **proxy** devant votre S3/GCS/MinIO. Les applications parlent à LakeFS comme elles parlent à S3. Sous le capot, LakeFS gère le versioning.
+
+### Ce qu'il offre
+
+- **Branches** : créez une branche de vos données, changez-les, mergez
+- **Commits** : chaque état est un commit immuable
+- **Diff** : voyez exactement quoi a changé
+- **Merge** : fusionnez deux branches
+- **Hooks** : exécutez des vérifications avant chaque commit (quality checks)
+
+<Callout type="paper" title="Le paradigme Git pour les données">
+Vous créez une branche "experiment-preprocessing", modifiez les données, testez votre pipeline, et si ça marche, vous mergez. Sinon, vous juste supprimez la branche. C'est Git pour les data lakes.
+</Callout>
+
+### Copy-on-Write : pas de duplication
+
+Créer une branche ne duplique **pas** les données. Seulement les modifications sont stockées. Un dataset de 1 To branché ne consomme que l'espace des changements. Génial pour la performance et les coûts.
+
+### Cas d'usage
+
+- **Isolation d'expériences** : chaque expérience a sa propre branche
+- **Reproductibilité** : chaque entraînement pointe un commit précis
+- **CI/CD data** : validation automatique avant merge
+- **Rollback** : revenir à une version précédente en cas de problème
+- **Testing pre-production** : tester les pipelines avant production
+
+### Forces et limites
+
+**Bon pour** : data lakes entreprise, branchings, CI/CD data
+
+**Pas bon pour** : plus complexe à déployer qu'un outil simple
+
+## Comparaison : DVC vs LakeFS
+
+| Critère | DVC | LakeFS |
+|---|---|---|
+| **Modèle** | Extension Git | Serveur autonome |
+| **Déploiement** | CLI local | Serveur dédié |
+| **Granularité** | Fichier | Fichier/objet |
+| **Branching données** | Non natif | Natif (zero-copy) |
+| **Compatibilité S3** | Non | Oui (transparent) |
+| **Cas d'usage idéal** | Projets individuels | Data lakes entreprise |
+
+<Callout type="warning" title="Versionning ≠ Reproductibilité">
+C'est une partie de la solution. Versionner les données c'est bien. Mais vous devez aussi versionner le code (Git), l'environnement (Docker), les hyperparamètres (MLflow), et documenter les étapes manuelles. C'est l'ensemble qui donne la reproductibilité.
+</Callout>
+
+## Bonnes pratiques
+
+- **Toujours enregistrer la version des données** dans vos logs d'expériences (hash DVC ou commit LakeFS)
+- **Automatiser** : intégrez dans CI/CD, pas en post-hoc
+- **Raw vs processed** : versionner séparément
+- **Tester les données** : schéma, stats, distribution comme pré-commit hook
+- **Documenter** : chaque nouvelle version de données = commit avec message descriptif
+
+Les données changent constamment. Les versionner, c'est de la responsabilité. Sérieusement.

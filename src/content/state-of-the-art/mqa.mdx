@@ -1,0 +1,126 @@
+---
+title: "Multi-Query Attention (MQA)"
+description: "Analyse du mécanisme Multi-Query Attention qui partage les clés et valeurs entre toutes les têtes d'attention pour réduire drastiquement le KV cache et accélérer l'inférence."
+---
+
+
+
+## Le goulot d'étranglement que personne ne voit
+
+Vous attendez une réponse de ChatGPT. Le modèle génère mot par mot — chaque token prend environ 50 à 100 ms. Pourquoi si lent ? Est-ce un problème de calcul ?
+
+Pas vraiment. Le processeur (GPU) est souvent **à moitié vide** pendant la génération. Le vrai problème c'est la **mémoire** : pour générer chaque nouveau token, le modèle doit lire dans la RAM du GPU les vecteurs de clés et valeurs de tous les tokens précédents — le fameux **KV cache**. Et cette lecture mémoire est lente.
+
+Pour un modèle de 70 milliards de paramètres avec 80 couches, 64 têtes, et un contexte de 8 000 tokens, le KV cache peut dépasser **40 gigaoctets**. Lire 40 GB de RAM pour chaque token généré, c'est le vrai goulot d'étranglement.
+
+Le **Multi-Query Attention (MQA)**, proposé par Noam Shazeer en 2019, est une solution élégante et radicale.
+
+<ArxivLink id="1911.02150" title="Fast Transformer Decoding: One Write-Head is All You Need" />
+
+## Rappel : comment fonctionne le Multi-Head Attention standard
+
+Dans le **MHA** classique, chaque tête d'attention i possède ses propres projections :
+
+```
+Q_i = X * W_i^Q
+K_i = X * W_i^K
+V_i = X * W_i^V
+```
+
+Pour H têtes avec une dimension par tête `d_k = d / H`, le KV cache stocke `2 * H * L * d_k` éléments par couche. Avec H = 64, L = 8 000, d_k = 128 : c'est 2 × 64 × 8 000 × 128 = **131 millions d'éléments** par couche — fois 80 couches = **10,5 milliards d'éléments**, soit ~21 GB en float16.
+
+<Callout type="info" title="Le KV cache : le facteur limitant de l'inférence">
+À l'inférence autorégressif, chaque token généré nécessite une attention sur tous les tokens précédents. Le KV cache sauvegarde les projections K et V de chaque token déjà traité pour éviter de les recalculer. C'est indispensable pour les performances, mais ça grossit sans cesse avec le contexte. Pour un modèle de 70B avec un contexte de 128K tokens, on parle de plusieurs centaines de GB.
+</Callout>
+
+## Le mécanisme MQA : une seule paire K/V pour toutes les têtes
+
+L'idée de Shazeer est simple : **partager une seule paire K/V entre toutes les têtes**.
+
+```
+Q_i = X * W_i^Q    # DISTINCT par tête (H projections)
+K   = X * W^K      # PARTAGÉ entre toutes les têtes (1 seule projection)
+V   = X * W^V      # PARTAGÉ entre toutes les têtes (1 seule projection)
+```
+
+Chaque tête calcule quand même sa propre attention :
+
+```
+head_i = softmax( Q_i * K_transposé / sqrt(d_k) ) * V
+```
+
+Mais toutes les têtes utilisent les mêmes K et V. La diversité vient uniquement des queries, qui restent distinctes par tête.
+
+### La réduction du KV cache : facteur H
+
+Le KV cache passe de `2 * H * L * d_k` à `2 * 1 * L * d_k` — une réduction d'un **facteur H** (le nombre de têtes).
+
+| Configuration | KV cache par couche | Réduction |
+|--------------|---------------------|-----------|
+| MHA (H = 64 têtes) | 2 × 64 × L × d_k | Référence |
+| MQA (1 paire K/V) | 2 × 1 × L × d_k | 64 fois moins |
+
+Pour notre exemple de 70B paramètres avec 8K tokens : le KV cache passe de ~21 GB à ~330 MB. C'est un changement radical.
+
+<Callout type="tip" title="Pourquoi ça accélère directement l'inférence">
+L'inférence autorégressif des LLM est typiquement **memory-bandwidth bound** : le GPU attend que les données arrivent de la mémoire HBM, pas qu'il finisse ses calculs. Le KV cache doit être lu entièrement pour chaque token généré. Réduire sa taille par un facteur 64 signifie 64 fois moins de lectures mémoire par token — et donc un débit de génération bien supérieur.
+</Callout>
+
+## Impact sur la qualité : surprenamment faible
+
+La recherche originale et les études ultérieures montrent que MQA entraîne une **dégradation de qualité modeste** : typiquement 0,1 à 0,5% sur les benchmarks standard. Pourquoi si peu ?
+
+L'intuition : la diversité des patterns d'attention vient principalement des **queries**, pas des clés et valeurs. Les différentes têtes "posent des questions différentes" (queries distinctes) à la même "base de données" de contexte (K/V partagés). La spécialisation par tête réside dans ce qu'on cherche, pas dans la représentation du contexte.
+
+Les clés et valeurs capturent la même information sémantique quelle que soit la tête qui les génère — partager cette représentation ne perd donc pas grand chose.
+
+## Qui utilise MQA ?
+
+MQA a été adopté par plusieurs modèles majeurs :
+
+- **PaLM** (Google) : l'un des premiers grands modèles à l'adopter
+- **Falcon** (TII) : toute la famille Falcon utilise MQA
+- **StarCoder** : modèle de code avec MQA
+- **Phi-1 et Phi-2** (Microsoft) : petits modèles très efficaces grâce au MQA
+
+### La conversion MHA → MQA après entraînement
+
+Il est possible de convertir un modèle MHA existant en MQA **sans réentraîner de zéro** :
+
+1. Regrouper les H projections K et V des H têtes
+2. Moyenner ces H projections en une seule
+3. Fine-tuner le modèle sur 5 à 10% des tokens originaux
+
+<Callout type="paper" title="L'uptrained conversion">
+Google a démontré que la conversion MHA → MQA par moyennage des poids, suivie d'un fine-tuning court (5% des tokens originaux), récupère quasi-totalement la performance du modèle MHA original. On obtient les gains d'inférence du MQA sans repayer le coût d'entraînement complet.
+</Callout>
+
+## Avantages et limitations
+
+**Ce que MQA apporte :**
+- Réduction du KV cache par un facteur H (32 à 128 fois selon le modèle)
+- Accélération significative de la génération token par token
+- Modification architecturale minimale, facile à implémenter
+- Compatible avec Flash Attention et d'autres optimisations
+
+**Ce que MQA sacrifie :**
+- Les têtes ne peuvent plus spécialiser leurs patterns K/V indépendamment
+- Légère dégradation de qualité mesurable, surtout sur les tâches d'attention fine
+- Ne réduit pas le coût d'entraînement (les queries restent distinctes)
+
+<Callout type="warning" title="Quand MQA va trop loin">
+Pour les modèles "frontier" où chaque dixième de point de benchmark compte, la perte de qualité de MQA peut être inacceptable. La solution : le Grouped Query Attention (GQA), qui offre un compromis entre MHA (qualité maximale) et MQA (efficacité maximale) en partageant K/V entre groupes de têtes plutôt qu'entre toutes les têtes. GQA est aujourd'hui le standard de facto.
+</Callout>
+
+
+## Comparaison finale MHA vs MQA
+
+| Aspect | MHA | MQA |
+|--------|-----|-----|
+| Projections K, V | H distinctes (H = 32 à 128) | 1 seule partagée |
+| KV cache par couche | 2 * H * L * d_k | 2 * L * d_k |
+| Qualité | Référence | ~99,5% |
+| Débit à l'inférence | Référence | 5x à 10x supérieur |
+| Latence par token | Référence | Réduite significativement |
+
+MQA est une optimisation architecturale élégante qui résout directement le vrai goulot d'étranglement de l'inférence des LLM. Son idée — partager K/V entre têtes — a ouvert la voie au GQA, qui affine ce compromis pour le rendre acceptable même pour les modèles les plus exigeants en qualité.

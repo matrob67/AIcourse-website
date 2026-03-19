@@ -1,0 +1,280 @@
+---
+title: "Sentence Embeddings et SBERT : comparer du texte à vitesse lumière"
+description: "Comment créer des embeddings de phrases comparables en temps réel. SBERT, similarité cosinus, et les applications en recherche sémantique et RAG."
+---
+
+## Le problème: comparer un million de phrases en millisecondes
+
+Tu as 1 million de documents. Un utilisateur tape une requête. Tu veux trouver les 10 documents les plus pertinents **immédiatement**.
+
+
+
+Cas réels:
+- **Moteur de recherche**: 1 milliard de pages web, trouver les 10 meilleures en <1 seconde
+- **Déduplication**: 100M produits, trouver les doublons
+- **Recommandations**: 10M utilisateurs, recommande des articles similaires
+- **RAG (Retrieval-Augmented Generation)**: 100k passages techniques, retrouve les plus pertinents pour répondre à une question
+
+### Le problème naïf avec BERT
+
+Idée simple: tu demandes à BERT de comparer deux phrases en les mettant ensemble:
+
+```
+[CLS] Phrase A [SEP] Phrase B [SEP]
+
+BERT encode ça → utilise [CLS] token pour la similarité
+```
+
+Problème: **pour chaque comparaison, BERT doit faire un forward pass complet**. Comparer requête vs 1 million de documents = 1 million de forward passes = 65 heures de GPU.
+
+Impraticable.
+
+Et pire: les embeddings BERT nuls (sans fine-tuning) produisent des similarités cosinus **mauvaises**. Moyenner simplement GloVe donne de meilleurs résultats.
+
+### L'explosion combinatoire
+
+Comparaison naïve: pour n documents, tu dois traiter n × (n-1) / 2 paires. Pour 10 000 docs?
+
+```
+10,000 × 9,999 / 2 = 50 million paires
+```
+
+À 1ms par paire: 50 000 secondes = 14 heures. Pour une requête. Inacceptable.
+
+<Callout type="warning" title="C'est un goulot d'étranglement réel">
+Beaucoup de systèmes NLP échouent non pas sur l'algorithme, mais sur la latence. SBERT résout ce problème en changeant complètement l'approche.
+</Callout>
+
+## SBERT: l'idée qui change tout
+
+**SBERT** (Sentence-BERT, Reimers & Gurevych 2019) fine-tune BERT pour une **seule** mission: produire des embeddings de phrases **directement comparables** par cosinus.
+
+<ArxivLink id="1908.10084" title="Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks" />
+
+### Architecture: le bi-encoder (versus cross-encoder)
+
+Au lieu de passer deux phrases ensemble dans BERT, SBERT passe **chaque phrase indépendamment**:
+
+```
+Phrase A → BERT-base → Mean Pooling → vecteur a (768 dimensions)
+Phrase B → BERT-base → Mean Pooling → vecteur b (768 dimensions)
+
+Similarité = cosine(a, b) = (a · b) / (||a|| × ||b||)
+```
+
+Les deux BERT utilisent **exactement les mêmes poids** (architecture siamoise). Chaque phrase est encodée **une fois** et stockée.
+
+### La magie: pre-compute et recherche ultra-rapide
+
+```
+Jour 1: Encoder les 1 million de documents
+  Pour chaque doc: 1 forward pass de BERT = ~100ms
+  Total: 100,000 secondes = 28 heures (une fois)
+  Résultat: 1M vecteurs stockés sur disque
+
+Jour 2: Un utilisateur tape une requête
+  Encoder la requête: 1 forward pass = 100ms
+  Comparer requête vs 1M vecteurs: 1M cosinus = 500ms (sur CPU!)
+  Retourner top-10: instant
+  Temps total: <1 seconde
+```
+
+C'est la différence entre impraticable et temps réel.
+
+### Entraînement contrastif: approches courantes
+
+SBERT se fine-tune sur des **paires annotées** pour apprendre qui se ressemble.
+
+**Approche 1: STS (Semantic Textual Similarity)**
+- Paires (phrase A, phrase B, score 0-5)
+- Loss: MSE entre cosine(a, b) et score humain
+- Résultat: modèle apprend à ranger par similarité continue
+
+**Approche 2: NLI (Natural Language Inference)**
+- Paires (phrase A, phrase B, label: entailment/contradiction/neutre)
+- Architecture spéciale: encode séparement, puis concat [a, b, |a-b|] → classifier
+- Résultat: entailment = similaire, contradiction = opposé, neutre = distinct
+- Énorme dataset (SNLI, MultiNLI): centaines de milliers de paires
+
+**Approche 3: OnlineContrastiveLoss**
+- Entraîne en batch: rapproche paires positives, éloigne négatives
+- Similaire à SimCLR (vision), mais pour texte
+
+<Callout type="tip" title="NLI est une mine d'or gratuite">
+Les datasets NLI (SNLI, MultiNLI) contiennent 500k+ paires avec labels discrets. C'est des données gratuites et de qualité. SBERT les exploite magistralement. C'est un exemple d'utiliser des données existantes créativement.
+</Callout>
+
+
+
+## Coin technique: similarité cosinus
+
+La métrique d'or pour comparer des vecteurs d'embeddings:
+
+```
+cosine(a, b) = (a · b) / (||a|| × ||b||)
+```
+
+Où:
+- `a · b` = produit scalaire (somme des produits élément par élément)
+- `||a||` = norme L2 (racine carrée de la somme des carrés)
+
+**Résultat**: nombre entre -1 et +1.
+- +1 = vecteurs identiques (direction identique)
+- 0 = perpendiculaires (pas de relation)
+- -1 = opposés
+
+**En pratique pour des textes**:
+```
+Cosinus > 0.9:   Quasi-identical (paraphrase, copie)
+Cosinus 0.7-0.9: Très similaires (même sujet)
+Cosinus 0.5-0.7: Similaires (contexte relate)
+Cosinus 0.3-0.5: Faiblement relates
+Cosinus < 0.3:   Sans rapport
+```
+
+### L'optimisation cachée: normalisation
+
+Les embeddings modernes sont souvent **normalisés** (norme = 1). Dans ce cas:
+
+```
+cosine(a, b) = a · b  (simple produit scalaire!)
+```
+
+Pourquoi? Deux raisons:
+1. **Plus rapide à calculer** (pas de division, pas de sqrt)
+2. **Numériquement stable** (pas de problèmes de précision)
+
+Donc en pratique, une recherche sémantique ultra-rapide = juste produits scalaires sur vecteurs normalisés.
+
+<Callout type="info" title="Normes L2 vs L1 vs dot product">
+- L2 (Euclidienne): distance entre points
+- Cosinus: angle entre vecteurs
+- Dot product sur normalisés: même que cosinus
+
+Pour les embeddings haute-dim, cosinus/dot product battent L2. Direction > magnitude.
+</Callout>
+
+## Pipeline de recherche sémantique
+
+1. **Indexation**: encode tous les docs avec SBERT, stocke vecteurs
+2. **Requête**: encode la question
+3. **Recherche**: calcule cosinus requête vs tous les vecteurs
+4. **Résultats**: retourne les top-k plus similaires
+
+Pour millions de vecteurs: utilise **ANN** (Approximate Nearest Neighbors) — FAISS, Annoy, ou bases vectorielles Pinecone/Weaviate/Qdrant pour trouver les voisins en sub-linéaire.
+
+## RAG: l'application ultime des embeddings
+
+**RAG** (Retrieval-Augmented Generation) est le framework favori des systèmes IA modernes. Idée: laisser un LLM répondre basé sur une base de connaissances fiable, plutôt que juste halluciner.
+
+### Le pipeline RAG
+
+1. **Préparation (offline)**:
+   - Prenez 10,000 pages de documentation technique
+   - Découpez en passages (~200 mots chacun) = 100,000 chunks
+   - Encodez chaque chunk avec SBERT = 100,000 vecteurs
+   - Stockez dans une base vectorielle (FAISS, Pinecone, Qdrant)
+
+2. **Requête utilisateur (runtime)**:
+   - Utilisateur: "Comment faire X?"
+   - Encodez la requête avec SBERT = 1 vecteur
+   - Recherche ANN: "Find top-5 passages similaires" = <10ms
+   - Récupérez les top-5 passages pertinents
+
+3. **Génération (LLM)**:
+   - Donnez au LLM: [question] + [top-5 passages]
+   - Le LLM génère une réponse basée sur le contexte
+   - Résultat: précis, grounded, pas d'hallucinations
+
+### Pourquoi RAG fonctionne si bien
+
+Sans RAG:
+```
+Utilisateur: Comment faire X?
+LLM: ...invente une réponse plausible mais peut-être fausse...
+```
+
+Avec RAG:
+```
+Utilisateur: Comment faire X?
+Documents pertinents retrouvés: [Doc1, Doc3, Doc5 qui décrivent réellement X]
+LLM: Voici comment faire X (basé sur les docs): ...réponse précise...
+```
+
+La différence est **dramatique**. RAG transforme un LLM en assistant fiable pour les domaines spécifiques.
+
+<Callout type="warning" title="Le goulot: qualité de retrieval">
+RAG est aussi bon que sa bonne retrieval. Si SBERT ne retrouve pas les bons passages, le LLM ne peut pas répondre juste:
+
+```
+Bonne retrieval: Utilisateur → SBERT → Documents pertinents → LLM génère réponse juste
+Mauvaise retrieval: Utilisateur → SBERT → Documents irrelevants → LLM génère réponse fausse
+```
+
+**Résultat**: choisir et fine-tuner le modèle d'embedding est **critique**.
+</Callout>
+
+
+
+## Modèles modernes
+
+Depuis SBERT, l'écosystème a explosé:
+
+- **E5** (Microsoft): entraîné sur paires texte du web, strong zero-shot
+- **BGE** (BAAI): multilingues open-source, compétitifs
+- **text-embedding-3** (OpenAI): via API, dimensions ajustables
+- **Cohere Embed**: multilingues, optimisés pour search
+
+**MTEB** (Massive Text Embedding Benchmark): compare ces modèles sur dizaines de tâches. La référence.
+
+## Stratégie à deux étages: bi-encoder + cross-encoder
+
+En production, on ne fait jamais "just cosinus et return results". Il y a une technique en deux étages pour la qualité:
+
+### Stage 1: Bi-encoder (retrieval initial)
+
+SBERT-base: ultra-rapide.
+
+```
+Requête → SBERT → vecteur q
+100,000 docs pre-encoded
+Recherche ANN: top-100 similaires = ~50ms
+```
+
+Récupère top-100 passages candidats.
+
+### Stage 2: Cross-encoder (re-ranking)
+
+Pour les top-100, utilise un **cross-encoder** (modèle différent) qui encode la paire (requête, doc) ensemble:
+
+```
+Pour chaque doc dans top-100:
+  (requête + doc) → Cross-encoder → score de pertinence précis
+
+Trier par score
+Retourner top-5
+```
+
+Cross-encoder est plus lent (un forward par paire), mais plus précis. C'est ok car on l'applique qu'aux top-100.
+
+**Résultat**: top-100 rapide (bi-encoder), top-5 très précis (cross-encoder).
+
+| Aspect | Bi-encoder (retrieval) | Cross-encoder (reranking) |
+|---|---|---|
+| Architecture | Encode requête et doc séparément | Encode paire ensemble |
+| Vitesse | Rapide (pre-computed) | Lent (forward par paire) |
+| Précision | Bonne | Excellente |
+| Usage | Retrieval initial (large) | Re-ranking top-k |
+
+<Callout type="tip" title="Stratégie industrielle standard">
+Presque tous les systèmes de recherche sémantique production utilisent "bi-encoder pour recall, cross-encoder pour precision". C'est proven, rapide, et fiable.
+</Callout>
+
+## Pourquoi c'est important
+
+Les sentence embeddings (SBERT) résolvent un problème pratique majeur: **comparer un million de documents en millisecondes**. C'est le fondement de la recherche sémantique moderne, du RAG, des recommandations.
+
+SBERT montre comment fine-tuner BERT intelligemment: pas pour la génération ou la classification, mais pour des embeddings **directement comparables**. C'est spécialisé, mais crucial.
+
+En 2026, **choisir le bon modèle d'embedding est aussi important que choisir le LLM**. La retrieval détermine la qualité du RAG. Un bon embedding = RAG qui marche. Un mauvais embedding = LLM qui hallucine malgré le contexte.
+

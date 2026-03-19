@@ -1,0 +1,91 @@
+---
+title: "Reinforcement Learning pour la robotique : PPO, SAC, TD3"
+description: "Les algorithmes de reinforcement learning qui permettent aux robots d'apprendre par essai-erreur : PPO, SAC et TD3, leurs forces et applications."
+---
+
+
+## L'apprentissage par essai-erreur : comme apprendre à marcher en tombant
+
+Un enfant apprend à marcher en tombant, se relevant, itérant. Un **reinforcement learning agent** fait pareil : observe état, tente action, reçoit récompense, ajuste.
+
+En robotique, le RL permet à un robot d'apprendre des comportements complexes (marcher, saisir, manipuler) par essai-erreur, sans programmation explicite de chaque mouvement. Dans la simulation, on peut faire 1 million de tentatives en quelques heures.
+
+<Callout type="info" title="Le cadre RL">
+Agent observe état (images, capteurs) → exécute action (mouvements) → reçoit récompense (succès/échec) → ajuste politique pour maximiser récompense cumulée. En robotique, états continus + haute dimension, actions continues, récompenses souvent rares.
+</Callout>
+
+## Les trois algorithmes dominants
+
+### PPO (Proximal Policy Optimization)
+
+OpenAI, 2017. **Algorithme policy gradient** qui limite la taille des mises à jour de politique pour garantir stabilité.
+
+**Mécanisme clé** : fonction objectif « clippée ». Ratio entre nouvelle et ancienne politique, clippé dans [1-epsilon, 1+epsilon] (epsilon=0.2 typiquement). Garantit que politique ne change pas trop brutalement par itération.
+
+**Avantages pour robotique** :
+- Stabilité remarquable d'entraînement
+- Fonctionne bien avec espaces action haute dimension
+- Excellent en simulation massivement parallèle (Isaac Gym)
+- Simple à implémenter et tuner
+
+**Applications** : locomotion quadrupède/bipède, manipulation simple, politiques haut niveau.
+
+<Callout type="tip" title="PPO + GPU parallèle">
+PPO excelle quand on peut paralléliser massivement. Isaac Gym NVIDIA : 4096+ environnements en parallèle sur un GPU. Millions de transitions par seconde. Combinaison PPO + GPU = révolution locomotion robotique.
+</Callout>
+
+### SAC (Soft Actor-Critic)
+
+Tuomas Haarnoja, Berkeley, 2018. Maximise non seulement récompense mais aussi **entropie** de politique, encourageant exploration.
+
+**Architecture** :
+- **Actor** : réseau de politique générant actions
+- **Critic** : deux réseaux Q (double Q-learning) estimant valeur actions
+- **Coefficient d'entropie** (alpha) : ajusté automatiquement équilibrant exploration/exploitation
+
+**Avantages** :
+- **Sample efficiency** : off-policy, apprend plus vite avec moins données que PPO
+- **Exploration naturelle** : maximisation entropie encourage comportements variés
+- **Robustesse** : politiques haute entropie souvent plus robustes aux perturbations
+- **Monde réel** : efficace avec peu données (important quand on ne peut pas simuler)
+
+**Applications** : manipulation dextre, tâches où exploration cruciale, apprentissage robot réel.
+
+### TD3 (Twin Delayed Deep Deterministic Policy Gradient)
+
+Scott Fujimoto, 2018. Amélioration de DDPG corrigeant trois problèmes majeurs :
+
+1. **Twin critics** : deux réseaux Q, prend minimum réduisant surestimation
+2. **Delayed policy updates** : met à jour politique moins fréquemment que critics
+3. **Target policy smoothing** : ajoute bruit à politique cible lissant estimations
+
+**Avantages** : plus stable que DDPG, bon sur contrôle continu, sample-efficient (off-policy).
+
+**Applications** : contrôle bras robotiques, tâches contrôle continu simples.
+
+## Techniques spécifiques robotique
+
+**Reward Shaping** : récompenses naturelles souvent rares (sparse). Reward shaping = concevoir récompenses intermédiaires guidant apprentissage (distance objectif, alignement gripper, bonus contact).
+
+**Curriculum Learning** : entraîner sur tâches difficulté croissante (commencer objets larges → réduire taille, terrain plat → pentes/obstacles).
+
+**Sim-to-Real Domain Randomization** : entraîner en simulation, déployer sur robot réel. Randomiser paramètres physiques (masses, frictions), visuels (textures, éclairage), bruits capteurs/actionneurs, latences.
+
+<Callout type="warning" title="Le problème de la récompense">
+Concevoir bonne fonction de récompense = aspect **critique et sous-estimé** du RL robotique. Récompense mal conçue → comportements pathologiques. Robot trouve astuces pour maximiser récompense sans accomplir vraie tâche (**reward hacking**).
+</Callout>
+
+## Résumé comparatif
+
+**PPO** : on-policy, stable, nécessite beaucoup données mais parallélisable. Idéal en simulation.
+
+**SAC** : off-policy, sample-efficient, explore bien. Idéal quand données limitées.
+
+**TD3** : off-policy, simple, stable. Bon compromis contrôle continu.
+
+## Tendances récentes
+
+- **RL from Human Feedback (RLHF)** : retours humains pour définir récompense
+- **Foundation Models + RL** : LLM générant fonctions récompense
+- **Offline RL** : apprendre à partir données pré-collectées sans interaction
+- **Multi-task RL** : agent unique apprenant nombreuses tâches simultanément

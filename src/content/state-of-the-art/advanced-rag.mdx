@@ -1,0 +1,144 @@
+---
+title: "RAG avancé : HyDE, Self-Querying et autres"
+description: "Techniques avancées pour améliorer le RAG : HyDE génère des documents hypothétiques, self-querying transforme les questions en requêtes structurées, et d'autres approches."
+---
+
+## Au-delà du RAG basique
+
+Le RAG de base (embed → search → generate) atteint ses limites. Certaines questions restent mal répondues. Techniques avancées améliorent chaque étape pour des gains tangibles.
+
+<ArxivLink id="2212.10496" title="Precise Zero-Shot Dense Retrieval without Relevance Labels (Gao et al., 2022)" />
+
+<Callout type="info" title="Quand passer au RAG avancé">
+Mesure d'abord. Si votre recall@5 est >80% et la réponse LLM est bonne, ne complexifiez pas. Si recall<70%, les techniques avancées peuvent aider.
+</Callout>
+
+
+
+## HyDE : Hypothetical Document Embeddings
+
+### Le problème
+Une question est courte et interrogative : "Comment fonctionne la photosynthèse ?"
+Une réponse est longue et explicative : "La photosynthèse est un processus biochimique où..."
+
+Les embeddings de la question et de la réponse sont **éloignés** dans l'espace. L'embedding de la question n'est pas proche de l'embedding du bon document.
+
+### La solution HyDE
+Demandez au LLM de **générer un document hypothétique** qui répondrait à la question :
+
+```
+Question : "Comment fonctionne la photosynthèse ?"
+Génération LLM : "La photosynthèse est un processus biochimique par lequel..."
+Embedding du texte généré
+Retrieval : documents similaires au texte généré
+```
+
+Même si le texte généré contient des erreurs factuelles, il est **stylistiquement similaire** aux vrais documents. L'embedding sera plus proche.
+
+<Callout type="paper" title="Intuition de HyDE">
+Le LLM agit comme "traducteur" de l'espace des questions vers l'espace des documents. Le document hypothétique fictif est plus utile que la question réelle pour retrieval.
+</Callout>
+
+### Limites
+- Latence : génération LLM avant retrieval
+- Qualité : si le LLM hallucine, retrieval souffre
+- Non universel : aide sur certains domaines, pas sur d'autres
+
+## Self-Querying
+
+Le LLM transforme une question en **requête structurée** combinant recherche sémantique + filtres :
+
+```
+Question : "Quels sont les rapports financiers de 2024
+           sur les énergies renouvelables ?"
+
+Résultat :
+- Sémantique : "énergies renouvelables performances financières"
+- Filtres : type="rapport financier" AND year=2024
+```
+
+Exploite vos métadonnées pour affiner le retrieval. Mais demande que vous ayez des métadonnées bien structurées et que le modèle comprenne votre schéma.
+
+## Query Expansion
+
+### Multi-Query
+Générer **plusieurs formulations** de la question :
+
+```
+1. "Comment fonctionne la photosynthèse ?"
+2. "Quel est le mécanisme de la photosynthèse ?"
+3. "Comment les plantes convertissent lumière en énergie ?"
+```
+
+Retrouvez des documents pour chaque variante, fusionnez les résultats (union ou RRF).
+
+Impact : 5-10 points de recall supplémentaires. Coût : latence du LLM × 2-3.
+
+### Step-Back Prompting
+Pour les questions **très spécifiques**, générez une question plus **générale** :
+
+```
+Question : "Température d'ébullition de l'éthanol à 2000m ?"
+Step-back : "Comment la pression affecte les points d'ébullition ?"
+```
+
+Retrieval sur la question step-back fournit le contexte pour répondre à la question spécifique.
+
+<Callout type="tip" title="Combiner les approches">
+Multi-query + fusion RRF est simple à implementer et améliore presque toujours le recall. Commencez par ça avant des techniques plus complexes.
+</Callout>
+
+## RAG avec fenêtres contextuelles
+
+### Sentence Window Retrieval
+Indexez des **petits chunks** (1-2 phrases) pour la précision du retrieval, mais retournez au LLM une **fenêtre élargie** (les phrases avant et après).
+
+Avantage : petit chunk = retrieval précis. Fenêtre = contexte pour compréhension.
+
+### Auto-Merging
+Quand plusieurs petits chunks du même document parent sont retrouvés, fusionnez-les et retournez le parent complet.
+
+## Corrective RAG (CRAG)
+
+Le pipeline :
+
+```
+1. Retrieval normal
+2. Le LLM évalue : ces documents sont-ils pertinents ?
+3. Si OUI → utiliser normalement
+4. Si PARTIEL → raffiner la query
+5. Si NON → reformuler ou recherche web
+```
+
+Idée : l'LLM juge lui-même la qualité du retrieval et s'auto-corrige.
+
+<Callout type="info" title="Self-RAG (encore plus avancé)">
+Self-RAG va plus loin : le modèle génère des tokens spéciaux indiquant quand il a besoin de retrieval, évalue les documents retrouvés, et vérifie si sa réponse est supportée par les sources. RAG "auto-réflexif".
+</Callout>
+
+
+## Adaptive RAG
+
+Adapter la stratégie de retrieval à la **complexité de la question** :
+
+- **Simple** (factuelle) : retrieval direct, un passage
+- **Intermédiaire** : retrieval + reranking
+- **Complexe** (multi-hop) : décomposition + retrieval itératif
+
+Un classifieur de complexité route chaque question vers la bonne stratégie.
+
+## Bonnes pratiques
+
+<Callout type="warning" title="La complexité tue souvent la performance">
+Chaque technique avancée ajoute latence, complexité, points de défaillance. Un RAG simple bien optimisé (bon chunking, bons embeddings, reranking) **surpasse souvent** un RAG complexe mal calibré.
+
+Mesure d'abord. Optimisez les basiques. Ajoutez les techniques avancées **seulement si mesures montrent que c'est nécessaire**.
+</Callout>
+
+1. **Commencer simple** : RAG de base + bon chunking + bons embeddings
+2. **Mesurer** : recall, faithfulness, answer relevancy
+3. **Identifier le goulot** : où ça cloche ? Retrieval ou génération ?
+4. **Ajouter une technique** : mesurer l'impact, garder si ça améliore
+5. **Itérer** : chaque ajout doit justifier sa complexité
+
+L'optimisation RAG c'est itératif. Pas de bullet-proof solution. La sophistication n'est pas synonyme de qualité.

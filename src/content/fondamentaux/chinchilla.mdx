@@ -1,0 +1,145 @@
+---
+title: "Chinchilla et les lois de scaling optimales"
+description: "L'étude Chinchilla de DeepMind révise les lois de scaling et montre qu'il faut beaucoup plus de données qu'on ne le pensait pour entraîner efficacement un LLM."
+---
+
+## Vous avez construit une Ferrari... et mis du gasoil de tondeuse dedans
+
+Imaginez que vous dépensez des millions pour construire une voiture de course de Formule 1. Moteur en titane, aérodynamique parfaite, 1000 chevaux. Vous la mettez sur la piste... et elle perd contre une Renault Clio bien réglée.
+
+C'est exactement ce qui s'est passé avec les grands modèles de langage avant 2022. L'industrie construisait des modèles de plus en plus *gros* — des centaines de milliards de *paramètres* (les "réglages internes" du modèle) — mais en les nourrissant de trop peu de données. En mars 2022, une équipe de DeepMind publie une etude qui va tout changer.
+
+<ArxivLink id="2203.15556" title="Training Compute-Optimal Large Language Models (Hoffmann et al., 2022)" />
+
+L'article porte le nom de **Chinchilla**, le petit modèle qu'ils construisent pour prouver leur théorie. Et ce petit modèle va humilier des géants.
+
+
+
+## D'abord, quelques définitions
+
+Avant d'aller plus loin, clarifions les termes qu'on va utiliser partout :
+
+- **Paramètres** : les millions (ou milliards) de chiffres internes qui définissent le comportement d'un modèle. Pensez-y comme aux "neurones" du cerveau artificiel. GPT-3 en a 175 milliards.
+- **Tokens** : les petits morceaux de texte sur lesquels le modèle s'entraine. Un token, c'est environ 4 caractères ou 3/4 d'un mot. "bonjour" = 1 token, "intelligence artificielle" = 3 tokens.
+- **Compute** (ou *budget de calcul*) : la quantite de puissance de calcul utilisee pour entrainer le modele, mesuree en *FLOPs* (operations en virgule flottante). C'est comme mesurer l'effort en calories brulees.
+- **Loss** : l'erreur du modele. Plus la loss est basse, meilleur est le modele. L'objectif de l'entrainement, c'est de la faire descendre.
+
+## L'etude de Kaplan : le premier guide du scaling
+
+En 2020, une equipe d'OpenAI (Kaplan et al.) publie les premieres "lois de scaling". Leur message : si vous doublez votre budget de calcul, investissez surtout dans plus de *paramètres*, pas plus de données. L'industrie suit ce conseil... et commence a construire des modeles de plus en plus massifs.
+
+GPT-3 : 175 milliards de paramètres. Gopher (DeepMind) : 280 milliards. Megatron-Turing (Microsoft/NVIDIA) : 530 milliards.
+
+Mais Kaplan avait peut-être tort.
+
+## Ce que DeepMind a découvert
+
+L'équipe de DeepMind prend le problème différemment. Au lieu de juste "agrandir" des modèles, ils entrainent **plus de 400 modèles** de tailles très différentes — de 70 millions à 16 milliards de paramètres — en faisant varier systématiquement le ratio entre paramètres et données.
+
+C'est comme tester 400 recettes de gâteau en changeant les proportions farine/sucre pour trouver la recette parfaite.
+
+Ils utilisent trois méthodes différentes pour confirmer leurs résultats. Les trois arrivent à la même conclusion :
+
+<Callout type="paper" title="La règle Chinchilla">
+Pour un entraînement **compute-optimal** (c'est-à-dire le meilleur modèle possible pour un budget de calcul donné), le nombre de tokens d'entraînement doit être environ **20 fois** le nombre de paramètres. Un modèle de 10 milliards de paramètres doit être entraîné sur 200 milliards de tokens.
+</Callout>
+
+En formule, c'est simple :
+
+```
+tokens_optimaux = 20 × nombre_de_paramètres
+
+Exemple : modèle 70B paramètres
+-> tokens nécessaires = 20 × 70 000 000 000
+-> tokens nécessaires = 1 400 000 000 000 (1.4 trillion de tokens)
+```
+
+## Kaplan vs Chinchilla : le choc des titans
+
+Voici la différence concrète entre les deux approches, si vous multipliez votre budget de calcul par 10 :
+
+| | Kaplan (2020) | Chinchilla (2022) |
+|---|---|---|
+| Paramètres | Multiplier par 5.5 | Multiplier par 3.2 |
+| Données | Multiplier par 1.8 | Multiplier par 3.2 |
+| Ratio tokens/paramètres | environ 5:1 | environ 20:1 |
+| Philosophie | Modèle plus grand, peu de données | Équilibre entre les deux |
+
+Selon Kaplan, les données ne comptaient pas tant que ça. Selon Chinchilla, elles comptent *autant* que les paramètres. C'est un changement de paradigme radical.
+
+
+<Callout type="info" title="L'exemple Gopher : le géant aux pieds d'argile">
+Gopher, le grand modèle de DeepMind, avait 280 milliards de paramètres entraînés sur 300 milliards de tokens — un ratio de 1:1. Selon la règle Chinchilla, il aurait fallu soit 5 600 milliards de tokens pour ce nombre de paramètres, soit un modèle de seulement 15 milliards de paramètres pour 300 milliards de tokens. Gopher était massivement "sous-alimenté" en données.
+</Callout>
+
+## La preuve : le petit Chinchilla écrase les géants
+
+Pour valider la théorie, l'équipe entraîne leur modèle test : **Chinchilla**.
+
+```
+Gopher    : 280 milliards de paramètres, 300 milliards de tokens
+Chinchilla:  70 milliards de paramètres, 1 400 milliards de tokens
+
+Même budget de calcul total. Taille 4x plus petite. Données 4x plus nombreuses.
+```
+
+Résultat ? Chinchilla **bat Gopher sur presque tous les benchmarks**. Il surpasse même GPT-3 (175 milliards) et Megatron-Turing (530 milliards) sur de nombreux tests — avec seulement 70 milliards de paramètres.
+
+Le modèle 4 fois plus petit, mieux nourri, gagne. La Clio bien réglée bat la Ferrari affamée.
+
+Et ce n'est pas tout. Un modèle plus petit, c'est aussi :
+
+- Moins cher à faire tourner en production (*inférence* moins coûteuse)
+- Moins de mémoire GPU nécessaire pour le déploiement
+- Des réponses plus rapides pour les utilisateurs
+- Plus facile à *fine-tuner* (adapter à une tâche spécifique)
+
+## L'impact sur toute l'industrie
+
+### La course aux données commence
+
+Après Chinchilla, les laboratoires d'IA ont pivote vers la collecte massive de données. Si les données comptent autant que les paramètres, alors avoir de meilleures données que ses concurrents devient un avantage compétitif énorme.
+
+Des projets open-source entiers naissent pour constituer des corpus de trillions de tokens : **RedPajama**, **The Pile**, **FineWeb**, **Dolma**. L'obsession n'est plus "combien de GPU" mais "combien de tokens de qualite".
+
+### LLaMA : l'enfant direct de Chinchilla
+
+**LLaMA** (Meta, 2023) applique directement la philosophie Chinchilla. LLaMA-1 7B est entraîné sur 1 trillion de tokens — bien au-delà du ratio recommandé. Résultat : un modèle de "seulement" 7 milliards de paramètres qui rivalise avec des modèles beaucoup plus grands.
+
+LLaMA-3 8B pousse encore plus loin : 15 trillions de tokens pour 8 milliards de paramètres.
+
+```
+Ratio LLaMA-3 8B : 15 000 milliards ÷ 8 milliards = ~1875 tokens par paramètre
+Ratio Chinchilla recommandé : 20 tokens par paramètre
+
+LLaMA-3 est ~94x au-delà de la recommandation Chinchilla !
+```
+
+<Callout type="tip" title="Au-delà de Chinchilla-optimal : optimiser pour l'inférence">
+L'industrie a compris qu'il est souvent judicieux d'aller *bien au-delà* du ratio Chinchilla. Pourquoi ? Parce que Chinchilla optimise pour le coût d'entraînement. Mais en pratique, un modèle peut être entraîné une fois et utilisé des milliards de fois. Un modèle plus petit mais sur-entraîné coûte plus cher à produire, mais beaucoup moins cher à déployer. Et c'est ce coût de déploiement qui domine sur le long terme.
+</Callout>
+
+## Les limites : tout n'est pas rose
+
+### Le mur des données (data wall)
+
+Si vous avez besoin de 20 tokens par paramètre, un modèle d'un trillion de paramètres nécessiterait 20 trillions de tokens de haute qualité. Problème : le texte de qualité disponible sur internet est *fini*.
+
+```
+Estimation du texte de haute qualité en anglais sur internet : ~5 à 10 trillions de tokens
+Texte total (qualité variable) : quelques dizaines de trillions de tokens
+```
+
+On approche d'un plafond. C'est l'un des grands défis du scaling pour les années à venir.
+
+### Qualité vs quantité : tous les tokens ne se valent pas
+
+Chinchilla compte les tokens mais ne distingue pas leur qualité. Or un token d'article scientifique peer-reviewed n'a pas la même valeur qu'un token de commentaire de forum douteux. Les recherches récentes sur le filtrage des données (comme FineWeb d'HuggingFace) montrent qu'améliorer la qualité peut compenser partiellement le manque de quantité.
+
+<Callout type="warning" title="Un guide empirique, pas une loi de la physique">
+Les ratios Chinchilla sont des recommandations basées sur des expériences, pas des vérités mathématiques gravées dans le marbre. Ils varient selon la qualité des données, l'architecture du modèle, les techniques d'entraînement, et surtout ce qu'on optimise : coût d'entraînement ou coût d'inférence. C'est une boussole précieuse, pas un GPS absolu.
+</Callout>
+
+## En résumé
+
+Chinchilla a changé une croyance fondamentale de l'industrie : "plus grand = meilleur". La vraie lecon : **plus grand ET mieux nourri = meilleur**. Les données comptent autant que les paramètres. Un modèle de 70 milliards bien entraîné bat un modèle de 280 milliards sous-alimenté. Et avec des modèles plus petits, l'inférence coûte moins cher — ce qui change tout quand on veut déployer a grande échelle.

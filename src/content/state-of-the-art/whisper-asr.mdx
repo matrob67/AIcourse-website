@@ -1,0 +1,169 @@
+---
+title: "Whisper : reconnaissance vocale universelle"
+description: "Whisper d'OpenAI est un modèle de reconnaissance vocale multilingue entraîné sur 680K heures d'audio, offrant une transcription robuste dans 99 langues."
+---
+
+
+
+## Le problème : la reconnaissance vocale était fragile
+
+Pendant 30 ans, les systèmes de reconnaissance vocale (ASR - Automatic Speech Recognition) étaient fragiles. Ils fonctionnaient bien dans un environnement contrôlé (dictée dans un micro sans bruit) mais dès qu'il y avait du bruit de fond, un accent différent, ou une langue rare, ça échouait lamentablement.
+
+**Whisper change ça** : entraîner sur 680 000 heures d'audio du web crée un modèle universellement robuste. Du bruit ? Pas de problème. Accents variés ? Géré. 99 langues ? Supportées.
+
+<ArxivLink id="2212.04356" title="Robust Speech Recognition via Large-Scale Weak Supervision (Radford et al., 2022)" />
+
+<Callout type="info" title="L'approche de Whisper : brut plutôt que parfait">
+Au lieu d'entraîner sur des datasets ASR soigneusement annotés (cher, limité), Whisper utilise de la **supervision faible** : des paires audio-transcription collectées massivement sur YouTube, podcasts, etc., avec des transcriptions imparfaites, même fausses parfois. Le volume énorme (680K heures) compense le bruit. C'est la même stratégie que les LLM : du volume brut plutôt que de la qualité parfaite.
+</Callout>
+
+## Architecture : encoder-decoder classique
+
+### Le design simple mais puissant
+
+Whisper utilise une architecture **encoder-decoder Transformer** :
+
+- **Audio Encoder** : Transformer encoder qui traite le spectrogramme mel de l'audio
+- **Text Decoder** : Transformer decoder auto-régressif qui génère la transcription
+
+C'est la même architecture que Transformer original (2017), maintenant appliquée à la parole.
+
+### Preprocessing audio
+
+1. L'audio brut est **rééchantillonné à 16 kHz** (standard pour la parole)
+2. Un **spectrogramme mel 80 canaux** est calculé sur des fenêtres de 25 millisecondes
+3. Le spectrogramme est découpé en segments de **30 secondes** (limite du contexte)
+4. Chaque segment de 30 secondes est traité indépendamment
+
+### Tailles de modèles : le choix selon vos ressources
+
+| Modèle | Paramètres | RAM nécessaire | Qualité relative |
+|---|---|---|---|
+| tiny | 39M | 1 Go | 60% |
+| base | 74M | 1 Go | 70% |
+| small | 244M | 2 Go | 82% |
+| medium | 769M | 5 Go | 90% |
+| large-v3 | 1.55B | 10 Go | 100% (référence) |
+| turbo | 809M | 6 Go | 97% |
+
+**Conseil** : turbo offre le meilleur rapport qualité/vitesse pour la plupart des cas. large-v3 seulement si vous avez besoin de 3% de qualité supplémentaire et beaucoup de GPU.
+
+### Multitâche : Whisper fait plusieurs choses
+
+Whisper est entraîné simultanément sur plusieurs tâches, contrôlées par des tokens spéciaux :
+
+- **Transcription** : convertir l'audio dans sa langue d'origine
+- **Traduction** : convertir l'audio en anglais (peu importe la langue source)
+- **Détection de langue** : identifier quelle langue est parlée
+- **Détection d'activité vocale** : identifier les segments avec parole (vs silence)
+
+C'est un seul modèle qui fait 4 choses. Incroyable efficacité.
+
+<Callout type="tip" title="Whisper turbo est le choix rationnel">
+Pour la plupart des cas d'usage, utilisez **Whisper turbo** : il est 8× plus rapide que large-v3 avec seulement 3% de dégradation de qualité. C'est le rapport qualité/vitesse optimal. Utilisez large-v3 uniquement quand la transcription parfaite est critique (médical, juridique) et vous avez le temps/argent.
+</Callout>
+
+## Performance : comment c'est exact ?
+
+### Word Error Rate (WER) : la métrique standard
+
+Le WER mesure le pourcentage d'erreurs. Pour Whisper :
+
+- **Whisper large-v3** : WER ~3-5% en anglais (comparable aux meilleurs systèmes propriétaires)
+- **Pour le français** : WER ~5-8% selon le type d'audio
+
+Pour la comparaison : les humains font environ 4-5% d'erreur sur l'anglais professionnel, donc Whisper large-v3 est à peu près au niveau humain.
+
+### Forces majeures
+
+- **Robustesse au bruit** : fonctionne bien avec bruit de fond, musique, voitures
+- **Multilingue** : 99 langues, du mandarin au swahili
+- **Pas de fine-tuning nécessaire** : fonctionne directement, pas besoin d'adapter au vocabulaire
+- **Accent-agnostique** : accepte les accents variés
+
+### Faiblesses
+
+- **Segments de 30 secondes** : perte de contexte long (une phrase qui s'étend sur 2 segments peut avoir problème)
+- **Hallucinations** : peut générer du texte qui n'existe pas (surtout audio silencieux ou très bruité)
+- **Pas de streaming natif** : traite par segments, pas en temps réel
+
+## Implémentation pratique
+
+### Avec Transformers (plus simple)
+
+```python
+from transformers import pipeline
+
+transcriber = pipeline("automatic-speech-recognition",
+                      model="openai/whisper-large-v3")
+result = transcriber("audio.mp3", return_timestamps=True)
+print(result["text"])
+```
+
+Une ligne pour charger, une ligne pour transcrire.
+
+### Faster Whisper (optimisé pour la vitesse)
+
+Implémentation 4× plus rapide avec quantification INT8 :
+
+```python
+from faster_whisper import WhisperModel
+
+model = WhisperModel("large-v3", compute_type="int8")
+segments, info = model.transcribe("audio.mp3")
+for segment in segments:
+    print(f"[{segment.start:.2f}s → {segment.end:.2f}s] {segment.text}")
+```
+
+Meilleure pour la production : plus rapide, moins de RAM.
+
+### Whisper.cpp
+
+Port en C++ pour l'inférence sur CPU, adapté aux appareils embarqués (téléphones, Raspberry Pi).
+
+<Callout type="warning" title="Les hallucinations de Whisper">
+Whisper peut "halluciner" : générer du texte qui n'existe pas dans l'audio, particulièrement sur des segments silencieux ou très bruités. Solution :
+- Utilisez la détection d'activité vocale (VAD) pour filtrer les segments sans parole
+- Surveillez les scores de confiance des tokens (segments avec probabilité anormalement basse = problématique)
+- Revérifiez les segments avec scores bas
+</Callout>
+
+## Évolutions et alternatives
+
+### Distil-Whisper
+
+Versions distillées (compressées) de Whisper :
+- **6× plus rapides**
+- Seulement ~1% de dégradation de WER
+- Parfait pour la production à grande échelle
+
+### Fine-tuning Whisper sur votre domaine
+
+Fine-tuner Whisper sur des données spécifiques améliore drastiquement la qualité pour du vocabulaire spécialisé :
+- Médical (termes médicaux)
+- Juridique (jargon juridique)
+- Technique (vocabulaire technique)
+- Accents spécifiques
+
+### Alternatives et compétiteurs
+
+- **Canary (NVIDIA)** : ASR multilingue haute performance
+- **Conformer** : architecture hybride CNN+Transformer, très efficace
+- **Universal Speech Model (Google)** : support de 1000+ langues (mais moins accessible)
+
+## Impact et perspective
+
+Whisper a démocratisé la transcription automatique haute qualité. Avant, cela nécessitait :
+- Des services propriétaires coûteux
+- De l'expertise spécialisée
+- De l'infrastructure cloud
+
+Maintenant c'est gratuit, open-source, et accessible à tout le monde. Une révolution silencieuse (ironiquement).
+
+Le futur de l'ASR :
+- Meilleure compréhension du contexte long (au-delà des 30 secondes)
+- Moins d'hallucinations
+- Meilleure performance sur les langues rares
+- Support de la parole en temps réel (streaming vrai)
+
+Whisper n'est pas parfait, mais c'est le meilleur rapport qualité/accessibilité actuellement disponible.

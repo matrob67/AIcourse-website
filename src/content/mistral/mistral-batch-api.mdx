@@ -1,0 +1,102 @@
+---
+title: "API Batch"
+description: "Traitement asynchrone en lot avec l'API Mistral : optimisation des coûts, opérations en volume et patterns d'utilisation pour le batch processing."
+---
+
+
+
+## Batch API : traitement en volume, pas en urgence
+
+Vous avez 100 000 documents à classer. Le cloud en temps réel coûterait une fortune. La **Batch API**, c'est pour ça : vous envoyez un fichier, attendez quelques heures, récupérez les résultats avec une **réduction de 25-50% de coûts**.
+
+### Temps réel vs Batch
+
+**API standard (temps réel)** :
+- Réponse en secondes
+- Coûteux
+- Rate limits
+- Idéal pour : chat, interfaces interactives
+
+**Batch API** :
+- Réponse en heures
+- Pas cher (~25-50% moins)
+- Pas de rate limits pratiques
+- Idéal pour : analyse de masse, évaluation, contenu généré en volume
+
+<Callout type="info" title="Économie types du batch">
+100 000 requêtes en temps réel = cher. En batch, réduction de 30-50% sur le token cost. Pour millions de tokens/jour, ça fait des milliers par mois d'économies.
+</Callout>
+
+### Comment ça marche
+
+1. **Préparez un fichier JSONL** : chaque ligne = une requête
+2. **Uploadez** : via l'API ou la console
+3. **Lancez le batch** : système retourne un ID
+4. **Attendez** : quelques heures (garantie 24h max)
+5. **Récupérez les résultats** : fichier JSONL en sortie
+
+**JSONL format** :
+
+```json
+{"custom_id": "req_001", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "mistral-small-latest", "messages": [{"role": "user", "content": "Résume : ..."}]}}
+```
+
+L'`custom_id` vous permet de matcher les résultats.
+
+### Cas d'usage réels
+
+**Classification en masse** : 500 000 avis clients → classify par sentiment et thème. In batch, c'est cheap.
+
+**Résumé documentaire** : 10 000 articles de presse → extraire le résumé et le titre. Batch = économique.
+
+**Extraction d'entités** : 100 000 contrats → extraire les dates, montants, noms de parties. Batch = optimal.
+
+**Traduction** : 50 000 fiches produit → traduire en 5 langues. Batch = coût minimal.
+
+**Évaluation de modèle** : tester un modèle fine-tuné sur un jeu de test de 5000 cas. Batch + évaluation automatisée = efficace.
+
+<Callout type="tip" title="Évaluation A/B en batch">
+Comparez deux prompts sur 5000 exemples ? Soumettez tout en batch avec chaque variante. Analysez les résultats en bloc. Plus fiable que des tests manuels.
+</Callout>
+
+### Bonnes pratiques
+
+**Taille idéale** : 1000-50 000 requêtes par batch.
+- Trop petit = pas d'économie
+- Trop gros = temps d'attente long + risque de perte complet en cas de bug
+
+**Gestion d'erreurs** : certaines requêtes individuelles peuvent échouer. Le résultat indique le statut. Re-submitez les échecs.
+
+**Idempotence** : concevez le pipeline pour être idempotent. Re-traiter un batch ne doit pas créer de doublons.
+
+**Monitoring** : surveillez le statut via l'API. Mettez en place des alertes pour les batches qui prennent plus de temps que prévu.
+
+### Comparaison
+
+| Aspect | Temps réel | Batch |
+|--------|-----------|-------|
+| Latence | Secondes | Heures |
+| Coût/token | Standard | 25-50% moins |
+| Volume optimal | 1-1000 req/min | 1000-100k+ req/batch |
+| Cas d'usage | Chat, temps réel | Masse |
+| Rate limits | Oui | Non (pratiquement) |
+| Résultats | Sync | Async |
+
+<Callout type="warning" title="PAS pour l'urgence">
+Batch API ne convient pas aux applis temps réel (chatbots, assistants interactifs). Délai = heures. Pour l'interaction humaine, utilisez l'API standard.
+</Callout>
+
+### Architecture type
+
+Un pipeline batch ressemble à :
+
+1. **Collecteur** : accumule les requêtes (Redis, SQS, Kafka)
+2. **Assembleur** : regroupe en fichiers JSONL optimales
+3. **Soumetteur** : envoie les batches à Mistral
+4. **Poller** : check le statut toutes les 5 min
+5. **Processeur** : récupère et traite les résultats
+6. **Stockage** : sauvegarde dans la DB ou data lake
+
+---
+
+**Batch API** = l'IA economique quand vous n'avez pas besoin d'urgence.

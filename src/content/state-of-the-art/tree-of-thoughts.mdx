@@ -1,0 +1,109 @@
+---
+title: "Tree of Thoughts : exploration arborescente"
+description: "Tree of Thoughts étend le chain-of-thought en explorant plusieurs chemins de raisonnement en parallèle, sélectionnant les plus prometteurs à chaque étape."
+---
+
+
+
+## Le problème : un seul chemin c'est fragile
+
+Chain-of-thought génère un raisonnement linéaire. Si le LLM se trompe à l'étape 2, tout ce qui suit est corrompu.
+
+**Tree of Thoughts** explore plusieurs chemins en parallèle et sélectionne les meilleurs. C'est comme un groupe de randonneurs qui essayent plusieurs sentiers.
+
+<ArxivLink id="2305.10601" title="Tree of Thoughts: Deliberate Problem Solving with Large Language Models (Yao et al., 2023)" />
+
+<Callout type="info" title="L'analogie">
+CoT = un randonneur qui prend un seul chemin. ToT = groupe qui explore plusieurs sentiers, communique sur les progrès, converge vers le meilleur chemin.
+</Callout>
+
+## Comment ça marche
+
+1. **Décomposer en étapes** : diviser le problème en étapes intermédiaires
+2. **Générer candidats** : à chaque étape, LLM génère plusieurs « thoughts »
+3. **Évaluer** : chaque thought obtient un score
+4. **Recherche** : algorithme (BFS, DFS) explore l'arbre
+
+```
+Problème
+├── Thought A (score: 0.8)
+│   ├── A1 (score: 0.9) ← Meilleur
+│   │   └── Solution
+│   └── A2 (score: 0.3) ✗
+├── Thought B (score: 0.6)
+│   └── B1 (score: 0.7)
+└── Thought C (score: 0.2) ✗
+```
+
+**BFS** : explore tous les candidats à chaque niveau, garde les K meilleurs. Fiable si évaluation est bonne.
+
+**DFS** : explore profond d'abord, backtrack si mauvais. Pour espaces très larges.
+
+<Callout type="paper" title="Résultats massifs">
+Jeu des 24 : CoT atteint 4%, ToT atteint 74%. Mots croisés : CoT 16%, ToT 60%. L'avantage est énorme sur les problèmes qui exigent de l'exploration.
+</Callout>
+
+## Évaluation des thoughts
+
+Le LLM évalue la qualité d'une étape de raisonnement :
+
+```
+Évalue cette étape pour [problème].
+Étape : [thought]
+Score 1-10 :
+- 1-3 : impasse probable
+- 4-6 : incertain mais possible
+- 7-10 : prometteur
+
+Donne ton score et justification :
+```
+
+### Exemple : jeu des 24
+
+```
+Nombres : 4, 5, 6, 10
+Objectif : 24
+
+Étape 1 - Propositions :
+A) 10 - 4 = 6 (reste : 5, 6, 6) → 7/10
+B) 5 × 4 = 20 (reste : 6, 10, 20) → 6/10
+C) 6 / 4 = 1.5 → 3/10
+
+Garde A et B, élague C.
+
+Étape 2 (depuis A) :
+A1) 5 + 6 = 11 (reste : 6, 11) → 6 + 11 = 17 ✗
+A2) 6 - 5 = 1 → 6 × 1 = 6 ✗
+A3) 5 × 6 = 30 → 30 - 6 = 24 ✓
+```
+
+## Variantes
+
+**ToT + self-consistency** : complétez chaque thought jusqu'à la solution, gardez ceux qui mènent à des solutions valides.
+
+**Beam Search** : version simplifiée. À chaque étape, gardez les K meilleurs candidats (le « beam »), générez les continuations. Plus efficace que BFS.
+
+**MCTS** (Monte Carlo Tree Search) : combine ToT avec MCTS pour exploration plus intelligente.
+
+<Callout type="tip" title="Quand l'utiliser">
+ToT aide pour les problèmes combinatoires : puzzles logiques, planification, math. Pour questions factuelles ou génération de texte, CoT standard suffit et coûte bien moins cher.
+</Callout>
+
+## Le coût est lourd
+
+ToT multiplie les appels LLM :
+- K candidats par étape × E évaluations × N étapes
+- K=5, N=3 étapes = 15 générations + 15 évaluations = 30 appels LLM
+- Contre 1 appel pour CoT
+
+Le coût est 10-30× plus élevé. **La majorité des applis ne le justifient pas.**
+
+<Callout type="warning" title="ROI du coût">
+30 appels LLM au lieu de 1, ça coûte cher. Justifiable uniquement si CoT échoue fréquemment ET l'exploration auto peut corriger. Pour la plupart des chatbots, CoT ou self-consistency suffisent.
+</Callout>
+
+## Impact conceptuel
+
+Tree of Thoughts a ouvert la voie : traiter le raisonnement LLM comme un **problème de recherche** plutôt que juste génération séquentielle. Cette perspective a influencé les modèles de raisonnement comme o1 et DeepSeek-R1, qui internalisent l'exploration.
+
+Même si ToT explicite est peu utilisé en production, ses idées (branching, élagage, recherche) persistent.

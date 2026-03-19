@@ -1,0 +1,80 @@
+---
+title: "Paper : LoRA - Fine-tune sans tout recompiler"
+description: "Microsoft 2021. Fine-tuner GPT-3 coûte 280 GB mémoire. LoRA : adaptez juste 0.3% des paramètres. Même qualité. 10 000x plus cheap."
+---
+
+
+
+## Le problème coûteux
+
+Fine-tuner LLM de 70B : 70B paramètres à mettre à jour. 280 GB en mémoire. Prohibitif.
+
+Chaque tâche ? Copie du modèle. Et updates.
+
+Solution : LoRA.
+
+<Callout type="info" title="La révolution d'efficience">
+LoRA rend le fine-tuning des gros modèles possible. Sur GPU unique. Pas de clusters. C'est crucial pour l'adoption.
+</Callout>
+
+## L'idée : rang faible
+
+Les mises à jour des poids ont rang intrinsèque faible. Au lieu d'updater W (d x d), décomposez :
+
+```
+delta_W = B * A
+
+B : d x r
+A : r x d
+r << d
+```
+
+Exemple : d=1000, r=8. Vous mettez à jour 8000 paramètres au lieu d'un million.
+
+## Mécanisme
+
+Pour chaque couche :
+
+1. Geler W (pas de gradients)
+2. Ajouter deux petites matrices A et B (rang r, typiquement 8-64)
+3. Sortie devient : y = Wx + BAx
+4. Entraîner seulement A et B
+
+Après entraînement ? Fusionnez : W' = W + BA. Même architecture. Même vitesse.
+
+## Les chiffres
+
+GPT-3 175B avec r=4 :
+
+- Paramètres entraînables : 4.7M
+- Réduction : **10 000x**
+- Performance : égale ou supérieure au fine-tuning complet
+
+<Callout type="tip" title="Quelles couches adapter ?">
+LoRA peut adapter n'importe quelles matrices. Study montre : Q et V donnent meilleur ratio. Pratique : adapter tout (q, k, v, o, FFN) avec petit rang fonctionne bien.
+</Callout>
+
+## Les variantes
+
+**QLoRA** (2023) : combine LoRA avec quantification 4-bit. Fine-tune 65B sur GPU 48GB. Révolution.
+
+**DoRA** : décompose poids en magnitude et direction. LoRA appliqué séparément.
+
+**LoRA+** : learning rates différents pour A vs B.
+
+## L'écosystème LoRA
+
+PEFT (Hugging Face) : library pour LoRA. Civitai : milliers de LoRA pour images. Partout.
+
+C'est le standard de facto du fine-tuning.
+
+## Applications
+
+- Personnalisation de style (écriture)
+- Spécialisation domaine (médical, juridique)
+- Instruction tuning (base model → assistant)
+- Génération d'images (Stable Diffusion styles)
+
+<Callout type="warning" title="LoRA n'est pas panacée">
+Réduit le coût, pas la qualité des données. Rang trop bas limite les performances sur tâches complexes. Catastrophic forgetting possible.
+</Callout>

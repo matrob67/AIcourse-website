@@ -1,0 +1,116 @@
+---
+title: "Leanstral : preuves formelles pour du code vérifiable"
+description: "Le premier agent open-source conçu pour Lean 4. Leanstral génère des preuves mathématiques que votre code est correct, à une fraction du coût des modèles propriétaires."
+---
+
+## Le problème : on fait confiance à du code qu'on ne vérifie pas
+
+En 2026, environ 42 % du code en production est généré par l'IA. Pourtant, 96 % des développeurs disent ne **pas faire confiance** au code produit par les LLMs. Et seuls 48 % prennent le temps de le vérifier manuellement.
+
+On a donc un paradoxe : on utilise massivement l'IA pour coder, tout en sachant qu'elle peut se tromper, et sans vérifier si elle s'est trompée. C'est ce que les chercheurs appellent la **dette de vérification** — un risque silencieux qui s'accumule dans les bases de code du monde entier.
+
+<Callout type="warning" title="Le vrai problème">
+Relire du code IA ligne par ligne est lent, coûteux, et ne passe pas à l'échelle. Plus les modèles génèrent de code, plus l'humain devient le goulot d'étranglement. Il faut automatiser la vérification elle-même.
+</Callout>
+
+## L'idée de Mistral : et si l'IA prouvait elle-même que son code est correct ?
+
+C'est là qu'intervient **Leanstral**, annoncé en mars 2026. L'idée est simple mais puissante : au lieu de générer du code et d'espérer qu'il marche, on génère du code **avec une preuve mathématique** qu'il est correct.
+
+### L'analogie
+
+Imaginez un architecte qui vous remet les plans d'un immeuble. Aujourd'hui, les LLMs sont comme un architecte très rapide mais parfois distrait — il dessine vite, mais il peut oublier un mur porteur.
+
+**Leanstral**, c'est comme si cet architecte livrait ses plans accompagnés d'un **certificat d'un bureau de contrôle** prouvant que la structure tient. Pas une opinion, pas une relecture — une **preuve formelle** vérifiée par un système mathématique (ici, le langage Lean 4).
+
+### Qu'est-ce que Lean 4 ?
+
+Lean 4 est un langage de programmation créé par Microsoft Research, conçu pour écrire des **preuves mathématiques** vérifiables par ordinateur. C'est un « assistant de preuve » : vous écrivez une proposition (« cette fonction trie toujours correctement une liste »), et Lean vérifie automatiquement si votre preuve est valide. Si elle compile, elle est correcte — mathématiquement garanti, sans ambiguïté.
+
+<Callout type="info" title="Vérification formelle">
+Contrairement aux tests unitaires (qui vérifient des cas particuliers), la vérification formelle prouve que le code est correct **pour tous les cas possibles**. C'est la différence entre « j'ai essayé 1000 exemples et ça marchait » et « j'ai la preuve mathématique que ça marchera toujours ».
+</Callout>
+
+## Comment Leanstral fonctionne
+
+Leanstral est un **agent** (pas juste un modèle). Il ne se contente pas de générer du texte : il interagit avec l'environnement Lean 4 en boucle.
+
+### Le cycle de travail
+
+1. **Leanstral reçoit une spécification** — par exemple : « prouve que cette fonction de tri produit toujours une liste ordonnée »
+2. **Il génère une tentative de preuve** en Lean 4
+3. **Lean vérifie la preuve** automatiquement — soit elle compile (correct), soit Lean renvoie une erreur précise
+4. **Leanstral lit l'erreur** et corrige sa preuve
+5. Retour à l'étape 3, jusqu'à ce que la preuve compile
+
+C'est la combinaison qui est puissante : le LLM est créatif (il propose des stratégies de preuve), et Lean est un **vérificateur parfait** (il ne laisse passer aucune erreur). L'un imagine, l'autre valide.
+
+<Callout type="tip" title="MCP + Lean">
+Leanstral utilise le protocole MCP (Model Context Protocol) avec le serveur `lean-lsp-mcp` pour interagir avec Lean. Cela signifie qu'il peut aussi s'intégrer dans d'autres outils et workflows via Mistral Vibe (la CLI de Mistral).
+</Callout>
+
+
+## L'architecture : un MoE ultra-sparse
+
+Sous le capot, Leanstral utilise l'architecture **Sparse Mixture-of-Experts** (MoE) chère à Mistral.
+
+### Les chiffres clés
+
+| Caractéristique | Valeur |
+|---|---|
+| **Paramètres totaux** | 120 milliards |
+| **Paramètres actifs par token** | 6 milliards (seulement 5 % !) |
+| **Nombre d'experts** | 128 modules spécialisés |
+| **Experts activés par token** | 4 sur 128 |
+| **Ratio d'efficacité** | 18× — la capacité d'un modèle 120B au coût d'un modèle 6.5B |
+
+L'analogie MoE : imaginez une entreprise de 128 consultants spécialisés. Pour chaque question, vous ne consultez que les 4 plus pertinents au lieu de réunir les 128 dans une salle. Vous obtenez l'expertise collective sans payer tout le monde.
+
+## Les résultats : 15× moins cher que Claude
+
+Sur le benchmark **FLTEval** (complétion de preuves formelles sur des dépôts Lean réalistes), Leanstral affiche des résultats impressionnants :
+
+| Configuration | Score FLTEval | Coût |
+|---|---|---|
+| Leanstral pass@1 | 21.9 | **18 $** |
+| Leanstral pass@2 | 26.3 | **36 $** |
+| Leanstral pass@4 | 29.3 | **72 $** |
+| Leanstral pass@16 | 31.9 | **290 $** |
+| Claude Sonnet | 23.7 | **549 $** |
+| Claude Opus 4.6 | 33.5 | **1 650 $** |
+
+Pour un budget équivalent (≈ 36 $), Leanstral **dépasse Sonnet** (26.3 vs 23.7). Pour atteindre le niveau d'Opus, il faut monter à pass@16 pour 290 $ — soit tout de même **5.7× moins cher** qu'Opus.
+
+<Callout type="info" title="Qu'est-ce que pass@k ?">
+pass@k signifie : « on lance le modèle k fois, et on garde le meilleur résultat ». Comme Lean vérifie automatiquement si une preuve est correcte, on peut lancer plusieurs tentatives et garder celle qui compile. C'est un avantage fondamental de la vérification formelle : le vérificateur est gratuit et parfait.
+</Callout>
+
+Leanstral bat aussi les gros modèles open-source généralistes comme GLM5 (744B paramètres), Kimi-K2.5 (1T paramètres), et Qwen3.5 (397B), tout en étant beaucoup plus petit et moins cher.
+
+## Accès et déploiement
+
+Leanstral est distribué sous **licence Apache 2.0** (totalement open-source), avec trois modes d'accès :
+
+1. **Via Mistral Vibe** — la CLI de Mistral. Il suffit de taper `/leanstral` pour démarrer un agent de preuve dans votre projet
+2. **API gratuite** — un endpoint temporaire (`labs-leanstral-2603`) pour tester et donner du feedback
+3. **Auto-hébergé** — téléchargez les poids et déployez sur votre infrastructure
+
+<Callout type="tip" title="Essayer Leanstral">
+Pour démarrer rapidement : inscrivez-vous sur [console.mistral.ai](https://console.mistral.ai/codestral/cli), installez Mistral Vibe, puis lancez `/leanstral` dans un projet contenant des fichiers `.lean`.
+</Callout>
+
+## Pourquoi c'est important
+
+Leanstral représente un changement de paradigme dans le code assisté par IA. Jusqu'ici, le workflow était : *générer → relire → espérer*. Avec la vérification formelle, ça devient : *générer → prouver → garantir*.
+
+C'est particulièrement critique pour :
+- **Le code critique** (aérospatial, médical, finance) où un bug peut coûter des vies ou des milliards
+- **Les mathématiques** — Leanstral peut aider les mathématiciens à formaliser des preuves
+- **La confiance dans l'IA** — si le code généré est prouvé correct, la question de la fiabilité de l'IA est résolue pour cette partie
+
+L'annonce de Leanstral a coïncidé avec la sortie de Mistral Small 4 et l'entrée de Mistral dans la **Nvidia Nemotron Coalition** pour co-développer des modèles de base open-source.
+
+<Callout type="paper" title="Ressources">
+- [Blog officiel Mistral](https://mistral.ai/news/leanstral) — annonce et détails techniques
+- [Documentation](https://docs.mistral.ai/models/leanstral-26-03) — guide de démarrage et API
+</Callout>

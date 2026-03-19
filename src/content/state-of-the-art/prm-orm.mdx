@@ -1,0 +1,182 @@
+---
+title: "PRM vs ORM : récompenser le raisonnement"
+description: "Les Process Reward Models (PRM) évaluent chaque étape du raisonnement, tandis que les Outcome Reward Models (ORM) évaluent uniquement la réponse finale. Comparaison et implications."
+---
+
+
+
+## Le problème : comment juger le raisonnement ?
+
+Vous entraînez un modèle par reinforcement learning pour résoudre des maths. Comment vous lui dites "bonne réponse, continue" vs "mauvaise réponse, arrête" ?
+
+Deux philosophies opposées :
+
+1. **Juger le résultat** : la réponse finale est bonne ? Récompensez.
+2. **Juger chaque étape** : chaque étape du raisonnement est correcte ? Récompensez ce qui est bon.
+
+C'est PRM vs ORM.
+
+<ArxivLink id="2305.20050" title="Let's Verify Step by Step (Lightman et al., 2023)" />
+
+<Callout type="info" title="L'analogie du professeur">
+Un **ORM** = professeur qui regarde uniquement la réponse finale d'un exam.
+Un **PRM** = professeur qui corrige chaque étape, donnant feedback ligne par ligne.
+
+Les deux sont utiles. Le question est : qui apprend mieux ?
+</Callout>
+
+## ORM : juger le résultat
+
+### Fonctionnement
+
+Vous montrez au modèle :
+- La question
+- Le raisonnement complet (boîte noire)
+- La réponse
+
+ORM dit : "réponse juste (r=1) ou fausse (r=0)" ?
+
+C'est tout. Pas de feedback sur chaque étape.
+
+### Avantage
+
+- **Simple** : juste vérifier si final correct/incorrect
+- **Données faciles** : pas besoin annoter chaque étape
+- **Flexible** : fonctionne sur n'importe quel raisonnement, même complexe
+
+### Problème majeur : reward hacking
+
+Un modèle peut arriver à la bonne réponse par **mauvaise raison**, et ORM dit "bien joué".
+
+```
+Problème : 3 x = 15, trouver x
+Mauvais raisonnement : "Je vais deviner... 5?"
+Réponse : 5
+ORM : "Correct !"
+```
+
+ORM a récompensé de la chance, pas du raisonnement.
+
+Autre problème : **signal sparse**. Un seul signal pour tout le raisonnement n'aide pas le modèle à apprendre *où* il s'est trompé.
+
+## PRM : juger chaque étape
+
+### Fonctionnement
+
+Chaque étape du raisonnement est évaluée indépendamment :
+
+```
+Problème : 2x + 3 = 11, trouver x
+Étape 1 : "2x + 3 = 11" ✓ (pose bien l'équation)
+Étape 2 : "2x = 11 - 3 = 8" ✓ (soustrait correctement)
+Étape 3 : "x = 8 / 2 = 4" ✓ (divise correctement)
+Réponse : x = 4 ✓
+```
+
+**Signal dense** : feedback à chaque étape.
+
+### Entraînement
+
+Coûteux : chaque étape doit être annotée par des experts. OpenAI a utilisé des mathématiciens pour annoter 800K étapes.
+
+### Avantage majeur
+
+PRM identifie et pénalise les raisonnements incorrects **même s'ils aboutissent à la bonne réponse par chance**.
+
+```
+Problème : 3 x = 15, trouver x
+Mauvaise étape 1 : "Je divise 15 par 4, ce qui donne 3.75" ✗
+Deuxième essai : "Je divise 15 par 3, ce qui donne 5" ✓
+Réponse : 5 ✓
+
+Avec PRM : les mauvaises étapes sont pénalisées même si chance donne bonne réponse
+```
+
+### Résultats empiriques
+
+Paper Lightman et al. (OpenAI) : sur MATH (problèmes maths)
+
+```
+ORM best-of-100 : 72.4% résolu
+PRM best-of-100 : 78.2% résolu
+```
+
+Le PRM trouve 5.8% de solutions **en plus** en éliminant les faux positifs.
+
+<Callout type="paper" title="PRM : le papier qui a changé le jeu">
+Lightman et al. montrent que des récompenses par étape entraînent un bien meilleur RL que des récompenses finales seulement. Le signal dense > le signal sparse.
+</Callout>
+
+## Comparaison directe
+
+| Aspect | ORM | PRM |
+|---|---|---|
+| Granularité | Réponse finale seulement | Chaque étape |
+| Signal d'entraînement | Sparse (1 signal) | Dense (multi signaux) |
+| Données nécessaires | Réponses juste/fausse | Annotations étape par étape |
+| Coût annotation | Bas | Très élevé |
+| Qualité sélection | Bonne | Meilleure |
+| Détection d'erreur | Impossible | Précise |
+| Vulnérable reward hacking | Oui | Non |
+
+## Cas d'usage pratiques
+
+### Best-of-N avec PRM
+
+```python
+solutions = [model.generate(problem) for _ in range(100)]
+scores = [prm.score_steps(problem, sol) for sol in solutions]
+best = solutions[argmax(min_step_score(scores))]
+```
+
+Générez 100 solutions, la meilleure c'est celle où **toutes les étapes** sont bonnes.
+
+### MCTS guidée par PRM
+
+Dans un tree search, chaque nœud est une étape. PRM score le nœud. Les branches bonnes sont explorées plus.
+
+### RL avec PRM comme récompense
+
+Entraînez le modèle en RL où chaque étape reçoit feedback du PRM, pas juste la fin.
+
+<Callout type="tip" title="Quand PRM vaut le coût">
+PRM brille sur **maths et code** où étapes sont claires et vérifiables.
+
+Pour raisonnement flou (analyse, argumentation), découper en étapes est ambigu. ORM c'est plus pragmatique.
+</Callout>
+
+## Approches hybrides
+
+### ORM + vérification légère
+
+ORM pour le score global, vérificateur léger (exécution de code, calcul symbolique) pour étapes individuelles.
+
+### PRM automatique
+
+Au lieu d'annoter manuellement :
+
+1. Générez solutions via CoT
+2. Vérifiez réponse finale
+3. Utilisez heuristiques pour scorer les étapes (Monte Carlo estimation)
+
+Moins parfait que PRM humain-annoté, mais faisable à l'échelle.
+
+<Callout type="warning" title="La qualité d'annotation est reine">
+PRM est bon seulement si les annotations sont bonnes. Des annotateurs mal formés ou critères flous = PRM peu fiable.
+
+OpenAI a utilisé des mathématiciens qualifiés. Pas des undergrads sur MTurk.
+</Callout>
+
+## L'importance pour le scaling
+
+Vous voulez faire de la recherche arborescente (MCTS) sur le raisonnement ? **Vous avez absolument besoin d'un PRM** pour guider l'exploration.
+
+ORM ne donne feedback que sur la feuille, pas sur les branches intermédiaires. PRM donne feedback partout.
+
+C'est pourquoi PRM est *essentiel* pour le test-time compute scaling.
+
+## Perspective
+
+PRM représente la nouvelle frontière : au lieu de "récompenser la réponse", récompenser le **processus de pensée**.
+
+À mesure que les vérificateurs automatiques s'améliorent (proofs formels, exécution code), le champ du PRM s'élargit au-delà des maths vers science, ingénierie, planification.

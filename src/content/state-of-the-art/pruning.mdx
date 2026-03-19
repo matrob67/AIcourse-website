@@ -1,0 +1,66 @@
+---
+title: "Pruning : élagage structuré, non structuré et Wanda"
+description: "Le pruning supprime les paramètres les moins importants d'un réseau de neurones pour réduire sa taille et accélérer l'inférence. Tour d'horizon des techniques classiques et modernes pour les LLM."
+---
+
+
+
+## Le problème : les modèles ont des poids inutiles
+
+Imaginez un arbre qui a des branches mortes. Couper ces branches ne nuit pas à sa santé — elle captent toujours le soleil aussi bien. Les réseaux de neurones c'est pareil : beaucoup de poids **ne contribuent presque rien** aux prédictions. Pourquoi les garder ?
+
+<ArxivLink id="2306.11695" title="A Simple and Effective Pruning Approach for Large Language Models (Sun et al., 2023)" />
+
+<Callout type="info" title="La loterie des réseaux">
+L'hypothèse du "billet gagnant" dit que dans tout réseau dense, il existe un **sous-réseau sparse** (un sous-ensemble de poids) qui, entraîné seul, fait aussi bien que le réseau complet. Le pruning cherche juste ce sous-réseau caché.
+</Callout>
+
+## Deux stratégies opposées
+
+### Le scalpel (pruning non structuré)
+Couper des poids individuels au hasard. Résultat : une matrice qui ressemble à du fromage suisse (beaucoup de zéros éparpillés).
+
+**Avantage** : vous pouvez supprimer 70% des poids.
+**Problème** : votre GPU standard n'accélère pas sur du fromage suisse. C'est juste plus léger, pas plus rapide.
+
+### La tronçonneuse (pruning structuré)
+Supprimer des **structures entières** : une tête d'attention complète, une couche FFN, une couche de Transformer. Résultat : un modèle plus petit avec une architecture normale.
+
+**Avantage** : ça accélère réellement, sans hardware spécial.
+**Problème** : moins flexible, on ne peut couper que 30-50% au max.
+
+<Callout type="tip" title="2:4 sparsity sur les GPU NVIDIA récents">
+Il existe un format hybride magique : tous les 4 éléments, vous en laissez 2 activés, 2 inactifs. Les GPU Ampere/Ada supportent ça nativement. Résultat : compression réelle **et** accélération réelle en 2×. C'est le sweet spot.
+</Callout>
+
+## Wanda : la méthode simple qui marche
+
+Le truc chaud en 2023 : **Wanda** (Weights AND Activations). Une seule formule :
+
+```
+Score du poids = |poids| × (norme L2 de ses activations)
+```
+
+Idée simple : un poids important c'est pas juste un gros nombre. C'est un poids qui s'**active beaucoup** connecté à un canal qui bouge beaucoup. Wanda capture cette interaction.
+
+Résultat : sur LLaMA-7B, supprimer 50% des poids avec Wanda → perplexité quasi identique à l'original. Pas d'entraînement complet : juste un calcul sur 128 exemples. 10 minutes max.
+
+<Callout type="paper" title="Résultats réels de Wanda">
+Wanda rivalise avec SparseGPT (beaucoup plus complexe) tout en étant aussi rapide qu'un forward pass. L'efficacité est dingue pour la simplicité.
+</Callout>
+
+
+## En production
+
+Vous pouvez combiner les techniques :
+1. **Wanda** : 50% de poids restent
+2. **GPTQ** : quantifier en 4-bit (chaque valeur = 0.5 octet au lieu de 2)
+3. Résultat : 8× plus petit que FP16 originel, 80% de la performance
+
+Ou couper des couches entières : certains modèles tolèrent la suppression de 30% de leurs couches.
+
+<Callout type="warning" title="Pièges du pruning">
+Un modèle avec 50% de sparsité non structurée s'exécute à **la même vitesse** que le modèle original sur du hardware classique. La compression est réelle (économie mémoire), l'accélération demande du hardware spécial ou des kernels optimisés.
+</Callout>
+
+Le pruning c'est pas sexy comme la distillation, mais c'est pragmatique pour **réduire la taille disque/mémoire** d'un modèle sans ré-entraîner. Combiné à la quantification, c'est votre arme secrète pour le déploiement edge.

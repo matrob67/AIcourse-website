@@ -1,0 +1,118 @@
+---
+title: "Flash Attention 2"
+description: "Étude de Flash Attention 2, l'évolution de l'algorithme original avec un parallélisme amélioré et des optimisations spécifiques aux GPU Ampere et Hopper."
+---
+
+## De Flash Attention 1 à Flash Attention 2
+
+Flash Attention 2, publié par Tri Dao en 2023, améliore l'algorithme original en optimisant le parallélisme et l'utilisation des unités de calcul GPU. Là où Flash Attention 1 atteignait ~50-70% de l'utilisation théorique des GPU, Flash Attention 2 approche les 70-90%.
+
+<ArxivLink id="2307.08691" title="FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning" />
+
+## Optimisations clés
+
+### Réduction des opérations non-matmul
+
+Flash Attention 1 contenait des opérations de rescaling (multiplication et division pour la correction du softmax en ligne) intercalées avec les multiplications matricielles. Ces opérations scalaires sous-utilisent les Tensor Cores.
+
+Flash Attention 2 réorganise le calcul pour regrouper les opérations de rescaling et minimiser les opérations non-matmul dans la boucle interne.
+
+<Callout type="info" title="Tensor Cores et matmul">
+Les GPU modernes (A100, H100) possèdent des unités spécialisées appelées Tensor Cores qui accélèrent les multiplications matricielles (matmul) par un facteur 16x. Cependant, les opérations élément-à-élément (addition, multiplication scalaire) ne bénéficient pas de cette accélération. Maximiser le ratio matmul/non-matmul est crucial pour l'utilisation optimale du GPU.
+</Callout>
+
+### Parallélisme sur la dimension séquence
+
+Dans Flash Attention 1, la boucle externe itère sur les blocs de K/V et la boucle interne sur les blocs de Q. Chaque bloc de K/V est partagé entre tous les blocs de Q, ce qui est naturel mais limite le parallélisme quand le nombre de têtes d'attention ne suffit pas à saturer le GPU.
+
+Flash Attention 2 inverse les boucles : la boucle externe itère sur les blocs de Q et la boucle interne sur les blocs de K/V. Cela permet de paralléliser sur la dimension de la séquence en plus de la dimension des têtes.
+
+### Partitionnement du travail entre warps
+
+Un threadblock GPU contient plusieurs warps (groupes de 32 threads). Flash Attention 2 optimise la répartition du travail entre warps pour minimiser la synchronisation et les accès en mémoire partagée.
+
+<Callout type="paper" title="Partitionnement warp">
+Flash Attention 1 partitionnait K et V entre les warps, nécessitant une réduction (synchronisation) après chaque bloc. Flash Attention 2 partitionne Q entre les warps, permettant à chaque warp de travailler indépendamment sur différentes lignes de la sortie, éliminant la synchronisation intra-bloc.
+</Callout>
+
+## Résultats de performance
+
+### Speedup par rapport à Flash Attention 1
+
+| GPU | Speedup FA2 vs FA1 | % du théorique FLOP |
+|-----|--------------------|--------------------|
+| A100 (FP16) | 1.5-2x | 50-73% |
+| A100 (BF16) | 1.5-2x | 50-73% |
+
+### Comparaison avec l'attention standard
+
+Pour une séquence de 2K tokens sur A100 :
+
+- **Attention PyTorch standard** : ~30 TFLOP/s
+- **Flash Attention 1** : ~120 TFLOP/s
+- **Flash Attention 2** : ~220 TFLOP/s
+- **Théorique A100** : 312 TFLOP/s (FP16)
+
+### Scaling avec la longueur de séquence
+
+Flash Attention 2 maintient des performances élevées même pour de très longues séquences, avec un débit quasi-constant en TFLOP/s grâce au tiling efficace.
+
+<Callout type="tip" title="Impact pratique">
+Flash Attention 2 réduit le temps d'entraînement end-to-end des LLM de 20-40% par rapport à Flash Attention 1, et de 3-5x par rapport à l'attention standard. Cette accélération se traduit directement en économies de coût et en capacité à expérimenter plus rapidement.
+</Callout>
+
+
+
+## Support du masquage causal optimisé
+
+### Skip des blocs masqués
+
+Flash Attention 2 implémente un skip intelligent des blocs entièrement masqués dans l'attention causale. Pour le masquage causal triangulaire, environ la moitié des blocs sont entièrement masqués et peuvent être sautés, offrant un speedup supplémentaire de ~2x pour l'attention causale.
+
+### Masques personnalisés
+
+La version 2 supporte également des patterns de masquage personnalisés (comme le sliding window) via des fonctions de masquage définies par l'utilisateur.
+
+## Support multi-GPU et variable-length
+
+### Séquences de longueur variable
+
+Flash Attention 2 gère efficacement les batches de séquences de longueurs différentes via un format de packing (varlen) qui concatène les séquences et utilise des indices de début/fin pour l'attention.
+
+### Head dimensions variées
+
+Support pour des dimensions de tête non standards (pas seulement 64 ou 128), offrant plus de flexibilité architecturale.
+
+## Intégration dans l'écosystème
+
+### PyTorch SDPA
+
+Flash Attention 2 est le backend par défaut de `torch.nn.functional.scaled_dot_product_attention` sur les GPU compatibles, rendant son adoption transparente.
+
+### Hugging Face
+
+Les modèles Hugging Face Transformers activent automatiquement Flash Attention 2 quand le package est installé, via l'argument `attn_implementation="flash_attention_2"`.
+
+<Callout type="warning" title="Compatibilité">
+Flash Attention 2 nécessite des GPU NVIDIA avec compute capability ≥ 8.0 (Ampere : A100, A10G, RTX 3090/4090 ; Hopper : H100). Les GPU plus anciens (V100, T4) ne sont pas supportés par les optimisations de FA2, bien que FA1 reste disponible pour eux.
+</Callout>
+
+## Backward pass amélioré
+
+### Optimisation du gradient
+
+Flash Attention 2 améliore aussi le backward pass avec les mêmes principes d'optimisation :
+
+- Parallélisme accru sur la dimension séquence
+- Meilleur partitionnement warp
+- Rematérialisation optimisée du softmax
+
+Le backward pass atteint 60-70% du débit théorique, contre 30-40% pour Flash Attention 1.
+
+## Impact et adoption
+
+Flash Attention 2 est devenu un composant standard dans l'entraînement et l'inférence des LLM. Son adoption universelle a contribué à l'extension des fenêtres de contexte, à la réduction des coûts d'entraînement et à l'amélioration générale de l'efficacité des Transformers. Les optimisations hardware-aware qu'il incarne sont devenues un paradigme de conception pour les algorithmes de deep learning.
+
+<Callout type="info" title="Vers Flash Attention 3">
+Flash Attention 2 a posé les bases des optimisations exploitées par Flash Attention 3 sur les GPU Hopper (H100/H200), qui introduisent de nouvelles fonctionnalités hardware comme le pipeline asynchrone et le support FP8. Ces avancées seront détaillées dans la section suivante.
+</Callout>

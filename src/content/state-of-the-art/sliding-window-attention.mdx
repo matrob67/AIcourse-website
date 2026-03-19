@@ -1,0 +1,96 @@
+---
+title: "Sliding Window Attention : l'astuce simple de Mistral"
+description: "Attention à fenêtre glissante : oubliez les tokens trop vieux, gardez juste les 4K derniers. Ça rend l'inférence ultra-rapide."
+---
+
+
+
+## Le problème : le cache grandit infiniment
+
+Vous générez un token. Puis un autre. Et un autre.
+
+Chaque token nouveau = ses clés et valeurs stockées dans le "KV cache". Après 1000 tokens, votre cache pèse lourd. Après 10K, c'est énorme.
+
+C'est un goulot d'étranglement majeur : le cache grandit, l'inférence ralentit.
+
+## L'idée de Mistral : oubliez les vieux
+
+**Sliding Window Attention** : chaque token ne regarde que les `W` tokens précédents.
+
+```
+Token à position i → peut voir tokens [i-W+1, i]
+```
+
+Par exemple, avec `W = 4096`, le token #5000 voit les tokens #1000-5000, pas les tokens #1-1000.
+
+### Évidemment le cache reste petit
+
+Au lieu d'un cache qui grandit avec les tokens générés (`O(L)`), il reste constant (`O(W)`).
+
+| Approche | Cache après 8K tokens |
+|----------|------|
+| Attention globale | 8K à garder |
+| Sliding Window (W=4K) | 4K à garder |
+
+<Callout type="info" title="Portée effective plus grande">
+Chaque couche voit seulement une fenêtre. Mais avec 32 couches, l'information peut se propager. Théoriquement, la portée effective est 32 × 4K = 128K tokens. En pratique, ça va bien.
+</Callout>
+
+## Implémentation : rolling buffer
+
+C'est trivial. Un buffer circular de taille `W`. Quand il est plein, les nouveaux entrées K/V écrasent les plus anciens.
+
+```
+position modulo W
+```
+
+Pas de copie mémoire, pas de malloc/free. Juste un pointeur qui tourne en rond.
+
+<Callout type="tip" title="Zero overhead">
+L'implémentation est tellement bête simple qu'il y a zéro overhead supplémentaire. Comparé à l'attention globale, c'est même plus rapide.
+</Callout>
+
+## Mistral 7B : cas d'école
+
+Fenêtre de 4096 tokens. Aussi utilisé des **têtes d'attention groupées** (GQA) : 8 têtes de clés/valeurs au lieu de 32.
+
+Résultat : KV cache minuscule. Les serveurs peuvent traiter beaucoup plus de requêtes en parallèle.
+
+## Forces et faiblesses
+
+### Les avantages
+- **KV cache borné** : mémoire prévisible, débit constant
+- **Ultra-compatible** : marche avec Flash Attention, GQA, tout
+- **Efficacité** : une fenêtre contiguë est plus efficace qu'une sélection arbitraire
+
+### Les problèmes
+- **Oubli forcé** : les infos au-delà de la fenêtre sont perdues
+- **Tâches à long rappel** : retrouver une info du début est difficile
+
+<Callout type="warning" title="Exemple d'échec">
+Un document de 100K mots. La question porte sur la phrase 2. Avec fenêtre 4K, le token de réponse à la position 100K ne voit pas la position 2. L'info doit traverser 96K tokens en couches successives, ce qui attenue l'information.
+</Callout>
+
+## Variantes intelligentes
+
+### Sink tokens
+Gardez les premiers tokens quand même (le system prompt, les instructions). Ils reçoivent souvent beaucoup d'attention et sont importants.
+
+### Attention locale + globale
+Combinez fenêtre locale avec quelques tokens "globaux" visibles partout. Compromise entre efficacité et qualité.
+
+### Attention diluée
+Au lieu d'une fenêtre contiguë, prenez les `W/2` derniers tokens ET les tokens espacés (tous les 4è token). Couvre une portée plus large.
+
+## Comparaison avec d'autres approches
+
+| Technique | Complexité | Cache | Rappel global |
+|-----------|-----------|-------|---|
+| Attention classique | O(L²) | O(L) | Parfait |
+| Sliding Window | O(L×W) | O(W) | Via multi-couche |
+| Sparse (Longformer) | O(L×(W+G)) | O(L) | Via tokens globaux |
+| SSM (Mamba) | O(L) | O(1) fixe | Comprimé |
+
+<Callout type="info" title="Verdict : pragmatique">
+Sliding Window est pas intellectuellement spectaculaire, mais c'est PRAGMATIQUE. Les modèles Mistral prouvent qu'une attention locale bien faite rivalise avec l'attention globale tout en étant plus efficace. C'est pourquoi ça marche en production.
+</Callout>

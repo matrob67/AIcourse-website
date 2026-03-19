@@ -1,0 +1,139 @@
+---
+title: "Évaluation RAG : RAGAS et métriques"
+description: "Méthodologie complète pour évaluer un système RAG : le framework RAGAS, les métriques de retrieval et de génération, et la construction de benchmarks d'évaluation."
+---
+
+
+
+## Le problème : comment savoir si c'est bon ?
+
+Un système RAG a plein de points faibles :
+- Mauvais découpage des documents → retrieval mauvais
+- Embeddings inadaptés → résultats non pertinents
+- Le LLM hallucine → génération mauvaise
+- La réponse ne répond pas à la question
+
+Sans évaluation systématique, vous naviguez à l'aveugle.
+
+<Callout type="info" title="Trois dimensions à mesurer">
+**Retrieval** : les bons docs sont-ils retrouvés ? **Fidélité** : la réponse ment-elle ? **Pertinence** : répond-elle vraiment à la question ?
+</Callout>
+
+## RAGAS : le framework standard
+
+RAGAS (Retrieval-Augmented Generation Assessment) est la référence open-source. Un LLM évalue automatiquement 4 métriques.
+
+### Fidélité (Faithfulness)
+
+La réponse dit-elle des trucs qu'elle peut justifier avec les docs retrouvés ?
+
+Processus :
+1. LLM : « Décompose cette réponse en claims individuels »
+2. LLM : « Chaque claim, c'est justifié par un doc ? »
+3. Score = (claims justifiés) / (claims totaux)
+
+### Pertinence (Answer Relevancy)
+
+La réponse traite-t-elle vraiment la question ?
+
+Processus :
+1. LLM : « Si j'avais cette réponse, quelles questions je pourrais poser ? »
+2. Comparez ces questions hypothétiques avec la question originale
+3. Score = similarité moyenne
+
+### Context Precision
+
+Les docs pertinents sont-ils en haut du classement ?
+
+```
+Top 1: Pertinent ✓
+Top 2: Non pertinent ✗
+Top 3: Pertinent ✓
+```
+
+Les pertinents au début comptent plus.
+
+### Context Recall
+
+Avez-vous retrouvé TOUT ce qu'il faut pour répondre ?
+
+Nécessite une réponse de référence (coûteux à annoter). Le LLM vérifie : chaque élément de la réponse de référence, un doc le supporte-t-il ?
+
+```python
+from ragas import evaluate
+from ragas.metrics import faithfulness, answer_relevancy
+
+results = evaluate(
+    dataset=eval_dataset,
+    metrics=[faithfulness, answer_relevancy],
+)
+```
+
+<Callout type="tip" title="Commencez par fidélité et pertinence">
+Ces deux métriques ne nécessitent pas de réponses annotées. Context recall, oui. Déployez d'abord les deux faciles, puis investissez dans l'annotation si c'est pertinent.
+</Callout>
+
+## Métriques classiques
+
+**Recall@10** : Proportion des docs pertinents retrouvés dans le top 10
+
+```
+Recall@10 = (docs pertinents trouvés) / (docs pertinents totaux)
+```
+
+**Mean Reciprocal Rank** : À quel rang moyenne le premier bon doc apparaît ?
+
+**NDCG@K** : Qualité du ranking en tenant compte de la position
+
+## Construire un benchmark
+
+### Étape 1 : Questions variées
+
+Sources :
+- Questions réelles (logs production)
+- Synthétiques (générées par LLM à partir des docs)
+- D'experts du domaine
+- Adversariales (pour tester les limites)
+
+### Étape 2 : Annoter les réponses
+
+Pour chaque question :
+- Réponse attendue (ground truth)
+- Passages pertinents
+- Difficulté (simple/moyen/complexe)
+
+### Étape 3 : Taille
+
+- **Minimal** : 50 questions (détecter gros problèmes)
+- **Recommandé** : 200-500 (résultats statistiquement solides)
+- **Complet** : 1000+ (couverture exhaustive)
+
+<Callout type="paper" title="Génération auto de benchmarks">
+RAGAS et DeepEval peuvent générer auto des questions à partir de vos docs. C'est un bon point de départ, à compléter par des questions manuelles pour les cas limites.
+</Callout>
+
+## Monitoring en production
+
+| Métrique | Source | Fréquence |
+|---|---|---|
+| Fidélité | RAGAS, échantillon | Quotidien |
+| Taux « Je ne sais pas » | Logs production | Temps réel |
+| Feedback user | Thumbs ↑/↓ | Continu |
+| Latence P50/P99 | Monitoring | Temps réel |
+
+### A/B testing
+
+Comparez deux RAGs en production. Mesurez les métriques. Statcheck significativité. Déployez progressivement le meilleur.
+
+<Callout type="warning" title="LLM-as-Judge a des biais">
+RAGAS utilise un LLM pour évaluer. Ce LLM peut biaiser vers des réponses longues, bien formatées, ou identiques à son style. Croisez régulièrement avec l'humain pour calibrer.
+</Callout>
+
+## Autres frameworks
+
+- **DeepEval** : framework complet, métriques personnalisables
+- **TruLens** : évaluation + monitoring avec tracing
+- **Phoenix** : observabilité LLM
+- **LangSmith** : plateforme LangChain
+
+L'évaluation n'est pas un événement ponctuel — c'est continu. Un RAG de production nécessite un pipeline d'évaluation auto qui détecte les régressions et guide les améliorations.

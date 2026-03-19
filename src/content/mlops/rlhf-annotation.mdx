@@ -1,0 +1,223 @@
+---
+title: "RLHF : outils et pipelines d'annotation"
+description: "Les pipelines d'annotation pour le RLHF et le DPO : collecte de préférences humaines, outils spécialisés, processus d'annotation et défis pratiques de l'alignement."
+---
+
+## Le secret de ChatGPT : 350 000 humains qui ont voté
+
+ChatGPT n'est pas juste un LLM qu'on a laissé trainer tout seul. C'est un LLM qu'on a **affiné avec du feedback humain**. 350 000 paires de réponses où des humains disaient "celle-ci est meilleure que celle-là".
+
+Ce processus s'appelle **RLHF** (Reinforcement Learning from Human Feedback). C'est un peu comme éduquer un enfant : vous montrez l'exemple (bonne et mauvaise réponse), et l'enfant apprend. Sauf que l'enfant c'est un modèle de 175 milliards de paramètres.
+
+## Comment ça marche : les données brutes de l'alignement
+
+L'idée est simple : les humains évaluent les réponses du modèle. Pas juste "c'est bon" ou "c'est mauvais". Ils **comparent** deux réponses et disent "celle-ci est meilleure".
+
+### Les trois types de données
+
+**1. Données SFT (Supervised Fine-Tuning)**
+
+L'humain rédige la réponse idéale à une question :
+- Question : "Explique comment les plantes produisent de l'oxygène"
+- Réponse : [l'humain rédige une super réponse claire et exacte]
+
+C'est le point de départ. Vous donnez au modèle des exemples de "bonne réponse" et il apprend l'imitation.
+
+**2. Données de préférence**
+
+Vous montrez deux réponses au même modèle et l'humain choisit :
+- Question : "Rédige une email de candidature"
+- Réponse A : [réponse du modèle - un peu générique]
+- Réponse B : [réponse du modèle - plus personnalisée]
+- Vote : "Je préfère B"
+
+C'est plus subtil que SFT. Vous n'avez pas la "vraie" réponse. Vous avez juste une préférence.
+
+**3. Données de scoring**
+
+L'humain attribue une note de 1 à 7 :
+- 7 = excellente réponse, honnête, utile, sûre
+- 4 = correct mais un peu générique
+- 1 = dangereux ou faux
+
+<Callout type="info" title="L'échelle devient folle : millions de réponses annotées">
+OpenAI a collecté 350 000 paires de préférences pour GPT-3.5 -> GPT-4. Et après, d'autres millions pour continuer à s'améliorer. C'est des **travailleurs humains pendant des années**. Le coût ? Probablement plusieurs millions de dollars.
+</Callout>
+
+
+
+## Le pipeline d'annotation RLHF
+
+### Étape 1 : générer des bonnes questions
+
+Vous avez besoin de questions **diversifiées** et **réalistes** :
+- Des questions factuelles ("Quelle est la capitale de la France ?")
+- De la rédaction créative ("Écris un poème sur l'automne")
+- Du raisonnement ("Comment trouverais-tu la solution à ce problème ?")
+- Du code
+- Des sujets sensibles (pour tester la sécurité)
+
+Les questions faciles ne sont pas intéressantes. Les questions très dures non plus (le modèle les rate). Vous avez besoin d'une distribution équilibrée : 20% faciles, 50% moyennes, 30% difficiles.
+
+### Étape 2 : générer plusieurs réponses
+
+Pour chaque question, vous demandez au modèle de répondre **plusieurs fois** de manière différente :
+- Temperature=0.8 (aléatoire, diversifié)
+- Temperature=1.0 (encore plus aléatoire)
+- Avec des seeds différentes
+
+Ça crée de la diversité. Vous avez 4 réponses différentes à la même question. Les annotateurs vont les comparer.
+
+### Étape 3 : l'annotation des préférences
+
+Ici arrive l'humain. L'annotateur voit :
+
+```
+Question : "Pourquoi les gens ont peur du noir ?"
+
+Réponse A : "C'est une peur évolutionnaire. Les ancêtres des humains
+qui avaient peur du noir survivaient mieux parce qu'ils évitaient
+les prédateurs nocturnes. On a hérité de cette peur."
+
+Réponse B : "C'est une peur irrationnelle que les gens pourraient
+traiter avec de la thérapie comportementale."
+
+Laquelle est meilleure ?
+```
+
+L'annotateur a des **guidelines détaillées** :
+- **Utilité** : la réponse aide-t-elle la personne ?
+- **Honnêteté** : la réponse est-elle factuellement correcte ?
+- **Innocuité** : la réponse est-elle sûre et respectueuse ?
+- **Suivi des instructions** : la réponse suit-elle ce qu'on demande ?
+
+Dans ce cas, la Réponse A est meilleure : elle explique pourquoi (honnêteté et utilité). La Réponse B jette simplement un terme de psychologie sans vraiment expliquer.
+
+<Callout type="paper" title="Le dilemme : utilité vs sécurité">
+Parfois, les critères entrent en conflit. Une réponse très utile peut être dangereuse (ex : expliquer comment faire quelque chose d'illégal). Les guidelines doivent être **très précises** sur comment résoudre ces tensions. Parce que les préférences des annotateurs deviennent les **valeurs encodées du modèle final**.
+</Callout>
+
+### Étape 4 : entraîner un reward model
+
+Les 350 000 préférences sont utilisées pour entraîner un **reward model** : un modèle qui prédit "quelle réponse un humain préférerait". Ensuite, ce reward model guide le LLM avec du reinforcement learning (PPO). Ou pour les méthodes modernes (DPO), on utilise les préférences directement pour fine-tuner.
+
+## Les outils pour annoter
+
+### Argilla
+
+L'outil open source le mieux adapté pour RLHF :
+- Interface de comparaison par paires (Réponse A vs Réponse B)
+- Scoring multi-critères
+- Facile à intégrer avec HuggingFace Datasets
+- Les données vont directement en HuggingFace Hub
+
+### Scale AI / Surge AI
+
+Pour les gros labos (OpenAI, Meta) :
+- **Scale AI** : vous donnez les questions et réponses, Scale gère les annotateurs, le contrôle qualité, et vous renvoie les préférences annotées
+- **Surge AI** : spécialisée dans NLP, un peu plus chère, mais annotateurs plus qualifiés
+
+Coût : plusieurs millions de dollars pour un gros dataset.
+
+### LMSYS FastChat / Chatbot Arena
+
+LMSYS (Berkeley) a créé une plateforme communautaire où les utilisateurs comparent les modèles :
+- Vous posez une question
+- Vous voyez la réponse du modèle A (anonyme)
+- Vous voyez la réponse du modèle B (anonyme)
+- Vous votez pour la meilleure
+- Les votes deviennent des données d'entraînement
+
+Ça marche étonnamment bien. Les utilisateurs qui votent ne sont pas payés, mais motivés par la curiosité.
+
+<Callout type="tip" title="DPO simplifie tout">
+DPO (Direct Preference Optimization) est une méthode nouvelle qui simplifie le pipeline. Avant, il fallait :
+(1) Collecter les préférences
+(2) Entraîner un reward model dessus
+(3) Utiliser le reward model avec du RL (PPO, très complexe)
+
+Avec DPO :
+(1) Collecter les préférences
+(2) Fine-tuner le modèle directement dessus
+
+C'est 10x plus simple. Pas besoin de RL. Pas besoin de reward model. Les petites équipes peuvent maintenant faire de l'alignement.
+</Callout>
+
+## Les défis : la subjectivité tue
+
+### Le problème : les gens ne sont pas d'accord
+
+Avec l'annotation classique (étiqueter si un email est spam ou pas), deux annotateurs d'accord 95% du temps. Avec les préférences, ils sont d'accord **60-75%**. Parfois c'est impossible de dire qu'une réponse est objectivement meilleure.
+
+Question : "Quels sont les meilleurs films des années 90 ?"
+- Réponse A : "Forrest Gump, Pulp Fiction, etc." (populaire)
+- Réponse B : "Chungking Express, Underground, etc." (arthouse)
+
+Quelle est meilleure ? C'est subjectif. Deux annotateurs vont préférer des choses différentes.
+
+### Biais des annotateurs
+
+Les annotateurs apportent leurs biais :
+- Culturels (un Français et un Japonais ne préfèrent pas les mêmes choses)
+- De verbosité (tendance à préférer les réponses longues)
+- D'expertise (un expert juge différemment d'un novice)
+- De fatigue (après 8 heures, la qualité baisse)
+
+Si tous vos annotateurs sont Français, le modèle aura les valeurs Françaises encodées. C'est pas forcément mauvais, mais c'est un biais.
+
+### La sécurité des annotateurs
+
+Annoter des contenus dangereux (violence, porn, harcèlement) est **traumatisant**. Les bonnes pratiques incluent :
+- Rotation : ne pas annoter les contenus durs tous les jours
+- Support psychologique
+- Limites de temps : max 2 heures par jour sur du contenu sensible
+- Pauses obligatoires
+
+<Callout type="warning" title="L'éthique en question">
+Il y a une question éthique sérieuse : qui annote ? Souvent des travailleurs précaires dans des pays en développement, payés 5 euros de l'heure pour regarder du contenu traumatisant. Des enquêtes journalistiques ont révélé des conditions de travail problématiques. Les organisations responsables doivent garantir des conditions décentes : salaires justes, support psychologique, droit de refuser le contenu trop dur.
+</Callout>
+
+## Alternatives : annotation sans humains
+
+### Constitutional AI (Anthropic)
+
+Au lieu d'humains qui comparent, l'**IA elle-même** évalue ses réponses selon une liste de principes :
+
+```
+Constitution :
+1. La réponse doit être honnête
+2. La réponse doit être utile
+3. La réponse doit être sûre
+...
+```
+
+Le modèle lit sa propre réponse et dit "cette réponse viole le principe 2". Puis il se corrige. C'est de l'auto-critique guidée par les principes de l'humain.
+
+Avantage : pas besoin de 350 000 annotateurs.
+Désavantage : ça marche moins bien que l'humain (mais c'est quand même très bien).
+
+### RLAIF : AI Feedback au lieu de Human Feedback
+
+Utiliser un LLM puissant (GPT-4, Claude) pour annoter les préférences.
+
+- Vous montrez 2 réponses à GPT-4
+- GPT-4 dit "la réponse B est meilleure parce que..."
+- Vous entraînez votre modèle sur ces préférences "AI-annotated"
+
+Ça marche mieux qu'on le pensait. Les préférences d'un bon LLM alignent bien avec les préférences humaines (surtout sur les critères objectifs). Et c'est 100x moins cher.
+
+## Les bonnes pratiques
+
+- **Faire des guidelines très précises** avec des exemples. Montrer comment scorer un cas difficile.
+- **Former les annotateurs** avant. Calibration session : tout le monde annote les mêmes 50 exemples, puis on discute les divergences.
+- **Mesurer l'accord inter-annotateurs**. Si personne ne s'accorde, vos guidelines sont mauvaises.
+- **Double annotation sur 10-20%** pour le contrôle qualité.
+- **Itérer sur les guidelines**. Au bout de 100 annotations, vous trouvez probablement des cas ambigus. Vous clarifiez les guidelines.
+- **Diversifier les annotateurs**. Si c'est tous des hommes de 25-35 ans, vous manquez d'autres perspectives.
+- **Protéger les annotateurs**. C'est du vrai travail. Traiter-les bien.
+
+## Pourquoi c'est important
+
+L'alignement humain est la **vraie différence** entre GPT-3 (puissant mais chaotique) et ChatGPT (puissant ET utile). C'est la différence entre un modèle que les chercheurs aiment et un modèle que les gens utilisent.
+
+Tous les modèles d'IA utiles en production (ChatGPT, Claude, Gemini) passent par RLHF ou DPO. C'est pas optionnel. C'est la fondation.

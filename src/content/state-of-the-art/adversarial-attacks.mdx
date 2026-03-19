@@ -1,0 +1,135 @@
+---
+title: "Attaques adversariales sur les réseaux de neurones"
+description: "Comment des perturbations invisibles à l'oeil nu peuvent tromper un modèle avec une confiance de 99 %. Comprendre les attaques FGSM, PGD, et les défenses qui tentent d'y résister."
+---
+
+## Un panneau stop qui devient un panneau de vitesse
+
+En 2017, des chercheurs ont collé quelques autocollants soigneusement positionnés sur un panneau stop. Pour un humain passant en voiture : rien d'anormal, c'est clairement un stop. Pour le réseau de neurones d'une voiture autonome : un panneau de limitation à 45 mph, avec une confiance de 100 %.
+
+Pas de hacking. Pas d'accès au modèle. Juste du papier et de la colle, placés avec précision.
+
+Ce type d'attaque s'appelle une **attaque adversariale** : une perturbation, souvent imperceptible pour un humain, conçue pour tromper un modèle d'apprentissage automatique. Elle révèle une fragilité fondamentale des réseaux profonds, toujours d'actualité malgré dix ans de recherche.
+
+## Pourquoi les modèles sont fragiles
+
+### L'espace de haute dimension
+
+Imaginez un espace à 784 dimensions (un simple 28x28 pixels). Dans cet espace, les classes (chien, chat, voiture) occupent des régions, séparées par des frontières de décision apprises pendant l'entraînement.
+
+Le problème : ces frontières sont **localement très proches** des points de données légitimes. Dans un espace à haute dimension, il est presque toujours possible de trouver une direction qui traverse la frontière de décision tout en restant à une distance euclidienne minuscule du point de départ.
+
+<Callout type="info" title="L'intuition geometrique">
+En 2 dimensions, vous pouvez toujours vous éloigner d'une frontière en marchant perpendiculairement. En 784 dimensions, il y a 784 directions possibles. Certaines d'entre elles traversent la frontière en faisant un tout petit pas. Le modèle est entouré de "trous" dans toutes les directions.
+</Callout>
+
+### Le célèbre exemple panda-gibbon
+
+En 2014, Ian Goodfellow et ses collègues de Google Brain ont publié ce qui reste l'exemple le plus célèbre du domaine.
+
+<ArxivLink id="1412.6572" title="Explaining and Harnessing Adversarial Examples" />
+
+Ils prennent une image de panda, correctement classifiée avec 57,7 % de confiance. Ils ajoutent une perturbation calculée — du bruit structuré, invisible à l'oeil nu — et obtiennent une nouvelle image. Le réseau classe désormais cette image comme un **gibbon** avec 99,3 % de confiance.
+
+La perturbation ajoutée est si petite qu'en regardant les deux images côte à côte, vous ne verrez aucune différence. Pourtant, elle a complètement retourné la décision du modèle.
+
+## FGSM : Fast Gradient Sign Method
+
+FGSM est l'attaque la plus simple et la plus élégante. L'idée est directe : si on sait comment le modèle est sensible à l'entrée, on peut construire une perturbation qui maximise l'erreur.
+
+**L'algorithme en une ligne :**
+
+$$x_{adv} = x + \varepsilon \cdot \text{sign}(\nabla_x \mathcal{L}(\theta, x, y))$$
+
+Traduction : on calcule le gradient de la loss par rapport à l'image d'entrée (et non par rapport aux paramètres du modèle, comme en entraînement normal). Puis on prend le **signe** de ce gradient, et on ajoute une perturbation de taille epsilon dans cette direction.
+
+<Callout type="tip" title="La différence avec la backpropagation normale">
+En entraînement, on calcule grad(loss) par rapport aux poids du modèle pour les mettre à jour. Ici, on calcule grad(loss) par rapport aux pixels de l'image pour les modifier. Le modèle reste figé, c'est l'image qui bouge vers la mauvaise classe.
+</Callout>
+
+FGSM est une attaque en **un seul pas**. Elle est rapide mais pas toujours optimale. Son epsilon contrôle la magnitude de la perturbation : trop grand, la perturbation devient visible ; trop petit, elle n'est pas efficace.
+
+## PGD : Projected Gradient Descent
+
+PGD (Projected Gradient Descent) est une version itérative de FGSM, introduite par Madry et al. en 2017.
+
+<ArxivLink id="1706.06083" title="Towards Deep Learning Models Resistant to Adversarial Attacks" />
+
+Au lieu d'un seul grand pas, PGD effectue de nombreux petits pas FGSM successifs, en projetant à chaque étape la perturbation dans une boule de rayon epsilon (pour s'assurer que la perturbation reste imperceptible).
+
+**Algorithme PGD :**
+
+1. Partir d'un point aléatoire dans la boule autour de x
+2. Faire un pas FGSM avec un petit alpha
+3. Projeter sur la boule de rayon epsilon
+4. Répéter N fois
+
+PGD est considérée comme l'une des attaques les plus fortes en boite blanche (avec accès complet au modèle). Si un modèle résiste à PGD, c'est un bon signal de robustesse.
+
+<Callout type="paper" title="PGD comme outil d'évaluation standard">
+Madry et al. ont proposé de traiter PGD comme l'attaque de référence pour évaluer la robustesse. Un modèle robuste à PGD devrait être robuste à une large classe d'attaques. Cette approche est devenue le standard dans la littérature sur la robustesse adversariale.
+</Callout>
+
+## Attaques en boite noire et transferabilité
+
+Les attaques décrites ci-dessus nécessitent l'accès aux gradients du modèle (boite blanche). Dans le monde réel, vous n'avez souvent accès qu'aux sorties (boite noire).
+
+Deux approches existent :
+
+**Transfert d'attaque** : fabriquer une attaque sur un modèle substitut qu'on entraîne soi-même, puis l'appliquer au modèle cible. Cela fonctionne souvent car différents modèles partagent des vulnérabilités communes.
+
+**Attaques par score/décision** : estimer les gradients en interrogeant le modèle de nombreuses fois, avec des petites perturbations aléatoires, et en observant comment les scores changent.
+
+<Callout type="warning" title="Le monde réel est en boite noire">
+En pratique, un attaquant qui veut tromper un système de reconnaissance faciale dans un aéroport n'a pas accès aux poids du modèle. Mais les attaques de transfert fonctionnent suffisamment bien pour rester un vrai risque — des recherches ont montré qu'on peut imprimer des lunettes adversariales et tromper des systèmes commerciaux.
+</Callout>
+
+## Les enjeux réels
+
+### Véhicules autonomes
+
+Les panneaux de signalisation falsifiés sont un vecteur d'attaque direct. Mais les attaques adversariales sur les lidars et caméras combinés soulèvent des questions sur la robustesse des systèmes de perception complets.
+
+### IA médicale
+
+Un modèle de diagnostic qui classe des radiographies ou des lames histologiques peut être trompé par des perturbations numériques. Plus préoccupant : des imprimantes ont été utilisées pour créer des taches physiques sur des lames qui induisent des erreurs de classification.
+
+### Reconnaissance faciale
+
+Des chercheurs ont démontré qu'on peut imprimer des lunettes dont le motif trompe des systèmes de reconnaissance faciale commerciaux, permettant à quelqu'un de se faire passer pour une autre personne — ou de devenir invisible au système.
+
+
+
+## Défenses
+
+### Adversarial Training
+
+La défense la plus robuste connue : inclure des exemples adversariaux générés (par PGD) dans les données d'entraînement.
+
+$$\min_\theta \mathbb{E}_{(x,y)} \left[ \max_{\delta \in S} \mathcal{L}(\theta, x + \delta, y) \right]$$
+
+Le modèle apprend à être correct même sur les pires perturbations. Coût : le modèle est plus lent à entraîner et légèrement moins précis sur les données propres. Mais c'est la méthode la plus efficace.
+
+### Robustesse certifiée
+
+Plutôt que tester heuristiquement la robustesse, les méthodes de robustesse certifiée **prouvent mathématiquement** qu'aucune perturbation d'une certaine taille ne peut changer la prédiction.
+
+Les approches incluent les méthodes basées sur l'intervalle arithmétique (IBP) et les méthodes de randomized smoothing de Cohen et al.
+
+<ArxivLink id="1902.02918" title="Certified Adversarial Robustness via Randomized Smoothing" />
+
+### Preprocessing et purification
+
+Une autre approche : détecter ou "purifier" les entrées adversariales avant qu'elles atteignent le modèle. Techniques : compression JPEG, débruitage par diffusion, détection d'anomalies d'entrée.
+
+Ces méthodes sont souvent contournées par des attaques adaptatives qui intègrent le preprocessing dans l'optimisation.
+
+<Callout type="warning" title="La course aux armements continue">
+Chaque défense publiée est généralement contournée dans les mois qui suivent par une attaque adaptative. La robustesse adversariale reste un problème ouvert et actif. Il n'existe pas encore de solution universelle.
+</Callout>
+
+## Takeaways
+
+Les attaques adversariales ne sont pas un bug qu'on corrigera un jour avec un patch — elles révèlent quelque chose de fondamental sur la façon dont les réseaux de neurones apprennent. Ils mémorisent des corrélations statistiques, pas une compréhension sémantique robuste du monde.
+
+La recherche en robustesse adversariale est donc aussi de la recherche sur la compréhension profonde de ce que les modèles apprennent réellement.

@@ -1,0 +1,116 @@
+---
+title: "Quantification : comprendre la compression de modèles"
+description: "Comment compresser un modèle géant en le rendant moins précis, mais encore utile. La magie des petits nombres."
+---
+
+## Le problème de taille
+
+Un modèle de 70 milliards de paramètres en format FP16 (2 octets par nombre) pèse **140 Go**. C'est plus lourd que la mémoire entière de la plupart des GPU. Il faut le compresser. C'est la **quantification**.
+
+
+
+<Callout type="info" title="Le compromis">
+La quantification, c'est un deal : on utilise moins de mémoire et on est plus rapide, mais on perd un peu de précision. Comme une photo JPEG : plus petite que PNG, mais un peu granuleuse.
+</Callout>
+
+## Les formats de nombres
+
+### FP32 (32 bits - luxe)
+- Très précis mais prend 4 octets
+- Utilisé pour l'entraînement
+- Pris = 3.4 x 10^38
+
+### FP16 / BF16 (16 bits - standard moderne)
+- FP16 : bon mais plage limitée (peut overflow)
+- BF16 : même plage que FP32, mais moins de décimales
+- Standard pour les LLM modernes
+- Pris = 2 octets par paramètre
+
+<Callout type="tip" title="BF16 > FP16 pour les LLM">
+BF16 (Brain Float) est comme FP32 mais allégé de moitié. Aucun risque d'overflow, tous les GPU modernes le supportent. C'est le choix par défaut aujourd'hui.
+</Callout>
+
+### INT8 (8 bits - entiers)
+- Seulement 256 valeurs possibles (-128 à 127)
+- Réduit de 2× par rapport à FP16
+- 1 octet par paramètre
+
+### INT4 (4 bits - très compressé)
+- Seulement 16 valeurs possibles (-8 à 7)
+- Réduit de 4× par rapport à FP16
+- Demi-octet par paramètre
+- C'est le sweet spot : assez compressé, pas trop lossy
+
+### NF4 (4 bits - intelligent)
+- Les 16 niveaux sont placés aux endroits où les poids réels sont concentrés
+- Comme compresser une photo avec plus de couleurs dans les zones importantes
+- Utilisé par QLoRA (fine-tuning efficient)
+
+## Comment fonctionne la quantification
+
+**L'idée simple :**
+
+```
+Poids original (FP16) : 0.123456789
+Poids quantifié (INT4) : 5 (sur une échelle 0-15)
+Lors de l'utilisation : 5 × (0.123456789 / 5) ≈ 0.123456789
+```
+
+On mappe les poids réels vers des entiers, puis on remet à l'échelle lors de l'utilisation.
+
+### Quantification par canal
+
+Chaque colonne de la matrice a ses propres paramètres de scaling. Plus fin, moins d'erreur.
+
+### Quantification par groupe
+
+Les poids sont divisés en groupes de 32 ou 128, chaque groupe a ses propres constantes. C'est le compromis pratique.
+
+
+
+## Post-training quantization (PTQ)
+
+On prend un modèle déjà entraîné et on le compresse. Les trois approches :
+
+### Round-to-nearest (RTN)
+La plus simple : arrondir chaque poids au niveau de quantification le plus proche.
+- Travail en INT8
+- Mauvais résultats en INT4
+
+### Data-aware (GPTQ, AWQ)
+On utilise un petit dataset d'exemples pour voir quel quantification préserve le mieux les résultats.
+- Utilise les poids importants (mesurés par Hessienne ou magnitudes d'activation)
+- Réduit l'erreur intelligemment
+- Plus lent mais bien meilleur résultat
+
+<Callout type="paper" title="Le problème des outliers">
+Les LLM ont des **outliers** : certains canaux sont 100× plus grands que la moyenne. Une quantification uniforme gaspille la moitié de ses niveaux sur ces rares grandes valeurs. Les bonnes méthodes les traitent spécialement.
+</Callout>
+
+## Impact sur les performances
+
+| Format | Taille (7B) | Perte de qualité |
+|---|---|---|
+| FP16 | 14 Go | Référence |
+| INT8 | 7 Go | 1-2% |
+| INT4 (GPTQ) | 3.5 Go | 3-5% |
+| INT4 (AWQ) | 3.5 Go | 2-4% |
+| NF4 (QLoRA) | 3.5 Go | 2-4% |
+
+La perte dépend du type de tâche :
+- **Mathématiques, code** : sensibles, perte visible
+- **Chat, génération libre** : robustes, perte imperceptible
+
+<Callout type="warning" title="Testez sur VOTRE cas">
+Ces chiffres sont du général. Un modèle quantifié en INT4 peut être excellent pour la traduction mais mauvais pour les maths. Mesurez toujours sur votre utilisation réelle.
+</Callout>
+
+## Accélération hardware
+
+La quantification n'accélère que si le GPU peut vraiment utiliser INT4 ou INT8 :
+
+- **INT8** : supporté par les Tensor Cores (A100, H100)
+- **INT4** : via des kernels spécialisés
+- **FP8** : natif sur H100 et RTX 4090
+
+Pour les LLM, on est limité par la **mémoire**, pas par les calculs. Donc réduire la taille = plus rapide, c'est direct.

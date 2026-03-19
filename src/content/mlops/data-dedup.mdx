@@ -1,0 +1,145 @@
+---
+title: "Nettoyer et dédupliquer les données : MinHash"
+description: "Détectez et supprimez les doublons de vos données d'entraînement avec MinHash. Améliorez la qualité du dataset sans tripler le coût."
+---
+
+## Le problème : vos données sont remplies de doublons
+
+Common Crawl : 30-50% de doublons ou quasi-doublons. Pages miroirs. Contenu syndiqué. Templates e-commerce. Vos données d'entraînement en contiennent aussi.
+
+Pourquoi c'est un problème ?
+
+- **Mémorisation** : le modèle "apprend" les passages répétés
+- **Biais** : les sources surreprésentées biaisent le modèle
+- **Gaspillage** : tokens dupliqués = pas d'information nouvelle
+- **Évaluation pourrie** : si votre test set est dans le train set, les métriques mentent
+
+<Callout type="info" title="Impact mesuré">
+Des études montrent : dédupliquer = 5-10% meilleur perplexity avec le même volume. Moins de text mémorisé verbatim. C'est rentable.
+</Callout>
+
+
+
+## Nettoyage d'abord
+
+Avant la déduplication, nettoyez :
+
+1. **Extraction HTML → texte** : trafilatura, resiliparse
+2. **Normalisation Unicode** : NFKC
+3. **Boilerplate** : éliminez menus, footers, pubs
+4. **Filtrage langue** : fastText lid
+5. **Longueur** : pas trop court, pas trop long
+6. **Lignes non-texte** : code, URLs, compteurs
+7. **Qualité** : heuristiques (mots bien formés? phrases? diversité?)
+8. **PII** : supprimez emails, numéros de téléphone
+
+### Heuristiques simples mais puissantes
+
+```
+ratio_words_to_chars > X → texte bizarre (supprimer)
+lines_ending_with_period > Y% → vraies phrases (garder)
+lines_duplicate_in_doc > Z% → document spam (supprimer)
+```
+
+Les datasets réputés (C4, FineWeb) utilisent ça. C'est pas rocket science, c'est just du bon sense engineering.
+
+<Callout type="tip" title="Nettoyage = art + science">
+Les seuils des heuristiques = empirique. Regardez manuellement les examples à la limite, ajustez les seuils, réitérez. C'est jamais automatisé 100%.
+</Callout>
+
+## Déduplication exacte (le truc simple)
+
+### Hash-based
+
+Calculez MD5/SHA-256 de chaque document. Même hash = même contenu. Supprimez les doublons.
+
+**Avantages** : rapide, zéro faux positifs
+
+**Limites** : un caractère différent = hash différent. Les quasi-doublons passent à côté.
+
+### URL-based
+
+Supprimez les documents avec la même URL normalisée (sans paramètres de tracking, etc.).
+
+**Limites** : deux URLs différentes peuvent pointer vers le même contenu.
+
+## Déduplication fuzzy avec MinHash
+
+### Le problème des quasi-doublons
+
+95% identique ≠ 100% identique. Mais c'est quand même un doublon pour vos besoins. Faut une **similarité approximative**.
+
+### Similarité de Jaccard : l'idée simple
+
+Pour deux ensembles A et B:
+
+```
+J(A, B) = |A ∩ B| / |A ∪ B|
+```
+
+Représentez chaque document comme un ensemble de **n-grams** (sous-séquences de n mots). La similarité de Jaccard = le recouvrement textuel.
+
+**Problème** : comparer toutes les paires = O(N^2). Pour un milliard de documents, c'est impossible.
+
+### MinHash : le trick
+
+Choisissez k fonctions de hachage aléatoires. Pour chaque document, appliquez les k fonctions à tous ses n-grams et gardez le minimum (d'où "MinHash"). La signature = ces k minima.
+
+**Le truc fondamental** : Pr[h_min(A) = h_min(B)] = J(A, B)
+
+Les probabilités de collision = exactement la similarité Jaccard. Magique.
+
+<Callout type="paper" title="La formule magique">
+Avec k hashes, vous estimez Jaccard avec variance 1/k. Plus de hashes = plus précis.
+</Callout>
+
+### LSH : éviter de comparer tout
+
+Vous avez k signatures, vous les divisez en **b bandes** de **r lignes** (k = b × r).
+
+Pour chaque bande, hashlez les r valeurs ensemble dans une table. Deux documents sont **candidats** s'ils partagent au moins une bande identique.
+
+Seulement comparez les paires candidates en détail.
+
+**Tuning** :
+- Plus b est grand (beaucoup de petites bandes) → beaucoup de candidats (rappel élevé, faux positifs)
+- Plus r est grand (peu de bandes longues) → peu de candidats (précision élevée, on manque des doublons)
+
+Pour un seuil de 0.8 (80% similaire):
+- k=128, b=20, r=5 (typique)
+
+<Callout type="warning" title="Mémoire : le coût réel">
+10 milliards de documents × 128 hashes × 4 bytes = 5 To juste pour les signatures. Les tables LSH c'est encore plus. Faut du distribué (Spark, Dask).
+</Callout>
+
+## Déduplication sous-document
+
+### Suffix Array Substring Dedup
+
+Le même paragraphe (disclaimers légaux, descriptions standards) peut apparaître dans 1000 documents différents. Detectez ça :
+
+1. Concaténez tous les docs en une chaîne
+2. Construisez le suffix array
+3. Trouvez les sous-chaînes qui apparaissent > seuil
+4. Supprimez-les
+
+### N-gram frecuency
+
+Plus simple : calculez la fréquence de chaque 10-20 gram dans le corpus. Supprimez les passages contenant des n-grams ultra-fréquents.
+
+## Outils pratiques
+
+- **text-dedup** : Python, MinHash + SimHash
+- **datatrove** (HuggingFace) : pipeline complet pour LLM data
+- **datasketch** : Python MinHash + LSH
+- **Spark MinHashLSH** : distribué pour les gros volumes
+
+## Bonnes pratiques
+
+- **Multi-niveaux** : exact (URL, hash) → fuzzy (MinHash) → sous-document
+- **Calibrer** : inspectez manuellement à chaque seuil
+- **Train/test** : déduplicatio entre vos splits (sinon les métriques mentent)
+- **Documenter** : les paramètres affectent énormément le dataset final
+- **Itérer** : first pass n'attrape jamais tout
+
+C'est pas un one-shot, c'est un processus itératif.

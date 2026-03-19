@@ -1,0 +1,91 @@
+---
+title: "Ring Attention : faire tenir 1 million de tokens sur plusieurs GPU"
+description: "Ring Attention : distribuez la séquence sur 8 GPU, chacun voit un morceau. Communiquez en anneau pour que tout communique avec tout. Résultat : contextes énormes."
+---
+
+
+
+## Le problème : une séquence énorme, une GPU minuscule
+
+Vous voulez traiter 1M tokens. Votre GPU A100 a 80 GB. Même avec compression, ça ne rentre pas.
+
+Classiquement on distribue la séquence entre GPU. Mais ça nécessite que chaque GPU communique avec tous les autres (all-to-all), ce qui est cher.
+
+<ArxivLink id="2310.01889" title="Ring Attention with Blockwise Transformers for Near-Infinite Context" />
+
+## L'algorithme en anneau
+
+Arrangez les GPU en cercle logique. Chaque GPU possède un **chunk** de la séquence (queries) et initialement un chunk de clés/valeurs.
+
+**Étape 1** : GPU #0 calcule attention de son Q avec ses K/V actuels. En parallèle, envoie ses K/V à GPU #1 et reçoit les K/V de GPU #7.
+
+**Étape 2** : Refait avec le nouveau K/V reçu. Envoie le sien à #2, reçoit celui de #0.
+
+Et ainsi de suite `P-1` fois (pour P GPU). À la fin, chaque GPU a vu tous les K/V.
+
+### Le truc malin : chevaucher calcul et communication
+
+Pendant que GPU #0 **calcule** l'attention avec le chunk K/V courant, il envoie/reçoit en **parallèle**.
+
+<Callout type="paper" title="Chevauchement efficace">
+Tant que le temps de calcul > temps de transfert réseau, la communication est "gratuite". Flash Attention pour le calcul local est super rapide, les links NVLink pour la communication aussi. Ça marche.
+</Callout>
+
+## Intégration avec Flash Attention
+
+Flash Attention calcule un softmax progressif en ligne. Ring Attention pousse ça plus loin : accumuler les statistiques softmax à travers les blocs.
+
+À chaque étape `j`, mettez à jour :
+
+```
+max_nouveau = max(max_ancien, max_j)
+norm_nouveau = e^(max_ancien - max_nouveau) × norm_ancien + norm_j
+output_nouveau = accumulation des outputs avec poids normalisés
+```
+
+Résultat : attention exacte, pas d'approximation.
+
+<Callout type="tip" title="Mathématique du softmax en ligne">
+C'est la même technique qu'utilise Flash Attention pour ne pas matérialiser la matrice d'attention. Ring Attention l'applique à travers des GPU distribués.
+</Callout>
+
+## La mémoire par GPU
+
+Au lieu d'un seul GPU qui stocke tout (`O(L×d)`), chaque GPU stocke :
+- Son Q : `(L/P) × d`
+- Les K/V courants et suivants : ~2x
+- Output temporaire
+
+**Total par GPU** : `O(L×d / P)`. Pour 8 GPU et 1M tokens, c'est comme un seul GPU stockant 125K tokens. Très gérable.
+
+## Optimisation pour attention causale
+
+Avec masquage causal, ~50% des paires (i, j) où i < j sont déjà masquées.
+
+Ring Attention détecte quand un chunk entier peut être sauté (tokens futurs vis-à-vis du calcul), éliminant le calcul et libérant du temps de communication.
+
+<Callout type="info" title="Causal Ring Attention">
+Le dernier GPU ne doit pas attendre tous les autres. Il peut calculer avec seulement les chunks plus anciens. Énorme gain pour les grands clusters.
+</Callout>
+
+## Résultats réels
+
+- **4 GPU A100** : ~500K tokens sans problème
+- **8 GPU A100** : ~1M tokens
+- **Clusters massifs** : plusieurs millions de tokens
+
+Applications : livres entiers en contexte, dossiers juridiques, vidéos longues.
+
+## Limitations pratiques
+
+<Callout type="warning" title="NVLink c'est essentiel">
+Ring Attention fonctionne bien avec NVLink (900 GB/s sur H100). Avec PCIe ou réseau standard, ça devient un goulot d'étranglement. Ne la forcez pas entre noeuds via InfiniBand lent.
+</Callout>
+
+Variantes :
+- **Striped Attention** : distribuer les tokens de manière entrelacée au lieu de chunks contigus. Meilleur équilibre pour causal.
+- **Ring Flash Attention** : kernels optimisés spécifiquement pour l'anneau.
+
+<Callout type="info" title="Conclusion">
+Ring Attention rend possible ce qui semblait impossible : traiter des millions de tokens sans les supprimer ou les compresser. C'est un élément clé pour les modèles avec contextes ultra-longs. Élégant, mathématiquement pur, et ça marche en vrai.
+</Callout>

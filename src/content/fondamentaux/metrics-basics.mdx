@@ -1,0 +1,170 @@
+---
+title: "Métriques d'évaluation : accuracy, precision, recall, F1"
+description: "Comment vraiment évaluer un classifieur. Pourquoi l'accuracy ment, et quand utiliser precision, recall et F1."
+---
+
+## Introduction : La bonne métrique change tout
+
+Entraîner un modèle, c'est facile. Savoir s'il est **vraiment bon**, c'est dur.
+
+Le choix de la métrique encode tes vraies priorités : qu'est-ce qui compte dans **ton contexte** ? Une fausse alarme en santé (diagnostic faux positif = inquiétude inutile) vs un cas manqué (diagnostic faux négatif = quelqu'un meurt).
+
+Deux contextes différents = deux métriques différentes.
+
+
+
+## Accuracy : la métrique trompeuse
+
+L'**accuracy** est intuitive : le pourcentage de prédictions correctes.
+
+```
+Accuracy = (prédictions correctes) / (total)
+```
+
+Exemple : 95% des tes données sont classe A, 5% classe B. Un modèle qui **prédit toujours A** a une accuracy de 95%.
+
+Paraît bon. Est complètement inutile. Ne détecte **aucune** classe B.
+
+<Callout type="warning" title="Pièges classiques">
+Détection de fraude : 99.9% de transactions légitimes. Un modèle "pas fraude" a 99.9% d'accuracy mais détecte 0% des fraudes.
+
+Diagnostic de cancer : 99% de gens sains. Un modèle "pas de cancer" a 99% d'accuracy et tue les gens qui développent un cancer.
+</Callout>
+
+**Utilise l'accuracy SEULEMENT si** tes classes sont équilibrées (50-50 ou proche) ET tu te soucies pas des erreurs spécifiques.
+
+
+
+## Les quatre résultats fondamentaux
+
+En classification binaire, quatre résultats possibles :
+
+**Vrai Positif (TP)** : tu dis oui, c'était oui. Exemple : tu detectes un spam, c'était spam. Bon travail.
+
+**Faux Positif (FP)** : tu dis oui, c'était non. Exemple : email légitime marqué spam. Fausse alarme.
+
+**Vrai Négatif (TN)** : tu dis non, c'était non. Email légitime ignoré. Bon travail.
+
+**Faux Négatif (FN)** : tu dis non, c'était oui. Spam qui passe. Cas manqué. Mauvais.
+
+Résumé : TP et TN = bon. FP et FN = mauvais.
+
+## Precision : quand tu dis oui, as-tu raison ?
+
+Parmi tous tes "oui", combien sont vraiment "oui" ?
+
+```
+Precision = TP / (TP + FP)
+```
+
+Exemple : tu dis "spam" 100 fois. 80 fois c'était spam, 20 fois c'était légitime.
+Precision = 80/100 = 80%.
+
+**Haute precision** = peu de fausses alarmes. Quand tu recommandes quelque chose, c'est fiable.
+
+**Quand c'est critique** : recommander une chirurgie inutile est grave. Tu veux precision élevée : seules les recommandations vraiment solides.
+
+## Recall : combien de cas positifs trouves-tu ?
+
+Parmi tous les vrais positifs (toutes les choses qui **devaient** être trouvées), combien tu les trouves ?
+
+```
+Recall = TP / (TP + FN)
+```
+
+Exemple : il y a 1000 vrais spams. Tu en detectes 800.
+Recall = 800/1000 = 80%.
+
+**Haut recall** = peu de faux négatifs. Tu trouves la majorité des cas vrais.
+
+**Quand c'est critique** : diagnostic de cancer. Manquer un vrai cas est catastrophique. Tu veux recall élevé : détecter **tous** les malades, même au prix de fausses alarmes.
+
+<Callout type="info" title="Le compromis fondamental">
+Precision et recall sont souvent en opposition. Tu peux augmenter la precision en levant ton seuil de décision (prédis "oui" moins souvent) mais tu réduis le recall (tu rates plus de cas vrais). Et vice versa. Le contexte détermine le bon équilibre.
+</Callout>
+
+## F1-score : la moyenne intelligente
+
+Le **F1** est la **moyenne harmonique** de precision et recall :
+
+```
+F1 = 2 * (Precision * Recall) / (Precision + Recall)
+```
+
+Pourquoi la moyenne harmonique ? Parce qu'elle pénalise les valeurs extrêmes. Un modèle avec Precision=1.0 (parfait) mais Recall=0.01 (détecte presque rien) a une moyenne arithmétique de 0.505. Paraît acceptable. Mais F1 = 0.02. Catastrophe.
+
+F1 est utile quand tu n'as pas de préférence forte entre precision et recall, ou avec des classes déséquilibrées.
+
+**Variantes** :
+- **F0.5** : donne 2x plus de poids à la precision (si les faux positifs coûtent cher)
+- **F2** : donne 2x plus de poids au recall (si les faux négatifs coûtent cher)
+
+## Extension au multi-classe (3+ classes)
+
+Avec 3, 5, 10 classes, tu calcules d'abord la métrique pour chaque classe, puis tu agrèges.
+
+### Macro-averaging
+
+Moyenne simple sur toutes les classes. Chaque classe a le même poids.
+
+```
+Macro-F1 = (F1_classe1 + F1_classe2 + ...) / K
+```
+
+Utilise quand toutes les classes comptent également, même les rares.
+
+### Micro-averaging
+
+Tu agrèges les TP, FP, FN d'abord, puis tu calcules la métrique sur les totaux.
+
+```
+Micro-Precision = total_TP / (total_TP + total_FP)
+```
+
+Utilise quand les classes fréquentes importent plus.
+
+### Weighted-averaging
+
+Chaque classe pondérée par sa fréquence. Défaut souvent utilisé.
+
+<Callout type="tip" title="Quel averaging ?">
+Macro : si les classes rares comptent. Micro : si les classes fréquentes dominent. Weighted : par défaut.
+</Callout>
+
+## Exemple concret
+
+Diagnostic avec 1000 patients : 950 sains, 50 malades. Objectif : détecter tous les malades.
+
+**Modèle A** : prédit 40 malades, dont 30 vrais.
+- Accuracy = (30+910)/1000 = 94%
+- Precision = 30/40 = 75%
+- Recall = 30/50 = 60%
+- F1 = 67%
+
+**Modèle B** : prédit 200 malades, dont 45 vrais.
+- Accuracy = (45+795)/1000 = 84%
+- Precision = 45/200 = 22.5%
+- Recall = 45/50 = 90%
+- F1 = 36%
+
+Modèle A a meilleure accuracy et meilleur F1. Mais modèle B détecte 90% des malades vs 60%.
+
+**En médecine, tu choisirais B** malgré les métriques pires. Un malade non détecté meurt. Une fausse alarme : juste vérification supplémentaire.
+
+
+
+## Tableau récapitulatif
+
+| Métrique | Ce qu'elle mesure | Utilise quand |
+|---|---|---|
+| Accuracy | % de réponses correctes | Classes équilibrées |
+| Precision | Fiabilité des "oui" | Faux positifs coûtent cher |
+| Recall | Détection des vrais positifs | Faux négatifs coûtent cher |
+| F1 | Équilibre global | Classes déséquilibrées, pas de préférence |
+| Macro-F1 | Fair pour les petites classes | Toutes les classes comptent |
+
+Le choix de la métrique n'est **pas technique**, c'est **métier**. Ça encode tes vrais objectifs et ce que les erreurs coûtent vraiment.
+
+## Pourquoi c'est important
+
+Une métrique biaisée = un modèle biaisé. Tu optimises ce que tu mesures. Mesure la mauvaise chose = modèle inutile en production.

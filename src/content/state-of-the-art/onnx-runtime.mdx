@@ -1,0 +1,178 @@
+---
+title: "ONNX Runtime : l'inférence universelle"
+description: "Un format standard pour faire tourner les modèles partout : NVIDIA, AMD, Intel, CPU, ARM."
+---
+
+
+
+## Le problème du lock-in hardware
+
+TensorRT-LLM = GPU NVIDIA only. llama.cpp = CPU/Mac seulement. Chaque framework est lié à un hardware spécifique.
+
+ONNX (Open Neural Network Exchange) propose une abstraction : un même modèle qui fonctionne partout, adapté au hardware cible.
+
+<Callout type="info" title="La promesse de l'open source">
+ONNX Runtime offre une abstraction : un modèle, plusieurs backends. Même modèle sur GPU NVIDIA (via CUDA), GPU AMD (via ROCm), CPU x86, ARM. Un seul code source.
+</Callout>
+
+## Architecture
+
+### Execution Providers (les backends)
+
+Les Execution Providers sont des drivers spécifiques au hardware :
+
+| Provider | Hardware | Optimisations |
+|---|---|---|
+| CUDA | GPU NVIDIA | cuDNN, cuBLAS |
+| TensorRT | GPU NVIDIA | Compilation TensorRT |
+| ROCm | GPU AMD | MIOpen |
+| DirectML | GPU Windows | DirectX 12 |
+| OpenVINO | Intel CPU/GPU/NPU | Intel optimizations |
+| CPU | Tout CPU | AVX-512, VNNI |
+
+Vous écrivez une fois, ONNX Runtime choisit le backend optimal selon le hardware.
+
+### ONNX Runtime GenAI
+
+Extension spécialisée pour la génération de texte :
+
+- Gestion du KV cache optimisée
+- Beam search et sampling intégrés
+- Continuous batching
+- API simple pour la génération
+
+## Conversion depuis Hugging Face
+
+### Avec la librarie Optimum
+
+Optimum (de Hugging Face) facilite beaucoup :
+
+```python
+from optimum.onnxruntime import ORTModelForCausalLM
+
+# Export et optimisation auto
+model = ORTModelForCausalLM.from_pretrained(
+    "mistralai/Mistral-7B",
+    export=True,
+    provider="CUDAExecutionProvider",
+)
+model.save_pretrained("./mistral-onnx")
+```
+
+La commande magique :
+```bash
+optimum-cli export onnx --model mistralai/Mistral-7B ./mistral-onnx
+```
+
+C'est tout. Optimum convertit, quantifie si demandé, et optimise le graphe.
+
+<Callout type="tip" title="Optimum pour la simplicité">
+Si vous êtes dans l'écosystème Hugging Face, Optimum est le chemin le plus simple. Conversion automatique, quantification optionnelle, benchmarking intégré.
+</Callout>
+
+## Quantification avec ONNX Runtime
+
+### INT8 dynamique
+
+Quantifier à la volée les activations, pas besoin de dataset de calibration :
+
+```python
+from onnxruntime.quantization import quantize_dynamic, QuantType
+
+quantize_dynamic(
+    "model.onnx",
+    "model_int8.onnx",
+    weight_type=QuantType.QInt8,
+)
+```
+
+Rapide mais moins optimal qu'une quantification avec calibration.
+
+### INT8 statique
+
+Avec dataset de calibration pour des résultats meilleurs :
+
+```python
+quantize_static(
+    "model.onnx",
+    "model_int8_static.onnx",
+    calibration_data_reader=reader,
+)
+```
+
+### INT4 (MatMulNBits)
+
+Support de INT4 via l'opérateur MatMulNBits, compatible avec AWQ et GPTQ.
+
+## Performance
+
+### Benchmarks (Mistral-7B, batch=1)
+
+| Framework | Latency (ms/token) | Throughput (tokens/s) |
+|---|---|---|
+| PyTorch eager | 45 | 22 |
+| ONNX Runtime CUDA | 25 | 40 |
+| ONNX Runtime TensorRT | 18 | 55 |
+| vLLM | 20 | 50 |
+
+ONNX Runtime TensorRT rivalise avec vLLM, sauf que ça marche aussi sur AMD et Intel.
+
+<Callout type="paper" title="Quand ONNX Runtime brille">
+ONNX Runtime excelle pour les **déploiements edge et multi-hardware**. Pour le serving pur GPU NVIDIA, vLLM/TRT-LLM l'emportent grâce à des optimisations LLM-spécifiques (PagedAttention). Mais ONNX Runtime gagne en flexibilité et portabilité.
+</Callout>
+
+## Cas d'usage privilégiés
+
+### Déploiement multi-plateforme
+
+Un modèle ONNX déployé sur :
+- Cloud (GPU NVIDIA)
+- Edge (Intel NPU)
+- Mobile (CPU ARM)
+
+ONNX Runtime adapte l'exécution au hardware.
+
+### Windows + DirectML
+
+Sur Windows, **DirectML** permet d'utiliser n'importe quel GPU (NVIDIA, AMD, Intel) via DirectX 12. C'est ce que **Windows Copilot** utilise en dessous.
+
+### Modèles de taille modeste
+
+Pour des modèles jusqu'à 13B paramètres, ONNX Runtime offre un **excellent compromis** : portabilité, performance, intégration facile.
+
+## Limitations
+
+### Fonctionnalités LLM incomplètes
+
+ONNX Runtime n'offre pas toutes les fonctionnalités avancées de vLLM :
+
+- Pas de **PagedAttention** natif
+- Pas de **prefix caching**
+- Pas de **speculative decoding** intégré
+
+Pour du serving de production haute perf, frameworks dédiés restent meilleurs. ONNX Runtime brille dans les apps intégrées.
+
+### Support des architectures
+
+Tous les modèles ne convertissent pas facilement en ONNX. Les architectures avec opérations dynamiques ou contrôles de flux complexes peuvent poser problème.
+
+## Perspective
+
+ONNX Runtime évolue rapidement avec GenAI. Son avantage majeur — la **portabilité multi-hardware** — devient de plus en plus pertinent :
+
+- AMD MI300 gagne en part de marché
+- Intel Gaudi arrive
+- NPU embarqués explosent
+
+Pour les organisations qui ne veulent pas dépendre d'un seul vendor hardware, **ONNX Runtime est stratégique**.
+
+## Comparaison des frameworks
+
+| Critère | vLLM | TGI | TRT-LLM | ONNX Runtime |
+|---|---|---|---|---|
+| Performance max | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| Portabilité | NVIDIA | NVIDIA+ | NVIDIA only | Multi-vendor |
+| Facilité d'utilisation | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐ |
+| Coût setup | Bas | Moyen | Élevé | Moyen |
+
+Chacun a sa raison d'être.

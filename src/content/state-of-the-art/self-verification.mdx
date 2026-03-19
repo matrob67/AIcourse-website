@@ -1,0 +1,165 @@
+---
+title: "Self-Verification : auto-correction des LLM"
+description: "Les techniques de self-verification permettent aux LLM de détecter et corriger leurs propres erreurs, améliorant la fiabilité sans modèle externe."
+---
+
+
+## Le modèle qui se juge lui-même
+
+Intuition : si un modèle peut générer une réponse incorrecte, peut-il aussi la **reconnaître** comme incorrecte quand on lui demande de vérifier ?
+
+C'est souvent oui. Générer et vérifier sont des tâches de difficulté différente — vérifier est généralement plus facile.
+
+**Self-verification** = le modèle devient son propre contrôleur de qualité.
+
+<Callout type="info" title="L'insight central">
+Générer une bonne réponse = difficile. Vérifier une réponse = plus facile.
+Un modèle qui échoue à générer correctement peut réussir à détecter l'erreur quand on la lui montre.
+</Callout>
+
+## Techniques de self-verification
+
+### 1. Self-Refine : amélioration itérative
+
+```
+Étape 1 : Générez réponse initiale
+Étape 2 : "Critique cette réponse. Quelles erreurs ?"
+Étape 3 : "Améliore basé sur cette critique"
+Étape 4 : Répétez 2-3 jusqu'à satisfaction
+```
+
+Vous laissez le modèle se critiquer et s'améliorer.
+
+### 2. Self-Debugging : pour le code
+
+```
+1. Générez le code
+2. L'exécutez contre les tests
+3. Si erreur : demandez au modèle d'analyser le message d'erreur
+4. Il corrige
+5. Retestez
+```
+
+Le modèle voit l'erreur et la répare.
+
+### 3. Self-Consistency Verification
+
+Vérifiez en résolvant le problème **à l'envers** :
+
+```
+Problème : 2x + 3 = 11, trouver x
+Réponse proposée : x = 4
+Vérification : 2(4) + 3 = 8 + 3 = 11 ✓
+```
+
+Au lieu de vérifier directement, substituez et vérifiez.
+
+### 4. Constitutional AI (Self-Critique)
+
+Le modèle évalue sa réponse contre des **principes** :
+
+- "Est-ce utile ?"
+- "Est-ce honnête ?"
+- "Est-ce sûr ?"
+
+Le modèle se critique selon une constitution.
+
+<Callout type="tip" title="Vérification inversée : très efficace">
+Pour maths : substituez la réponse dans l'équation.
+Pour traductions : retraduisez et comparez.
+Pour résumés : vérifiez que points clés sont préservés.
+
+Ce pattern d'inversion est généralisable et marche bien.
+</Callout>
+
+## Reflexion : apprendre de ses erreurs
+
+Framework Reflexion (Shinn et al., 2023) combine self-verification avec **mémoire** :
+
+```
+1. Tentez de résoudre la tâche
+2. Si échec : générez réflexion ("J'ai échoué parce que...")
+3. Stockez la réflexion en mémoire
+4. Tentative suivante : inclure les réflexions précédentes
+5. Évitez les erreurs antérieures
+```
+
+Résultats :
+- HumanEval (code) : 67% → 91%
+- AlfWorld (agent) : 63% → 97%
+
+La mémoire d'erreur c'est puissant.
+
+## Coin technique : les limites réelles
+
+### Peut-il vraiment se corriger ?
+
+La réponse : **parfois, pas toujours**.
+
+Études montrent que self-correction est **limitée** :
+
+```
+Erreurs factuelles évidentes : oui, détectées
+Erreurs subtiles de logique : non, souvent manquées
+Hallucinations sur inconnu : non, non détectées
+Biais systématiques : non, renforcés au lieu de corrigés
+```
+
+Le modèle tend à se **défendre** plutôt que se corriger — biais de confirmation.
+
+<Callout type="paper" title="Sans feedback externe, amélioration limitée">
+Huang et al. (2023) : sans feedback objectif externe (code execution, calcul), les LLM **ne s'améliorent pas** significativement par self-correction. Le modèle maintient sa réponse initiale ou la dégrade.
+</Callout>
+
+### Biais de confirmation
+
+Vous qui avez dit quelque chose tendez à le défendre au lieu de l'admette faux. Les LLM font pareil.
+
+"Ma réponse est bonne" c'est plus probable que "je me suis trompé".
+
+### Coût cumulatif
+
+3 itérations de critique-amélioration = **4-5 fois plus de tokens**. Économiquement cher.
+
+## Bonnes pratiques
+
+### 1. Combiner avec feedback externe
+
+Self-verification fonctionne mieux avec signaux objectifs :
+
+- **Code** : exécution de tests
+- **Maths** : vérification par substitution ou symbolic computation
+- **Faits** : vérification par web search
+- **Format** : validation JSON/XML
+
+```python
+response = model.generate(prompt)
+critique = model.generate(f"Critique : {response}")
+if execution_test(response) == PASS:
+    return response  # Pas besoin d'améliorer
+else:
+    improved = model.generate(f"Corrige basé sur : {critique}")
+    return improved
+```
+
+### 2. Limiter les itérations
+
+2-3 itérations max. Au-delà, le modèle tourne en rond ou dégrade.
+
+### 3. Utiliser un "juge" différent
+
+Pour la critique, utilisez un prompt différent ou modèle différent. Réduit le biais de confirmation.
+
+<Callout type="warning" title="Ne pas sur-estimer">
+Self-verification est utile mais pas magique. Elle corrige les erreurs que le modèle "reconnaît" (erreurs évidentes, logique brutes) mais pas les hallucinations ou les biais qu'il n'est pas conscient d'avoir.
+
+C'est un multiplicateur, pas une solution.
+</Callout>
+
+## Le futur
+
+Les modèles de raisonnement (o1, R1) internalisent une forme de self-verification dans leur chaîne de pensée cachée.
+
+Au lieu de demander au modèle "vérifiez", le modèle se vérifie **en réfléchissant**. C'est l'évolution naturelle.
+
+L'auto-correction n'est pas juste un prompt trick — c'est une capacité qui peut être entraînée.

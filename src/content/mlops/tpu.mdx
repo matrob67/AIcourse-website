@@ -1,0 +1,192 @@
+---
+title: "Google TPU : architecture et spécificités"
+description: "Comprendre l'architecture des Tensor Processing Units (TPU) de Google, leurs différences avec les GPU NVIDIA, et leur rôle dans l'écosystème IA."
+---
+
+## Qui a construit le TPU ? Google, en 2013, sans vous le dire
+
+Google a construit le **TPU** (Tensor Processing Unit) discrètement chez lui, sans l'annoncer au monde. Pendant que tout le monde parlait des GPU NVIDIA, Google utilisait ses TPU en interne pour servir la recherche Google, Gmail, YouTube, Translate.
+
+C'est juste en 2017 que Google a dit "au fait, on a cette puce qu'on utilise depuis 4 ans et elle est **vraiment** bonne pour l'IA".
+
+### Pourquoi Google a construit ça ?
+
+NVIDIA domaine. Les GPU sont les seuls accélérateurs pour l'IA. Sauf que les GPU NVIDIA sont conçues pour la **graphique** (dessiner des pixels). On a detourné la technologie pour faire du ML. C'est pratique, mais pas parfait.
+
+Google s'est dit : et si on construisait une puce **rien que** pour les réseaux de neurones ? Pas de graphique, juste du ML pur.
+
+Voilà le TPU.
+
+
+
+## L'architecture : une grille systolique vs les GPU classiques
+
+### Les GPU NVIDIA : l'approche SIMT
+
+Les GPU NVIDIA fonctionnent sur un modèle appelé **SIMT** (Single Instruction, Multiple Threads). Vous envoyez une instruction. 1000 threads l'exécutent en parallèle.
+
+C'est flexible. Vous pouvez faire presque n'importe quoi.
+
+### Le TPU : le array systolique
+
+Le TPU a une approche radicalement différente : un **array systolique**.
+
+Imaginez une grille de 128x128 petits processeurs. Les données "coulent" dans la grille :
+- Les poids viennent de la droite
+- Les activations (inputs) viennent du bas
+- Les résultats vont vers le haut et la droite
+
+Chaque processeur multiplie une valeur par un poids, ajoute le résultat au voisin. Repeat, repeat, repeat. C'est systématique. C'est régulier. **C'est hyper-efficace pour les multiplications matricielles**.
+
+Les GPU NVIDIA chargent les données de la mémoire, les traitent, les renvoyent. Aller-retour constant. Le TPU ? Les données circulent dans la grille une fois. C'est plus efficace énergétiquement.
+
+**Le prix** : le TPU est **moins flexible**. Il excelle sur les multiplications matricielles. Les opérations irrégulières (branchements, if-else) ? Pas son truc.
+
+### C'est pour qui ?
+
+- **TPU** : transformers, modèles standard, batchs réguliers
+- **GPU** : tout ce qui est irrégulier, recherche expérimentale, prototypage
+
+<Callout type="paper" title="Systolique vs SIMT : un choix de conception fondamental">
+Les GPU NVIDIA = flexibilité + un peu moins d'efficacité énergétique.
+Les TPU = efficacité énergétique maximale + moins de flexibilité.
+
+C'est un tradeoff. Google a choisi l'efficacité. NVIDIA a choisi la flexibilité. Les deux approches dominent leurs marchés respectifs.
+</Callout>
+
+## Les générations : TPU v4 -> v6e (Trillium)
+
+### TPU v4 (2021)
+
+Les TPU v4 sont déjà très puissants :
+- **275 TFLOPS** en BF16 (le format chéri de Google)
+- **32 Go de mémoire**
+- **1,2 To/s de bande passante** (c'est lent comparé aux H100, mais suffisant)
+- **ICI** (Inter-Chip Interconnect) : liens haute vitesse entre les TPU
+- **175W** de consommation (efficace)
+
+Un **TPU v4 Pod** relie jusqu'à **4 096 chips**. Oui, quatre mille. Dans une topologie en **tore 3D** (chaque TPU est connecté à ses 6 voisins en 3D).
+
+### TPU v5p (2023)
+
+Les v5p sont pour l'entraînement gros modèles :
+- **459 TFLOPS**
+- **95 Go de mémoire** (2,4x plus que v4)
+- **2,76 To/s de bande passante**
+- **Pod jusqu'à 8 960 chips**
+
+Google a utilisé des TPU v5p pour entraîner Gemini. Juste pour donner une idée de la puissance.
+
+### TPU v5e (2023)
+
+Le v5e est pour un meilleur prix/performance (inférence, modèles moyens) :
+- **197 TFLOPS** (moins puissant que v5p, mais moins cher)
+- **16 Go de mémoire**
+- Coût optimisé
+
+### TPU v6e (Trillium, 2024)
+
+La dernière génération :
+- **~920 TFLOPS** (estimé, 4.7x plus rapide que v5e)
+- **FP8 support natif** pour la première fois
+- Performance par dollar significativement mieux
+
+<Callout type="tip" title="Le format BF16 : le secret de Google">
+Google a inventé le **BFloat16** (BF16) : même plage que FP32 (8 bits d'exposant) mais moitié mantisse (7 bits).
+
+Résultat : même précision que FP32, même vitesse que FP16. C'est dans tous les TPU nativement. Puis, NVIDIA a copié pour l'H100, AMD pour les Instinct. C'est devenu le standard.
+</Callout>
+
+## ICI : la topologie qui change tout
+
+Le secret des TPU pour l'entraînement distribué : la topologie **ICI** (Inter-Chip Interconnect) en **tore 3D**.
+
+### Tore 3D : qu'est-ce que c'est ?
+
+Imaginez une grille 3D où chaque TPU a des liens vers ses 6 voisins (haut, bas, gauche, droite, avant, arrière). C'est un tore parce que les bords se connectent aux bords opposés (comme Pac-Man qui sort d'un côté et rentre de l'autre).
+
+### Avantages
+
+- **Latence faible** : le nombre de sauts entre deux TPU est limité
+- **Bande passante agrégée énorme** : si chaque TPU a 6 liens, et chaque lien est rapide, la bande passante totale est énorme
+- **AllReduce efficace** : les opérations de réduction (combiner les résultats de tous les TPU) utilisent naturellement la topologie
+- **Scalabilité** : vous pouvez ajouter des dimensions au tore
+
+Un TPU v5p Pod de 8 960 chips offre **4 EFLOPS** en BF16. C'est exaflop. C'est un des supercalculateurs les plus puissants du monde.
+
+## TPU vs GPU : le combat
+
+| Aspect | TPU | GPU NVIDIA |
+|---|---|---|
+| Architecture | Array systolique | SIMT |
+| Flexibilité | Optimisé pour ML | Tout usage |
+| Interconnect | ICI tore 3D | NVLink |
+| Logiciel natif | JAX, TensorFlow | CUDA, PyTorch, tout |
+| Où l'acheter | Google Cloud uniquement | Partout (cloud, on-premise) |
+| Précision | BF16, INT8, FP8 (v6) | FP64 jusqu'à FP4 |
+| Coût infrastructure | Élevé | Dépend du revendeur |
+
+**Résumé** :
+- **GPU** : meilleur pour la recherche, la flexibilité, si vous voulez choisir votre cloud
+- **TPU** : meilleur pour l'entraînement de modèles gros si vous pouvez utiliser Google Cloud et JAX/TensorFlow
+
+<Callout type="warning" title="L'écosystème logiciel : le vrai problème des TPU">
+Les TPU sont techniquement formidables. Mais 90% de la communauté ML utilise **PyTorch avec CUDA**. Vous trouvez des tutoriels PyTorch partout. Des librairies optimisées pour CUDA partout.
+
+Les TPU ? Vous avez JAX. Oui, JAX est puissant. Mais c'est une minorité qui l'utilise. Si vous êtes habitué à PyTorch, passer à JAX c'est apprendre un nouveau paradigme.
+
+C'est le plus grand frein à l'adoption des TPU. Pas la technologie. L'écosystème.
+</Callout>
+
+## Programmer pour les TPU
+
+Quand vous utilisez Google Cloud TPU, vous utilisez **JAX** ou **PyTorch/XLA**.
+
+### JAX : la voie fonctionnelle
+
+JAX est un framework de Google construit **sur le compilateur XLA** (Accelerated Linear Algebra). L'idée centrale : transformations fonctionnelles.
+
+```python
+# Au lieu de boucles classiques, JAX utilise des transformations
+import jax
+
+@jax.jit  # Compiler en code machine
+def f(x):
+    return x ** 2
+
+@jax.vmap  # Vectoriser (appliquer à un batch)
+def f_batch(batch):
+    return f(batch)
+
+@jax.pmap  # Paralléliser sur plusieurs TPU
+def f_parallel(batch):
+    return f_batch(batch)
+```
+
+Les transformations `jit` (compiler), `vmap` (vectoriser), `pmap` (paralléliser), `grad` (différentiation auto) se composent. C'est puissant.
+
+Le compilateur XLA transforme ce code Python en code machine optimisé pour le TPU. Les communications inter-TPU, le parallelisme, tout est géré automatiquement.
+
+## Cas d'usage des TPU
+
+Idéal pour :
+- **Entraînement de très gros modèles** (100+ milliards de paramètres) : la topologie ICI facilite le distributed training
+- **Inférence à massive échelle** : Google sert les modèles Gemini avec des TPU
+- **Workloads réguliers** : Transformer standard, attention, feedforward - tout tourne sur array systolique
+- **Utilisateurs JAX/TensorFlow** : l'intégration est native
+
+Moins ideal pour :
+- **Prototypage rapide** : l'écosystème est moins riche que CUDA
+- **Multi-cloud** : les TPU ne sont que chez Google
+- **Opérations irrégulières** : branchements, if-else, structures de contrôle complexes
+- **Équipes habituées à PyTorch** : courbe d'apprentissage JAX
+
+## Pourquoi c'est important
+
+Les TPU montrent qu'**il n'y a pas une seule façon de construire un accélérateur IA**. NVIDIA a choisi la flexibilité. Google a choisi l'efficacité. Les deux dominent leur secteur.
+
+Si vous décidez d'utiliser Google Cloud, les TPU sont une option sérieuse pour les gros entraînements. Ils sont moins chers que les GPU pour certains workloads, plus rapides, plus efficaces énergétiquement.
+
+Mais l'écosystème pyTorch/CUDA est juste trop dominant. Pour la majorité des gens, GPU NVIDIA = moins de friction, plus de ressources en ligne, plus facile.
+
+C'est la vraie bataille : pas la technologie brute, mais l'écosystème qui la soutient.

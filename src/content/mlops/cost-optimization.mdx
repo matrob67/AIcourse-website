@@ -1,0 +1,124 @@
+---
+title: "Optimisation des coûts LLM : caching, routing, batching"
+description: "Les LLM coûtent cher. Réduisez la facture de 50-70% : semantic caching, routing intelligent, batching."
+---
+
+## Les LLM vident votre budget
+
+GPT-4 coûte $30 par million de tokens d'entrée et $60 par million de tokens de sortie. Ça semble pas cher en unité, mais pour une application à gros trafic ça devient vite des dizaines de milliers de dollars par mois.
+
+**La vraie question** : vous l'aviez pas correctement estimé au départ. Une appli en production qui coûtait $500/mois peut exploser à $50 000/mois. Beaucoup de startups ML ont fermé à cause d'une facture LLM catastrophique.
+
+<Callout type="info" title="L'anatomie des coûts">
+Trois trucs qui coûtent : (1) tokens d'entrée, (2) tokens de sortie, (3) le modèle choisi. Optimiser chacun de ces trois éléments : moins de contexte, limiter la sortie, choisir le modèle moins cher possible qui marche.
+</Callout>
+
+## Caching : laissez votre GPU respirer
+
+### Exact caching
+
+Si quelqu'un pose **exactement la même requête**, retournez la réponse précédente. Zéro appel API.
+
+**Gain** : dépend de votre app. FAQ bot = 30-50% des requêtes répétées. Chat général = < 5%.
+
+### Semantic caching
+
+Au lieu de chercher une exact match, cherchez une **requête sémantiquement similaire**. "Quel temps fait-il à Paris ?" et "Météo parisienne ?" retourneraient la même réponse.
+
+**Comment** :
+1. Convertissez la requête en embedding (vecteur)
+2. Comparez avec les requêtes précédentes
+3. Si similarité cosinus > 0.95, retournez la réponse cached
+4. Sinon, appelez le LLM et cache la nouvelle réponse
+
+**Outils** : GPTCache, Redis avec extensions vectorielles, FAISS.
+
+<Callout type="tip" title="Le seuil parfait c'est l'équilibre">
+Trop bas (0.8) = retournez des réponses mauvaises. Trop haut (0.98) = le cache rate tout le temps. Commencez à 0.95 et tweak basé sur le taux de hit du cache et le feedback utilisateur.
+</Callout>
+
+### Prompt caching (côté provider)
+
+Anthropic et OpenAI offrent du caching au niveau API :
+
+- **Anthropic Prompt Caching** : les tokens du système prompt et du contexte coûtent **90% moins cher** s'ils sont cachés
+- **OpenAI Cached Tokens** : les préfixes longs coûtent 50% moins cher
+
+C'est particulièrement efficace pour RAG : le prompt système est identique à chaque requête.
+
+
+
+## Routing : ne payez pas plus que nécessaire
+
+### L'intuition
+
+Pas tout le monde a besoin du modèle le plus cher. "Quel est la capitale de la France ?" → modèle cheap. "Analyze cette complexité contract juridique" → modèle puissant.
+
+### Stratégies
+
+**Par complexité** : un classifier estime si la requête est simple ou complexe. Simple → Claude Haiku. Complexe → Claude Sonnet.
+
+**Par domaine** : code → modèle fine-tuné pour code. Médecine → modèle médical. Général → généraliste.
+
+**En cascade** : essayez d'abord le cheap, et si sa confiance est basse, escaladez au puissant.
+
+<Callout type="paper" title="Le cascade math">
+60-80% des requêtes peuvent être traitées par un petit modèle. Seulement 20-40% nécessitent le puissant. Le coût total : 50-70% moins cher pour une dégradation minimale.
+</Callout>
+
+### Évaluer la confiance
+
+Pour le fallback, mesurez si le petit modèle est sûr :
+
+- **Log-probabilities** : si elles sont hautes, le modèle est confiant
+- **Vérifieur** : un second modèle valide la réponse du premier
+- **Heuristiques** : longueur, présence de caveats ("je ne suis pas sûr")
+
+## Optimiser les prompts
+
+### Réduire le contexte
+
+- **Résumer les documents RAG** : au lieu de passer 5 documents entiers, passez un résumé
+- **Sélectionner** : prendre que les 2-3 documents les plus pertinents, pas tous
+- **System prompt optimisé** : éliminer les instructions redondantes
+- **Few-shot minimal** : le moins d'exemples possible
+
+### Réduire la sortie
+
+- **max_tokens limité** : pas besoin d'une réponse de 2000 tokens si 200 suffisent
+- **Structured output** : JSON compact plutôt que texte libre
+- **Instructions de concision** : "réponds en 2-3 phrases max"
+
+## Batching et infrastructure
+
+### Batch API
+
+- **OpenAI Batch API** : 50% de réduction pour les requêtes non-temps-réel (résultats en 24h)
+- **Anthropic Batch API** : tarifs réduits pour batch
+
+### Self-hosting
+
+Pour 1-5 millions de tokens par jour, self-host un modèle open source (Llama, Mistral) peut être moins cher que l'API. Mais y'a du coût caché : location GPU, maintenance, DevOps.
+
+<Callout type="warning" title="Le coût caché du self-hosting">
+GPU location, infra maintenance, monitoring, updates, compétences DevOps. Le coût par token peut être inférieur aux APIs, mais le coût total (TCO) incluant les salaires peut être plus élevé pour les petites boîtes.
+</Callout>
+
+## Monitoring des coûts
+
+### Métriques essentielles
+
+- **Coût par requête** : input/output tokens, par modèle
+- **Coût par utilisateur** : identifier les heavy users
+- **Cache hit rate** : % de requêtes servies par cache
+- **Routing distribution** : répartition requêtes entre modèles
+- **Coût par résultat business** : rapporter le coût LLM au revenu généré
+
+### Alertes
+
+- Budgets par équipe/projet
+- Alertes si dépassement de X%
+- Tendances : anticiper les coûts futurs
+- Anomalies : pic soudain = quelque chose se casse
+
+**Soyez paranoia sur les coûts. Un bug qui fait multiplier le contexte par 10 = facture multiplié par 10.**

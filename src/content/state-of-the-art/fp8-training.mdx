@@ -1,0 +1,138 @@
+---
+title: "Entraînement en FP8 : la prochaine frontière"
+description: "FP8 : 8 bits pour tout. DeepSeek-V3 l'a fait à 671B. Formats E4M3 et E5M2. Comment ça marche sans exploser."
+---
+
+## FP8 : le pari audacieux
+
+Les Tensor Cores FP8 sur H100 offrent **2x le débit du FP16**. DeepSeek-V3 (671B) a été entraîné en FP8. Ça marche.
+
+Mais FP8 c'est 8 bits seulement. Ultra-serré. Ça demande du soin.
+
+
+
+## Les deux formats FP8
+
+### E4M3 (4 bits exposant, 3 bits mantisse)
+- Plage : ±448
+- Précision : ~1.5 décimales
+- Usage : **forward pass** (poids, activations)
+
+### E5M2 (5 bits exposant, 2 bits mantisse)
+- Plage : ±57344
+- Précision : ~1 décimale
+- Usage : **backward pass** (gradients)
+
+<Callout type="info" title="Asymétrie intentionnelle">
+E4M3 pour le forward (fidélité), E5M2 pour le backward (plage). Les gradients ont souvent une plage plus étendue que les activations. C'est une partition intelligente des ressources.
+</Callout>
+
+## Techniques de quantification
+
+### Per-tensor scaling
+
+Le plus simple : un seul facteur d'échelle par tenseur.
+
+```
+x_fp8 = quantize(x / scaling_factor)
+x_dequant = x_fp8 × scaling_factor
+```
+
+Facteur calculé du maximum absolu du tenseur.
+
+### Delayed scaling
+
+Calculer le facteur d'échelle chaque itération = overhead. **Delayed scaling** : utilisez les stats des itérations précédentes.
+
+```
+facteur[t] = max(historique[-W:]) / max_fp8
+```
+
+Approximation efficace : les distributions changent graduellement.
+
+<Callout type="tip" title="Effet pratique du delayed scaling">
+Aucune pause pour calculer le max. Les stats changent lentement de toute façon. On gagne du débit sans vraiment perdre en qualité.
+</Callout>
+
+### Per-block scaling (microscaling)
+
+Quantifiez avec des facteurs différents par bloc de valeurs (par ligne, par 128 éléments). Plus de précision au coût de plus de facteurs à stocker.
+
+## Pipeline d'entraînement FP8
+
+| Opération | Format | Raison |
+|-----------|--------|--------|
+| GEMM forward (poids × activations) | E4M3 | Besoin de précision |
+| GEMM backward (gradients × activ) | E5M2 | Besoin de plage |
+| Softmax | FP32 | Sensible numériquement |
+| LayerNorm / RMSNorm | FP32 | Statistiques précises |
+| Optimiseur (Adam) | FP32 | Accumulation précise |
+| Poids maître | FP32 | Mises à jour fines |
+
+**Accumulation FP32 obligatoire** : les GEMM FP8 font les multiplications en FP8 mais accumulent les résultats en FP32. H100 Tensor Cores supportent ça nativement.
+
+<Callout type="warning" title="Accumulation = critique">
+Sans accumulation FP32, la dégradation est catastrophique. Les Tensor Cores du H100 savent faire ça. GPU plus vieux ? Difficile.
+</Callout>
+
+## Challenges spécifiques
+
+### Instabilité des gradients
+
+FP8 a une précision très limitée. Les gradients peuvent devenir bruyants.
+
+Solutions :
+- **Gradient clipping** : capper la norme pour éviter les outliers
+- **Couches sensibles en BF16** : embeddings, dernière couche
+- **Warm-up progressif** : débuter en BF16, passer à FP8 graduellement
+
+### Outliers de poids
+
+Certains poids/activations ont des outliers qui compressent la plage dynamique utile.
+
+Solutions :
+- **Rotation orthogonale** : distribuer les outliers
+- **Clipping intelligent** : clipper les outliers avec perte minimale
+- **Quantification par canal** : facteurs séparés par canal d'une matrice
+
+## Résultats réels
+
+DeepSeek-V3 (671B) entraîné en FP8 : qualité comparable au BF16. ~40% de réduction coût computationnel.
+
+Études de validation :
+
+| Taille modèle | Dégradation FP8 vs BF16 |
+|---|---|
+| < 1B | 0% |
+| 1-10B | < 0.1% |
+| > 100B | 0.2-0.5% (nécessite tuning) |
+
+<Callout type="paper" title="L'économie">
+Pour un modèle 70B, l'entraînement FP8 coûte environ 40% moins cher qu'un entraînement BF16. À grande échelle, ça représente des millions de dollars.
+</Callout>
+
+## Outils et support hardware
+
+**Transformer Engine (NVIDIA)** : couches Transformer FP8-optimisées avec delayed scaling automatique.
+
+**Frameworks** :
+- PyTorch : support FP8 via Transformer Engine
+- JAX : via primitives XLA
+- Megatron-LM : intégration native
+
+**GPUs supportant FP8** :
+- H100 / H200 (Hopper) : Tensor Cores FP8 natives
+- MI300X (AMD) : FP8 via Matrix Cores
+- Gaudi 3 (Intel) : support FP8
+
+## Perspective future
+
+L'entraînement FP8 est au début de son adoption. GPU Blackwell introduit le FP4 (8 bits → 4 bits !). La tendance est à moins de précision, compensée par algorithmes plus sophistiqués.
+
+<Callout type="info" title="L'évolution inévitable">
+FP32 → FP16 → BF16 → FP8 → FP4. Chaque étape : plus rapide, moins de précision, techniques de stabilisation plus élaborées. C'est le futur.
+</Callout>
+
+## Conclusion
+
+L'entraînement FP8 n'est plus un rêve. DeepSeek-V3 le prouve à échelle massive. Pour les prochaines générations de GPU et les modèles futurs, FP8 sera probablement le standard, avec des techniques de quantification et stabilisation qui continuent d'évoluer.

@@ -1,0 +1,141 @@
+---
+title: "Données synthétiques pour l'entraînement"
+description: "Exploration de l'utilisation des données synthétiques pour le pré-entraînement et le fine-tuning des LLM : génération, filtrage, et impact sur les capacités des modèles."
+---
+
+
+
+## Le problème : tu as consommé tout l'internet
+
+Les estimations : environ **10-15 trillions de tokens** de texte de haute qualité disponibles sur internet. Les LLM modernes consomment 10-15T tokens pour le pré-entraînement.
+
+Ça signifie que nous avons atteint (ou dépassé) la limite des données naturelles. **Le mur des données.**
+
+Données synthétiques (générées par des LLM) sont la voie pour continuer à entraîner sans plafond.
+
+<Callout type="warning" title="Le défi : qualité vs. quantité">
+Les données synthétiques non-filtrées contiennent des hallucinations, des erreurs factuelles et des biais amplifiés. Elles doivent être filtrées rigoureusement pour améliorer (au lieu de dégrader) le modèle final.
+</Callout>
+
+## Données synthétiques pour le pré-entraînement
+
+### Génération par paraphrase
+
+Les LLM peuvent reformuler ou résumer des textes existants, créant des alternatives de haute qualité. Ça augmente la diversité sans introduire de nouvelles informations.
+
+Exemple : reformuler un article Wikipedia 5 fois crée 5 versions différentes du même contenu, multipliant l'effet d'entraînement.
+
+### Données mathématiques et raisonnement
+
+**Le cas d'usage principal** : générer des problèmes mathématiques et des chaînes de raisonnement (chain-of-thought).
+
+**Avantages** :
+- Les solutions mathématiques sont vérifiables (correctness is checkin automatiquement)
+- Les LLM sont bons en génération de maths
+- La demande en données maths de qualité est très forte
+
+### Code synthétique
+
+Génération de code est particulièrement adaptée parce que :
+- Le code est **vérifiable** (compilation, tests)
+- Les LLM excèlent en génération de code
+- La demande est énorme
+
+<Callout type="paper" title="Phi et la révolution du textbook">
+Microsoft a montré avec la série Phi que des petits modèles entraînés sur des données synthétiques de type "textbook" (manuels scolaires) peuvent rivaliser avec des modèles massivement plus grands entraînés sur web. Ça a changé le paradigme.
+</Callout>
+
+## Données synthétiques pour le fine-tuning
+
+### Instruction tuning synthétique
+
+La majorité des données d'instruction tuning sont **partiellement ou entièrement synthétiques** :
+
+- **Self-Instruct** : le modèle génère ses propres instructions et réponses
+- **Evol-Instruct** : évolution itérative de la complexité des instructions
+- **WizardLM** : augmentation systématique de la difficulté
+
+Ces approches ont remplacé les données humaines pour l'instruction tuning à grande échelle.
+
+### Distillation de données
+
+Un modèle puissant (teacher) génère des réponses de haute qualité. Un modèle plus petit (student) apprend à les reproduire.
+
+Exemple : Claude génère des réponses → LLaMA 7B apprend à imiter → déploiement de LLaMA 7B.
+
+<Callout type="info" title="Licences et restrictions">
+Les propriétaires (OpenAI, Anthropic) interdisent dans leurs conditions l'entraînement de modèles concurrents sur leurs outputs. C'est pourquoi la distillation open-source (modèle A → B → C) est standard dans la communauté open-source.
+</Callout>
+
+### RLHF/DPO synthétique
+
+Les données de préférence (pour l'alignement) sont souvent générées synthétiquement :
+
+1. Modèle génère N réponses à une question
+2. Modèle juge (ou même modèle) classe par qualité
+3. Paires (meilleure, moins bonne) pour DPO/RLHF
+
+Ça a drastiquement réduit le coût du fine-tuning à grand scale.
+
+## Technique de génération
+
+### Prompting ciblé
+
+Des prompts soigneusement conçus génèrent des données dans un format et domaine spécifiques. Qualité du prompt = qualité des données.
+
+### Persona-driven generation
+
+Assigner des personas différents (professeur, ingénieur, historien) pour augmenter la diversité des styles, perspectives et niveaux de langage.
+
+### Seed-based generation
+
+Partir de données réelles (questions, thèmes) et demander au modèle de générer autour. Assure pertinence et diversité.
+
+## Le danger : model collapse
+
+<Callout type="warning" title="Model collapse : la spirale dégénérative">
+Si tu entraînes successivement sur des données synthétiques (modèle A → données → modèle B → données → modèle C), à chaque itération la distribution se dégénère. Les biais du modèle A s'amplifient dans ses données, qui amplifient les biais du modèle B, etc.
+
+Résultat : perte de diversité, amplification de biais, dégradation progressive.
+</Callout>
+
+## Filtrage et validation
+
+### Nécessité absolue
+
+Les données synthétiques non-filtrées contiennent :
+- Hallucinations factuelles
+- Répétitions et redondance
+- Biais amplifiés
+- Contenu généré automatiquement de basse qualité
+
+Sans filtrage, elles **dégradent** les performances du modèle.
+
+### Techniques de filtrage
+
+- **Vérification automatique** : pour maths, code
+- **Perplexité** : filtrer les exemples anormaux
+- **Diversité** : détecter et éliminer les doublons
+- **Modèle juge** : utiliser un LLM pour évaluer
+- **Cohérence** : vérifier la cohérence interne
+
+## Bonnes pratiques
+
+<Callout type="tip" title="Mélange optimal">
+Jamais 100% de données synthétiques. Ratio typique : 70-80% naturelles + 20-30% synthétiques. Les données naturelles ancrent la diversité et la factualité. Les données synthétiques comblent les lacunes de domaine.
+
+Filtrer rigoureusement. Vérifier automatiquement quand possible.
+</Callout>
+
+### Monitoring indicateurs
+
+- Diversité (n-gram unique, entropie)
+- Qualité (perplexité sur validation set)
+- Absence de model collapse (évolution de la distribution)
+- Performance sur benchmarks (pré-entraînement + fine-tuning)
+
+## Résumé
+
+Les données synthétiques sont devenues essentielles pour l'entraînement des LLM, surmontant le mur des données naturelles. Utilisées correctement (mélange 70/30 naturelles/synthétiques, filtrage rigoureux, vérification), elles offrent un levier puissant. Mal utilisées (100% synthétiques, pas de filtrage), elles dégradent le modèle via model collapse et biais amplifié.
+
+L'avenir : un mélange soigneusement optimisé de données naturelles et synthétiques, chacune compensant les faiblesses de l'autre.

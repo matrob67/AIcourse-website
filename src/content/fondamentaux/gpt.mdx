@@ -1,0 +1,217 @@
+---
+title: "GPT : l'ère de la génération auto-régressive"
+description: "De GPT-1 à GPT-4 : comment prédire le prochain mot devient la clé de tout le NLP. Few-shot learning, scaling laws, et la domination du decoder."
+---
+
+## La formule fondamentale : prédire le prochain token
+
+Un **modèle de langue auto-régressif** (comme GPT) fait une chose très simple: regarde tous les tokens précédents, et prédit le prochain.
+
+
+
+```
+Donnee: "Le chat noir"
+Prédire: ?
+Réponse du modèle: "dort" (probabilité 65%), "saute" (20%), "miaule" (15%)
+```
+
+Mathématiquement:
+
+```
+P(phrase complète) = P(token1) × P(token2 | token1) ×
+                     P(token3 | token1, token2) × ...
+```
+
+Chaque prédiction conditionne la suivante. C'est **auto-régressif**: la phrase se génère elle-même.
+
+### Comment ça s'implémente: le masque causal
+
+Dans l'attention Transformer, tu pourrais théoriquement regarder **tous les tokens** (passé et futur). GPT dit non. Il utilise un **masque causal**: chaque token regarde **à gauche uniquement**.
+
+```
+Tokens: [Le, chat, noir, dort, ...]
+Token "noir" voit:   [Le, chat, noir]           (soi + passé)
+Token "noir" ne voit PAS: [..., saute, court]   (futur masqué)
+```
+
+C'est implémenté dans l'attention: les scores vers le futur sont mis à -infinity, donc l'attention ne peut physiquement pas les voir.
+
+**Résultat**: chaque token sait seulement ce qui s'est passé avant. Naturel pour la génération (tu génères token par token).
+
+<Callout type="tip" title="GPT vs BERT en une phrase">
+- **GPT**: regarde à gauche uniquement (causal) → génère du texte naturellement
+- **BERT**: regarde partout (bidirectionnel) → comprend mieux mais ne génère pas
+Deux stratégies, deux usages.
+</Callout>
+
+## GPT-1: la fondation (juin 2018, avant BERT!)
+
+**GPT-1** (OpenAI) arrive **avant BERT** (qui est octobre 2018). C'est important historiquement. GPT-1 montre qu'un simple decoder Transformer, entraîné à prédire les mots suivants sur un corpus énorme (BooksCorpus, 1 milliard de mots), puis fine-tuné sur des tâches, **casse les records**.
+
+Architecture minimale:
+- 12 couches Transformer
+- 117 millions de paramètres (relativement petit)
+- Deux phases clairement séparées:
+  1. **Pré-entraînement**: apprendre à prédire le mot suivant sur BooksCorpus (mois sur GPU)
+  2. **Fine-tuning**: adapter à ta tâche (quelques heures sur tes données étiquetées)
+
+Résultats: améliore 9 tâches sur 12 comparé à des modèles from-scratch.
+
+### Le contexte
+
+En 2018, le fine-tuning était courant pour les images (deep learning classique). Mais pour le texte? Nouveau et radical. L'idée: un modèle **généraliste** entraîné sur un gros corpus universel peut performer sur **n'importe quelle tâche**.
+
+BERT arrive trois mois plus tard et l'éclipse (bidirectionnel, meilleurs benchmarks). Mais GPT-1 a posé le fondement. Le paradigme "pré-entraîner massif + fine-tuner léger" date de là.
+
+## GPT-2: le moment "oh merde, c'est plus fort qu'on pensait" (2019)
+
+**GPT-2** = **1.5 milliards** de paramètres (10x GPT-1). Entraîné sur WebText: 40 Go de texte prélevé depuis Reddit, filtré pour la qualité.
+
+### La découverte qui a dérangé
+
+GPT-2 peut faire des choses **sans aucun fine-tuning**. Juste du "prompt":
+
+```
+Exemple: Traduis anglais vers français.
+Entrée du modèle:
+"sea otter => loutre de mer
+cheese => "
+
+Sortie du modèle: "fromage"
+```
+
+GPT-2 traduit parfaitement sans jamais avoir vu de corpus parallèle anglais-français! Aucun entraînement spécialisé. Juste: "Ah, tu veux des traductions? Ok, je comprends le pattern."
+
+C'est du **zero-shot learning**: donner l'intention dans le prompt, et le modèle extrapole.
+
+Autres exemples:
+- Complétude de texte: "Il était une fois" → GPT-2 génère une histoire cohérente
+- Résumé: "Article: [...]  TL;DR:" → résume
+- Q&A: sans données de training Q&A, répond à des questions
+
+### La controverse de la publication
+
+OpenAI a d'abord **refusé** de publier le GPT-2 complet. Raison: "peur des fake news et des abus". La communauté a crié "censure! c'est de la science!". Après quelques mois de débat, ils l'ont publié.
+
+Débat **toujours vivant** en 2026 : quand un modèle est-il trop puissant pour publier? OpenAI prêchait l'open science, mais avait peur de ses propres créations.
+
+<Callout type="warning" title="La tension science vs responsabilité">
+GPT-2 a ouvert un débat qui reste entier : faut-il toujours publier les modèles ? Les vérifier au préalable ? Les garder secrets pour limiter les abus ? Il n'existe pas de réponse unanime dans la communauté. Publier favorise la recherche ouverte et la concurrence, mais donne aussi des outils de désinformation à qui veut en abuser. Retenir les modèles protège à court terme mais crée un pouvoir de fait chez les organisations qui les détiennent. Cet équilibre reste difficile à trouver, et chaque grande publication de modèle ravive le débat.
+</Callout>
+
+## GPT-3: le moment "on n'est pas prêts" (2020)
+
+**GPT-3** = **175 milliards** de paramètres (100x GPT-2). Entraîné sur 570 Go de texte web, soigneusement filtré et dédupliqué.
+
+<ArxivLink id="2005.14165" title="Language Models are Few-Shot Learners" />
+
+### In-context learning: l'illusion de la compréhension
+
+GPT-3 fait quelque chose qui semble impossible: apprendre de **quelques exemples directement dans le prompt**, sans réentraînement.
+
+
+
+```
+Tu montres:
+Sentiment: "J'adore!" → Positif
+Sentiment: "Bof..." → Neutre
+Sentiment: "Excellent!" →
+
+Et GPT-3 répond: "Positif"
+```
+
+Comment? GPT-3 a juste **vu des patterns similaires** pendant l'entraînement et les reconnaît. Pas d'apprentissage réel (pas de mise à jour de poids), juste: "Oh, je reconnais cette structure. Je sais quoi faire."
+
+On appelle ça **few-shot in-context learning** ou **prompt engineering**:
+- **Zero-shot**: "Traduis en français:" (pas d'exemple)
+- **One-shot**: 1 exemple de traduction
+- **Few-shot**: 3-10 exemples
+- Plus d'exemples = plus de signal = réponses meilleures
+
+### Le vrai résultat: confirmation des lois de scaling
+
+Kaspian et al. (OpenAI, jan. 2021) publient les **scaling laws**: la performance suit une courbe prévisible.
+
+```
+Performance ∝ (paramètres × données × compute)^(exposant)
+```
+
+Avant: "Aimons-nous juste plus gros?" Après: "Oui, et voici la formule exacte."
+
+Les laboratoires peuvent maintenant **planifier à l'avance**. "Je veux une performance de 85%. D'après les lois, j'ai besoin de X GPU pour Y jours."
+
+### Le coût politique
+
+4.6 millions de dollars pour entraîner GPT-3. C'était énorme en 2020. Seules quelques orga (OpenAI, Google, Meta, Anthropic) peuvent se permettre.
+
+**Conséquence**: concentration du pouvoir en IA. Les LLM efficaces coutent des millions → seules les multinationales jouent → c'est elles qui contrôlent la technologie.
+
+Débat toujours vivant: "C'est pas juste que l'IA soit réservée aux riches."
+
+<Callout type="warning" title="Efficacité vs accès">
+Les lois d'échelle formalisent une réalité inconfortable : plus le modèle est grand, meilleure est la performance. Mais plus il est grand, plus son entraînement coûte cher, et moins d'organisations peuvent se permettre de le faire. Ce n'est pas juste un problème d'argent — c'est une question de qui contrôle la technologie.
+
+Quand seules quelques multinationales peuvent entraîner les meilleurs modèles, elles décident aussi ce qu'ils savent faire, ce qu'ils refusent de faire, et qui y a accès. Les bénéfices de l'IA générative sont potentiellement universels — un médecin au Sénégal, un enseignant en Bolivie, un développeur indépendant à Lyon. Mais l'innovation elle-même se concentre là où est le capital. Le débat porte donc sur un choix de société : faut-il réguler l'accès aux grands modèles, forcer leur publication en open source, ou laisser le marché décider ? Il n'y a pas de réponse simple, mais ignorer la question n'est pas une option.
+</Callout>
+
+## Pourquoi "decoder-only" a gagné la guerre de l'architecture
+
+Entre 2018 et 2024, trois architectures compétaient:
+- **Encoder-only** (BERT): bidirectionnel, bon pour la compréhension
+- **Encoder-decoder** (T5, BART): bidirectionnel + génération séquentielle
+- **Decoder-only** (GPT): unilatéral, génération libre
+
+Decoder-only a dominé. Pourquoi?
+
+### Raison 1: simplicité = scalabilité
+
+Decoder-only = une pile unique de couches, un flux de tokens avant → après. Pas de module d'encodage séparé, pas de cross-attention (attention entre encoder et decoder). Pur, simple.
+
+Encoder-decoder = deux modules + cross-attention. Plus complexe à optimiser. Quand tu scales à 175B de paramètres, la simplicité compte.
+
+OpenAI, Anthropic, Meta: tous choisissent decoder-only pour leurs gros modèles.
+
+### Raison 2: flexibilité extrême
+
+Un decoder peut faire **n'importe quoi**:
+
+```
+Classification:     "Sentiment: excellent! → positif"
+Extraction:         "Entités: Pierre réside à Paris → [Pierre:PERSON, Paris:LOCATION]"
+Résumé:             "[Article...] Résumé: [3 lignes]"
+Traduction:         "[English text] Traduction FR: [French]"
+Code:               "Écris une fonction Python: [code]"
+Dialogue:           "Utilisateur: Bonjour. Assistant: Bonjour! Comment allez-vous?"
+```
+
+Encoder-decoder brille en traduction/résumé (tâches structurées). Mais decoder-only gère **tout uniformément**: chaque tâche = "générer du texte conditionné par un prompt".
+
+### Raison 3: in-context learning
+
+Decoder-only + prompt = apprentissage sans réentraînement. Encoder-decoder? Doit fine-tuner. GPT est adaptable au runtime (live), T5 moins.
+
+<Callout type="tip" title="Paradigmes complémentaires, pas antagonistes">
+Encoder-only reste imbattable pour: classification haute-latence-tolérance, recherche sémantique (rapide, peu cher). Encoder-decoder: traduction/résumé.spécialisé. Décoder-only: flexibilité universelle. Trois outils, trois usages.
+</Callout>
+
+## L'évolution: de GPT-3 à maintenant
+
+**GPT-3** (2020): "Wow, les LLM sont puissants"
+**InstructGPT/GPT-3.5** (2022): RLHF (reinforcement learning from human feedback) = suivre les instructions naturelles, pas juste prédire
+**ChatGPT** (nov. 2022): GPT-3.5 conversationnel. Le moment où l'IA devient culturelle (1 million d'utilisateurs en une semaine)
+**GPT-4** (mars 2023): multimodal (texte + images), raisonnement complexe
+**GPT-4V**: images en entrée
+**GPT-4 Turbo**: fenêtre 128k tokens (vs 4k avant)
+
+Le pattern: **scaling + alignment (RLHF)** = capacités émergeantes.
+
+## Pourquoi c'est important
+
+GPT illustre une vérité profonde: à échelle suffisante, **une tâche simple (prédire le prochain mot) devient un outil universel**.
+
+La famille GPT montre aussi que la question n'est pas "architecture ou idée nouvelle?" mais "scaling + entraînement et alignement". Pas de breakthrough architecturale depuis GPT-1 (toujours le même Transformer). Juste: plus gros, meilleure recette, RLHF pour l'alignement.
+
+Ça a déséquilibré le domaine: code + GPU > papier élégant. Et décentralisé la recherche: OpenAI entraîne à perte, les autres construisent dessus.
+
+GPT n'est pas "gagné pour toujours" (encoder-only a ses cas), mais decoder-only gouverne l'IA générative aujourd'hui.
+

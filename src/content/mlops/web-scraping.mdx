@@ -1,0 +1,188 @@
+---
+title: "Web Scraping pour les datasets ML"
+description: "Construire des datasets ML à partir du web : techniques de scraping, Common Crawl, considérations éthiques et juridiques, pipelines de collecte de données."
+---
+
+## L'histoire : où viennent les données que ChatGPT utilise ?
+
+GPT-3 a été entraîné sur 300 milliards de tokens (des petits bouts de texte). Chaque token vient de quelque part. Beaucoup viennent du web.
+
+OpenAI a crawlé des milliards de pages web. Wikipedia, Reddit, GitHub, des blogs, des news. Tout ça a été jeté dans un énorme blender. Le résultat ? Les données qui font tourner GPT-3.
+
+Mais comment on fait ça à l'échelle ? Vous pouvez pas demander à 1000 humains de copier-coller le web. Vous avez besoin d'un processus automatisé, scalable, qui peut traiter des **exaoctets** (millions de milliards d'octets).
+
+Bienvenue au **web scraping pour le ML**.
+
+## Common Crawl : le plus grand dataset du web public
+
+### Qu'est-ce que c'est ?
+
+**Common Crawl** est une **organisation à but non lucratif** qui crawle le web depuis 2011. Environ une fois par mois, elle capture un snapshot de plusieurs milliards de pages web.
+
+C'est comme prendre une photo du web entier. Une photo pesant **300 téraoctets**.
+
+### Les données sont publiques et gratuites
+
+Common Crawl met toutes ses données en ligne gratuitement. Vous pouvez télécharger les snapshots, fouiller les milliards de pages, utiliser ce que vous trouvez.
+
+C'est déjà utilisé pour :
+- **C4** (Common Crawl-Colossal Cleaned) : le dataset que Google utilise
+- **The Pile** : 825 Go de texte de haute qualité
+- **FineWeb** : 15 trillions de tokens, le dataset le plus récent et le plus utilisé
+
+### Les formats
+
+Common Crawl distribue ses données en trois formats :
+
+**WARC** : le HTML brut de chaque page (complet, lourd)
+**WAT** : les métadonnées (headers HTTP, timestamps, URLs)
+**WET** : le texte extrait (sans le HTML, juste le texte brut)
+
+Pour entraîner un LLM, vous avez surtout besoin du WET (juste le texte).
+
+
+
+## Le pipeline : du web brut au dataset propre
+
+### Étape 1 : choisir les snapshots
+
+Common Crawl produit un nouveau snapshot chaque mois. Vous en choisissez certains. Les plus récents (pour la nouveauté), les plus anciens (pour avoir un baseline), tout.
+
+### Étape 2 : extraire le texte
+
+Vous devez **parser le HTML** et en extraire juste le contenu textuel. Pas les menus, pas les pubs, pas les footers. Juste ce que l'humain lirait.
+
+Outils :
+- **BeautifulSoup** : libraire Python pour parser HTML
+- **trafilatura** : spécialisée dans l'extraction de "contenu principal"
+
+trafilatura est meilleure. Elle utilise du ML pour identifier le contenu principal d'une page et ignorer le reste.
+
+### Étape 3 : filtrer par langue
+
+Vous voulez un LLM en Français ? Gardez le texte Français, jetez le reste.
+
+Outil : **fastText** (librairie de Meta) pour classifier la langue.
+
+Ça semble simple mais à 300 To de données, ça prend du temps.
+
+### Étape 4 : filtrer par qualité (THE BIG ONE)
+
+Là arrive la vraie magie. Des milliards de pages web, **beaucoup sont de la poubelle**. Spam, contenu autogénéré, contenu répétitif.
+
+Vous avez besoin de heuristiques et classifieurs pour dire "cette page est bonne, celle-ci est mauvaise".
+
+**Heuristiques simples** :
+- Longueur : pas trop court (< 100 mots), pas trop long (> 100 000 mots)
+- Ratio de caractères alphabétiques : beaucoup de symboles = probablement du code ou du spam
+- Ratio de stop words : trop peu de "the", "a", "is" = probablement du spam
+- Lignes dupliquées : beaucoup de duplication = boilerplate (menus, footers)
+- Ratio de mots uniques : une faible diversité = contenu répétitif
+
+**Classifieurs plus avancés** :
+- **Perplexity filtering** : un modèle de langue mesure à quel point le texte est "normal". Wikipedia a une basse perplexité. Une page spam a une haute perplexité.
+- **Classifieur de qualité** : entraîner un petit modèle pour distinguer "contenu de haute qualité" (Wikipedia, livres) vs "contenu de basse qualité" (spam, auto-généré)
+
+<Callout type="paper" title="FineWeb : la preuve que la qualité est plus importante que la quantité">
+HuggingFace a publié FineWeb, un dataset filtré de Common Crawl. Ils ont agressivement filtré : 90 milliards de pages originales -> 15 milliards après filtrage (82% jeté).
+
+Résultat : les modèles entraînés sur FineWeb (15B pages, filtrées) performent significativement mieux que les modèles entraînés sur un dataset brut mais plus grand.
+
+Moralité : 15 Go de données propres > 100 Go de données sales.
+</Callout>
+
+### Étape 5 : déduplication
+
+Common Crawl a BEAUCOUP de contenu dupliqué. Des pages miroirs. Du contenu syndiqué (le même article sur 100 blogs différents). Vous avez besoin de nettoyer.
+
+**Déduplication exacte** : calculer un hash SHA-256 de chaque page. Les pages avec le même hash sont identiques.
+
+**Déduplication quasi-exacte** : deux pages sont 99% identiques (juste une ligne différente). C'est plus complexe.
+
+Outils : **MinHash + LSH** (Local Sensitive Hashing) pour trouver efficacement les documents quasi-identiques à grande échelle.
+
+## Alternatives à Common Crawl : quand crawler soi-même
+
+### APIs publiques
+
+Quand elles existent, préférez les APIs :
+- **Wikipedia** : dump complet gratuit et actualisé mensuellement
+- **ArXiv** : tous les articles scientifiques en libre accès
+- **GitHub** : API pour le code source (respectez les licenses)
+- **Reddit** : archives publiques
+- **Stack Overflow** : dump de données public
+
+Ces APIs sont plus propres que du scraping brut. Moins de spam. Structure meilleure.
+
+### Scraping direct
+
+Pour les sources non-couverts par Common Crawl ou les APIs :
+
+**requests + BeautifulSoup** : simple, OK pour les petits volumes
+
+**Scrapy** : framework robuste pour les crawls à grande échelle
+
+**Playwright/Selenium** : si les pages ont besoin de JavaScript (single-page apps)
+
+### Trafilatura
+
+**trafilatura** est l'outil le plus précis pour extraire du texte propre depuis le HTML. Elle utilise :
+- Du ML pour identifier le bloc de contenu principal
+- De la heuristique pour nettoyer
+- Gère les cas difficiles (tables, images, etc.)
+
+## Considérations éthiques et juridiques
+
+### Robots.txt
+
+Les sites web publient un fichier `robots.txt` qui dit aux robots "vous pouvez crawler ces pages, pas celles-là".
+
+C'est une bonne pratique éthique de le respecter. Légalement, ça dépend de la juridiction.
+
+### Droit d'auteur : le champ de bataille
+
+C'est la **vraie question** du web scraping pour l'IA.
+
+**Les faits** :
+- Plusieurs procès en cours : New York Times vs OpenAI, Getty Images vs Stability AI
+- L'UE AI Act impose de la transparence sur les données d'entraînement et permet aux créateurs de demander à être exclu
+- Aux USA, le "fair use" est parfois applicable, parfois pas
+- En Asie, ça varie énormément
+
+**La conclusion** : le cadre juridique **évolue rapidement**. Si vous scrapiez en 2020, c'était plus toléré. En 2025, il y a plus de risque légal.
+
+<Callout type="warning" title="Consultez un juriste avant de large-scale scraper">
+Si vous avez des ambitions commerciales et prévoyez de scraper des milliards de pages pour entraîner un modèle, **consultez un juriste**. Le risque légal est réel, surtout en UE. Vous pouvez aussi faire des partenariats avec les créateurs de contenu pour avoir une licence explicite.
+</Callout>
+
+### Données personnelles : RGPD
+
+Le scraping peut collecter des données personnelles (noms, emails, adresses). Le **RGPD** et d'autres lois imposent des obligations :
+- **Minimisation** : ne collecter que ce qui est nécessaire
+- **PII scrubbing** : supprimer les emails, numéros de téléphone, adresses
+- **Droit à l'oubli** : si quelqu'un demande, vous devez pouvoir supprimer ses données du dataset
+
+### Rate limiting et politesse
+
+- Respectez le serveur : délais entre les requêtes
+- User-Agent descriptif : identifiez votre crawler ("MyCrawler/1.0")
+- Pas de DDoS accidentel : si vous envoyez 1000 requêtes/seconde, le serveur va down
+
+## Bonnes pratiques
+
+- **Documenter la provenance** : pour chaque donnée, tracer son URL, date, licence
+- **Versionner le dataset** : utilisez DVC ou LakeFS pour versioner les données
+- **Reproductibilité** : le pipeline doit être exécutable plusieurs fois et produire le même résultat
+- **Qualité avant quantité** : mieux vaut 10 Go de données propres que 1 To de contenu douteux
+- **Respecter les licenses** : vérifier les conditions d'utilisation de chaque source
+
+## Pourquoi c'est important
+
+80% des données qu'un LLM voit vient du web. La qualité du web scraping détermine la qualité du modèle.
+
+- Mauvais scraping -> modèle avec beaucoup de hallucinations
+- Bon scraping + bon filtrage -> modèle capable et factuel
+
+Les labos qui font du bon scraping (filtrage agressif, déduplication, nettoyage) produisent les meilleurs modèles.
+
+C'est un élément invisible mais fondamental de l'IA moderne.

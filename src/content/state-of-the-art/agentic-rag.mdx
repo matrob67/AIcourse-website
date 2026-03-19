@@ -1,0 +1,108 @@
+---
+title: "Agentic RAG : routing et orchestration"
+description: "L'Agentic RAG donne au LLM le contrôle du pipeline de retrieval : il décide quand chercher, où chercher, et comment combiner les résultats pour des réponses optimales."
+---
+
+## Le problème : le pipeline RAG classique est trop rigide
+
+Vous posez une question. Boom : une recherche vectorielle, puis la génération. C'est mécanique, prévisible... et pas toujours optimal.
+
+Parfois vous besoin de :
+- Chercher en plusieurs étapes (question complexe)
+- Essayer plusieurs sources (doc interne + web + base de données)
+- Reformuler si les résultats sont mauvais
+
+**Agentic RAG** donne au LLM le contrôle. Il devient un chef d'orchestre qui décide dynamiquement : chercher où ? Combien de fois ? Quand s'arrêter ?
+
+<Callout type="info" title="L'analogie : du jukebox à un DJ">
+RAG classique = jukebox : vous appuyez sur un bouton, il joue la chanson. Agentic RAG = DJ : il écoute la salle, change de chanson, mélange des titres en fonction de l'ambiance.
+</Callout>
+
+
+## Patterns courants
+
+### 1. Router RAG : un LLM qui route les questions
+
+```python
+def route_query(question):
+    # Le LLM décide : doc interne ? Web ? Base SQL ?
+    decision = llm.classify(question, options=[
+        "doc_interne",
+        "web_search",
+        "base_sql",
+        "réponse directe"
+    ])
+    return sources[decision].search(question)
+```
+
+Le même LLM choisit la meilleure source pour chaque question.
+
+### 2. Multi-Step RAG : décomposer et chercher plusieurs fois
+
+Question : « Quels concurrents de Mistral ont levé des fonds en 2024 ? »
+
+Au lieu d'une seule recherche, l'agent :
+1. Cherche : « Concurrents de Mistral »
+2. Pour chaque concurrent trouvé, cherche : « Levées de fonds 2024 »
+3. Synthétise les résultats
+
+### 3. Adaptive Retrieval : décider combien chercher
+
+- Question simple → 3 docs suffisent
+- Question complexe → 10+ docs
+- Résultats contradictoires → chercher davantage pour arbitrer
+
+<Callout type="tip" title="Function calling c'est la clé">
+L'Agentic RAG utilise le **function calling** des LLMs. Le retrieval est un outil que le LLM appelle quand il le juge utile, avec les paramètres qu'il choisit.
+</Callout>
+
+## Frameworks
+
+**LlamaIndex** : propose des Query Engines spécialisés
+- Router Engine : dirige vers le bon index
+- Sub-Question Engine : décompose les questions
+- Retry Engine : reformule si les résultats sont mauvais
+
+**LangGraph** : construisez des graphes de décision
+
+```python
+from langgraph.graph import StateGraph
+
+graph = StateGraph(RAGState)
+graph.add_node("retrieve", retrieve_docs)
+graph.add_node("evaluate", check_if_relevant)
+graph.add_node("generate", write_answer)
+
+# Conditionnels : si bon → générer, sinon → reformuler
+graph.add_conditional_edges("evaluate", {
+    "bon": "generate",
+    "mauvais": "reformulate",
+})
+```
+
+## Pattern d'escalade progressive
+
+1. Recherche locale (doc interne)
+2. Si insuffisant → Web
+3. Si insuffisant → Décomposer et multi-recherche
+4. Si suffisant → Avouer l'incapacité
+
+<Callout type="warning" title="Coût vs latence">
+Chaque recherche supplémentaire = tokens supplémentaires = plus cher et plus lent. Une question basique peut passer de 1 recherche à 5. Définissez un budget max d'itérations.
+</Callout>
+
+## Métriques à surveiller
+
+- **Nombre d'étapes** : combien de recherches avant réponse ?
+- **Qualité du routing** : le bon outil est-il sélectionné ?
+- **Latence totale** : tout inclus
+- **Taux d'escalade** : à quelle fréquence passer au plan B ?
+
+## Quand l'utiliser
+
+- **Sources multiples** : doc + web + base de données
+- **Questions complexes** : nécessitant décomposition
+- **Qualité critique** : une mauvaise réponse est pire que pas de réponse
+- **Utilisateurs imprévisibles** : qui posent toutes sortes de questions
+
+Pour du simple (FAQ, corpus unique) : un RAG classique reste plus rapide et fiable.

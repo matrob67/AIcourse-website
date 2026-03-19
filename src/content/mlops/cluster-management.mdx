@@ -1,0 +1,125 @@
+---
+title: "Gérer les clusters : Slurm, Kubernetes et Ray"
+description: "Orchestrer 1000 GPUs : Slurm pour le HPC, Kubernetes pour le cloud, Ray pour le distribué Python."
+---
+
+## Le problème : trop de GPUs, trop de jobs
+
+Un GPU H100 coûte $2-3 l'heure en cloud. Un cluster de 1 000 GPUs inutilisés pendant une heure = $2 000-3 000 perdus. L'objectif : utilisation proche de 100%.
+
+Un **orchestrateur de cluster** agit comme un chef d'orchestre. Vous soumettez les jobs (entraînement, inférence, preprocessing), et l'orchestrateur les assigne intelligemment aux ressources disponibles.
+
+<Callout type="info" title="Coût réel = utilisation">
+Un cluster à 50% d'utilisation coûte deux fois plus cher pour le même travail. L'orchestrateur cherche à écraser ce gaspillage en optimisant l'assignation des ressources.
+</Callout>
+
+## Slurm : le standard HPC depuis 20 ans
+
+**Slurm** gère les clusters du HPC mondial (supercalculateurs, datacenters de recherche). Meta, Google DeepMind l'utilisent pour entraîner leurs modèles géants.
+
+### Architecture simple
+
+- **slurmctld** : le controller central qui décide qui utilise quoi
+- **slurmd** : daemon sur chaque nœud (machine)
+- **slurmdbd** : comptabilité des jobs et ressources
+
+### Les concepts
+
+- **Partition** : un groupe de nœuds (ex: `gpu-h100`, `gpu-a100`, `cpu`)
+- **Job** : une tâche (ex: "entraîne mon modèle")
+- **QOS** : priorités et limites par utilisateur
+- **GRES** : ressources spéciales comme les GPU
+
+Vous écrivez un script qui dit "je veux 4 GPU, 32 GB RAM, 2 heures max". Slurm le met en queue et l'exécute quand les ressources sont libres.
+
+<Callout type="tip" title="Backfill scheduling">
+Slurm a un truc malin : si un gros job attend, il peut lancer des petits jobs dans les "trous" du planning. Si les petits terminent avant que les gros ressources soient libres, tout le monde est content. Ça utilise le cluster mieux.
+</Callout>
+
+### Forces et limites
+
+**Bon pour** : clusters HPC dédiés, gros jobs d'entraînement longs, topo réseau complexe
+
+**Pas bon pour** : microservices, inférence dynamique, scaling élastique du cloud
+
+
+
+## Kubernetes : l'orchestration cloud-native
+
+**Kubernetes** (K8s) c'est le standard pour les conteneurs. Initialement pour les microservices web, mais s'est étendu au ML grâce à des extensions.
+
+### K8s pour le ML
+
+K8s seul ne gère pas les GPU optimalement. Faut ajouter :
+
+- **GPU Operator NVIDIA** : installation et gestion automatique des drivers GPU
+- **Kubeflow** : plateforme ML complète sur K8s
+- **KubeRay** : pour lancer Ray sur K8s
+- **Volcano** : scheduler spécialisé pour les jobs batch ML
+- **Kueue** : files d'attente pour les jobs batch
+
+### Gang Scheduling : problème clé
+
+Pour l'entraînement distribué multi-nœud, **tous les pods doivent démarrer simultanément**. Si seulement un démarre, les autres attendent, deadlock. Volcano et Kueue résolvent ça.
+
+<Callout type="warning" title="K8s c'est complexe pour l'entraînement">
+K8s excelle pour l'inférence (scaling, updates), c'est moins glamour pour l'entraînement distribué. La gestion réseau haute performance (RDMA, InfiniBand), la topologie GPU, et le gang scheduling nécessitent des configs avancées. Pour entraîner, Slurm c'est souvent plus simple.
+</Callout>
+
+### Forces et limites
+
+**Bon pour** : inférence, auto-scaling, rolling updates, ecosystem riche
+
+**Pas bon pour** : entraînement multi-nœud complexe, overhead réseau
+
+## Ray : la façon Python distribuée
+
+**Ray** permet de distribuer du code Python existant sur un cluster avec quasi zéro changements.
+
+### L'idée
+
+Au lieu d'écrire du code distribué complexe, vous écrivez du Python normal :
+
+```python
+def train_model(data):
+    # votre code normal ici
+    return model
+
+# Et au lieu de train_model(data), vous:
+futures = [ray.remote(train_model).remote(chunk) for chunk in data_chunks]
+results = ray.get(futures)
+```
+
+C'est simplement `ray.remote()` qui dit "exécute ça sur le cluster".
+
+### Écosystème Ray AI
+
+- **Ray Train** : entraînement distribué (PyTorch, TensorFlow, HuggingFace)
+- **Ray Serve** : inférence avec batching dynamique
+- **Ray Tune** : cherche d'hyperparamètres distribuée
+- **Ray Data** : preprocessing et streaming distribué
+
+<Callout type="paper" title="Ray en production">
+OpenAI (ChatGPT), Anthropic, Uber, Spotify utilisent Ray. C'est pas juste un truc de research, ça scale pour du vrai.
+</Callout>
+
+### Forces et limites
+
+**Bon pour** : code Python existant, distribué simple, inférence + data processing
+
+**Pas bon pour** : très gros clusters HPC (overhead plus élevé que Slurm)
+
+## Récap : qui pour quoi
+
+| Cas d'usage | Recommandation |
+|---|---|
+| **Cluster GPU dédié on-premise** | Slurm |
+| **Inférence en production** | Kubernetes |
+| **Entraînement cloud distribué** | Ray ou Slurm |
+| **Stack ML complète cloud** | Kubernetes + Kubeflow |
+| **Prototypage distribué** | Ray |
+| **Supercalculateur HPC** | Slurm |
+
+En pratique, les boîtes les plus sérieuses utilisent les trois : Ray pour l'inférence, Slurm pour l'entraînement, orchestré par K8s.
+
+Le choix dépend vraiment de votre setup : on-prem vs cloud, taille du cluster, type de jobs. Pas de réponse universelle.

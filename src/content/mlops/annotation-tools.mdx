@@ -1,0 +1,115 @@
+---
+title: "Outils d'annotation : Label Studio, Prodigy et Argilla"
+description: "Annoter des données pour le ML : Label Studio, Prodigy, Argilla. Choisir le bon outil pour NLP, image, LLM feedback."
+---
+
+## Pourquoi annoter ? (spoiler: c'est coûteux mais indispensable)
+
+L'annotation est juste : prendre des données brutes et les labeler. "Ceci est un chat", "ce sentiment est positif", "cette image contient une voiture".
+
+C'est souvent l'étape la plus coûteuse et la plus chiante d'un projet ML. Mais c'est aussi l'étape la plus importante : **un modèle ne peut pas être meilleur que ses données d'entraînement**. Des mauvaises étiquettes = un mauvais modèle, point barre.
+
+<Callout type="info" title="Le coût vrai">
+Annoter 2 secondes par exemple (simple) vs 5 minutes par exemple (complexe, avec expertise). À 10 dollars l'heure, ça va de $0.05 par exemple à $1 par exemple. Pour 100 000 examples, ça va de $5 000 à $100 000. Oui, vraiment.
+</Callout>
+
+
+
+## Label Studio : le couteau suisse
+
+**Label Studio** c'est l'outil open source le plus populaire. Il fait à peu près tout : texte, images, vidéo, audio. Vous configurez l'interface en XML et vous êtes prêt.
+
+### Ce qu'il fait bien
+
+- **Tous les types de données** : annotez des images (bounding boxes, segmentation), du texte (NER, classification), de l'audio
+- **Interface configurable** : vous spécifiez exactement ce que l'annotateur voit
+- **ML backend** : pré-annoter avec un modèle, l'humain corrige. Ça accélère de 5x.
+- **Workflows** : assignez les tâches, gérez les reviews, mesurez l'accord entre annotateurs
+- **Import/Export** : COCO, VOC, CoNLL, JSON, etc.
+
+### Comment ça marche
+
+Un serveur Python, une base de données (PostgreSQL ou SQLite), du stockage pour les fichiers (S3, GCS ou local). Simple à deployer.
+
+<Callout type="tip" title="La pré-annotation change le jeu">
+Prendre un modèle passable, faire générer des annotations, et demander à l'humain de corriger : c'est 2-5x plus rapide que partir de zéro. Label Studio a un système pour ça. Même un modèle pas terrible aide énormément.
+</Callout>
+
+### Forces et limites
+
+**Bon pour** : projets variés, tous types de données, open source
+
+**Pas bon pour** : si l'interface est lente sur les gros projets, gestion des workflows basique, pas d'active learning natif
+
+## Prodigy : l'annotation au sprint
+
+**Prodigy** est pour les gens pressés. C'est orienté **annotation rapide**. L'interface est minimaliste : souvent, l'annotateur fait juste "accepter" ou "rejeter" une suggestion.
+
+### Le truc malin : l'active learning
+
+Au lieu de vous faire annoter 10 000 examples aléatoires, Prodigy sélectionne les cas où le modèle hésite le plus. Résultat : vous annotez 2 000 examples stratégiquement choisis et ça vaut 10 000 aléatoires.
+
+Prodigy entraîne un modèle, l'utilise pour sélectionner les plus informatifs, vous les montrez à l'humain, réentraîne, recommence. C'est itératif et ça converge vite.
+
+### Comment c'est organisé
+
+Tout en ligne de commande. Vous définissez des "recettes" (templates pour NER, classification, etc.), vous les lancez. Les résultats vont dans une base de données.
+
+<Callout type="paper" title="Active learning en nombre">
+L'active learning peut réduire vos besoins d'annotation de 50-80%. Au lieu de 10 000, vous annotez 2 000. Ça compte financièrement.
+</Callout>
+
+### Forces et limites
+
+**Bon pour** : NLP, vitesse d'annotation, projects petits/moyens
+
+**Pas bon pour** : payant (à partir de ~$390), mono-utilisateur, pas de version web riche, principal sur le texte
+
+## Argilla : l'ère des LLM
+
+**Argilla** est conçu pour l'époque des LLM. Vous avez un LLM, vous voulez du feedback humain dessus. Argilla facilite ça.
+
+### Ce qu'il fait
+
+- **Evaluation de LLM** : thumbs up/down, rating, correction des réponses
+- **Intégration HuggingFace** : direct avec le Hub
+- **Recherche sémantique** : trouvez vos données par similarité
+- **Suggestions ML** : pré-annoter avec des modèles zéro-shot
+- **Multi-annotateurs** : mesurez l'accord inter-annotateurs
+
+### Cas d'usage LLM
+
+Vous générez des données synthétiques (distilabel + LLM), Argilla les laisse les humains valider et corriger, vous avez un dataset de qualité pour le fine-tuning. C'est le workflow du présent.
+
+<Callout type="tip" title="Argilla + distilabel">
+Workflow complet : distilabel génère, Argilla valide, vous entraînez. C'est l'usine moderne des données d'entraînement.
+</Callout>
+
+### Forces et limites
+
+**Bon pour** : LLM feedback, fine-tuning data curation, open source
+
+**Pas bon pour** : pas d'image segmentation, orienté texte/NLP, communauté plus petite
+
+## Comparaison en trois lignes
+
+| Outil | Pour quoi | Coût |
+|---|---|---|
+| **Label Studio** | Tous types de données, tous cas | Gratuit |
+| **Prodigy** | NLP rapide, active learning | ~$390 (license) |
+| **Argilla** | LLM feedback, fine-tuning | Gratuit |
+
+<Callout type="warning" title="La qualité, pas l'outil">
+Vous pouvez avoir le meilleur outil et des mauvaises annotations. Ce qui compte vraiment : des **guidelines claires** (que veut dire "positif" exactement ?), la **formation des annotateurs**, mesurer l'accord inter-annotateurs (Cohen's Kappa), et **auditer régulièrement**. Un mauvais processus avec un bon outil = données pourries.
+</Callout>
+
+## Comment faire l'annotation bien
+
+- **Guidelines écrites**, avec des exemples pour chaque cas limite
+- **Accord inter-annotateurs** : si deux annotateurs ne s'accordent pas sur 20% des cas, c'est que vos guidelines sont floues
+- **Pilot petit** : annotez 200 examples pour valider le processus avant de scaler
+- **Utiliser la pré-annotation** : même un modèle pourri accélère tout
+- **Itérer** : affinez les guidelines et le processus au fur et à mesure
+- **Documenter** : chaque décision limite doit être documentée
+
+C'est un métier à part entière. Les meilleures équipes ML ont des gens dedié à la qualité des données.

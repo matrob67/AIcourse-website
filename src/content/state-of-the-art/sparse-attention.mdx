@@ -1,0 +1,91 @@
+---
+title: "Attention sparse : quand calculer juste l'attention pertinente"
+description: "Attention sparse : au lieu de calculer l'attention avec tous les tokens, connectez juste les vraiment importants. Longformer, BigBird expliqués."
+---
+
+
+
+## L'observation : la plupart de l'attention est du zéro
+
+Les chercheurs ont regardé les matrices d'attention des Transformers entraînés. Surprise : 90-95% des valeurs sont proches de zéro.
+
+Chaque token assiste vraiment à seulement 5-10% des autres tokens. Le reste du calcul ? Gaspillé.
+
+## L'idée : connectez stratégiquement
+
+Au lieu de `O(L²)` paires calculées, calculez juste les pertinentes.
+
+Patterns observés :
+- **Local** : un token regarde ses voisins (les tokens proches)
+- **Global** : certains tokens spéciaux (CLS, SEP) peuvent voir tout
+- **Aléatoire** : quelques connexions longue-distance aléatoires pour la communication
+
+## Longformer : trois types d'attention
+
+**Attention locale (sliding window)** : fenêtre de 512 tokens. Chaque token voit ses 256 voisins avant et après.
+
+**Attention diluée (dilated)** : en plus de la fenêtre, prenez tous les 8è tokens. Couvre plus loin sans coûter cher.
+
+**Attention globale** : certains tokens (CLS, question) ont une attention complète.
+
+Résultat : complexité `O(L × (W + G))` où W = taille fenêtre, G = tokens globaux. Si les deux sont constants → `O(L)`.
+
+<Callout type="paper" title="Résultats Longformer">
+Longformer traite 4K tokens (8x plus que BERT) avec une mémoire comparable. Sur les tâches de longs documents (TriviaQA), il écrase les baselines.
+</Callout>
+
+## BigBird : théorie rigoureuse
+
+BigBird formalize ça avec la théorie des graphes aléatoires.
+
+Trois composants :
+1. **Local** : fenêtre de taille W
+2. **Global** : tokens désignés qui assistent à tout
+3. **Aléatoire** : chaque token assiste à R tokens tirés au hasard
+
+Théorème clé : cette combinaison a les mêmes propriétés théoriques que l'attention complète. Le graphe est un "expander graph", garantissant que l'information se propage vite.
+
+### BigBird vs Longformer
+
+| Aspect | Longformer | BigBird |
+|--------|-----------|---------|
+| Local | Oui | Oui |
+| Global | Tokens fix | Tokens fix |
+| Aléatoire | Non | **Oui** |
+| Diluée | Oui | Non |
+| Théorie | Empirique | Rigoureuse (expanders) |
+
+<Callout type="tip" title="L'aléatoire aide">
+Ajouter du hasard semble mauvais mais c'est intelligent : ça garantit que chaque token peut atteindre tout autre token en peu de sauts. L'aléatoire distribue les chemins.
+</Callout>
+
+## Autres approches
+
+**Sparse Transformer (OpenAI)** : local + strided (tous les √L tokens). `O(L√L)`.
+
+**ETC** : tokens auxiliaires "globaux" qui résument des segments et facilitent la communication.
+
+**LongT5** : attention locale + transient global attention avec des résumés dynamiques.
+
+## Le gros problème : implémentation GPU
+
+Theorically, l'attention sparse devrait être super rapide. En pratique ?
+
+**Patterns irréguliers** = accès mémoire chaotiques = les GPU les détestent. Flash Attention sur attention dense peut être plus rapide que sparse jusqu'à 16K tokens !
+
+<Callout type="warning" title="La brèche théorie-pratique">
+Les GPU sont optimisées pour les opérations denses et régulières. L'attention sparse fragmente les opérations. Sans kernels spécialisés, ça peut être PLUS lent que dense.
+</Callout>
+
+## Pourquoi ça ne domine plus
+
+Avec Flash Attention (attention dense hyper-optimisée jusqu'à 32K tokens) et les SSM (complexité linéaire native), l'attention sparse a perdu de la pertinence pour les LLM.
+
+Niches restantes :
+- **Encodeurs pour docs longs** : classification de documents énormes
+- **Vision** : patterns structurés en 2D
+- **Domaines spécialisés** : protéines, molécules, graphes
+
+<Callout type="info" title="Héritage">
+L'attention sparse a montré qu'on n'a pas besoin de matrice complète. Cette intuition a pavé la voie à Flash Attention (pas de matrix, juste des blocs) et SSM (linear attention alias attention avec mémoire fixe).
+</Callout>

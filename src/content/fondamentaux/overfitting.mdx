@@ -1,0 +1,216 @@
+---
+title: "Overfitting et underfitting : diagnostiquer et corriger"
+description: "Pourquoi ton modèle échoue : trop simple ou trop mémorisé ? Comment reconnaître et fixer chaque cas."
+---
+
+## Introduction : Deux façons d'échouer
+
+Ton modèle peut échouer de **deux façons complètement opposées**.
+
+**Underfitting** : le modèle est trop simple pour les données. Il ne capture pas les patterns vrais. Erreur d'entraînement **élevée**.
+
+**Overfitting** : le modèle est trop complexe. Il mémorise le bruit et les spécificités de l'entraînement. Erreur d'entraînement **basse** mais erreur de validation **très haute**.
+
+C'est le compromis **biais-variance** : la fondation de tout apprentissage statistique.
+
+
+
+## Biais vs Variance
+
+### Biais
+
+**Erreur systématique** du modèle. Il fait des hypothèses stupides et s'y tient.
+
+Exemple : tu prédis que tous les appartements parisiens coûtent 400k euros (ta moyenne), peu importe la surface. C'est biaisé : tu rate systématiquement.
+
+Cause : model trop simple pour les données.
+
+### Variance
+
+**Sensibilité aux petites variations** dans les données. Le modèle change drastiquement si tu changes un peu les données.
+
+Exemple : un arbre de décision très profond apprend les bruits individuels. Change une donnée d'entraînement = arbre complètement différent.
+
+Cause : modèle trop complexe, surapprenez.
+
+### La décomposition d'erreur
+
+```
+Erreur totale = Biais² + Variance + Bruit irréductible
+```
+
+Idéal : petit biais + petite variance.
+
+Underfitting : gros biais + petite variance (systématiquement faux mais stable).
+
+Overfitting : petit biais + grosse variance (adapté à l'entraînement mais imprévisible).
+
+<Callout type="info" title="Analogie du tireur à la cible">
+Gros biais, petite variance = tous les tirs à gauche (groupés mais mal placés).
+Petit biais, grosse variance = tirs éparpillés autour de la cible.
+Idéal = tous les tirs au centre.
+</Callout>
+
+## Reconnaître l'underfitting
+
+**Signes** :
+- Erreur d'entraînement élevée. Le modèle n'arrive même pas à bien apprendre ses données.
+- Erreur de validation similaire à l'erreur d'entraînement. Pas d'écart.
+- Mauvaises performances globales. 50% d'accuracy sur une classification à 2 classes ?
+
+**Solutions** :
+- Augmente la complexité : plus de couches, plus de neurones
+- Ajoute des features plus riches
+- Réduis la régularisation (les "freins" sur la complexité)
+- Entraîne plus longtemps
+- Essaie une meilleure architecture
+
+## Reconnaître l'overfitting
+
+**Signes** :
+- Grand écart entre erreur d'entraînement et validation. Train = 2%, Validation = 15%.
+- Erreur de validation qui remonte au fil des epochs. Au début elle descend, puis monte.
+- Parfait en labo, nul en production. Tes chiffres sont excellents mais l'utilisateur voit un truc cassé.
+
+<Callout type="warning" title="Un peu d'overfitting est normal et souhaitable">
+Zéro overfitting = probablement underfitting. Tu veux un **petit** overfitting : assez complexe pour les vrais patterns, pas trop pour le bruit. C'est un **art**, pas une science.
+</Callout>
+
+## Les courbes d'apprentissage : ton meilleur outil de diagnostic
+
+Trace deux courbes : erreur d'entraînement et erreur de validation au fil des epochs.
+
+
+
+### Underfitting
+
+Les deux courbes restent hautes et proche. Ajouter plus de données ? Ça aide pas (il n'y a pas assez de capacité pour apprendre).
+
+### Overfitting
+
+Erreur train descend (le modèle apprend). Erreur validation remonte (surapprenez du bruit). Écart croissant = signal classique.
+
+### Idéal
+
+Les deux courbes descendent ensemble et se stabilisent bas, avec un petit écart (0.5-5% max).
+
+## Train/Validation/Test : les trois ensembles sacrés
+
+Jamais entraîner et évaluer sur les mêmes données. C'est du triche.
+
+### Training Set (70-80%)
+
+Données sur lesquelles le modèle apprend. Poids sont ajustés sur ces données.
+
+### Validation Set (10-15%)
+
+Données que tu regardes **pendant** le développement. Sert à :
+- Choisir les hyperparamètres
+- Sélectionner l'architecture
+- Décider quand arrêter l'entraînement (early stopping)
+
+Le modèle ne s'entraîne pas dessus, tu les **observes** juste.
+
+### Test Set (10-15%)
+
+Données que tu **ne touches qu'une seule fois** à la fin. C'est ton estimé honnête de vraie performance. Sacré. Jamais pour choisir des hyperparamètres.
+
+<Callout type="warning" title="Pourquoi trois et pas deux ?">
+Si tu utilises le même ensemble pour choisir les hyperparamètres ET estimer la performance, tu vas biaisé optimiste. Tu finis par choisir le modèle qui gagne sur *ce* ensemble, pas le meilleur. Le test set intact donne une estimé honnête.
+</Callout>
+
+## Cross-validation : utiliser 100% des données
+
+Quand tu as peu de données (< 10k), les splits fixes gaspillent. Cross-validation utilise tout.
+
+**k-fold cross-validation** :
+1. Divise en k parts (5 ou 10 typiquement)
+2. Pour chaque part i : entraîne sur les k-1 autres, évalue sur i
+3. Performance finale = moyenne des k évaluations
+
+Exemple : 5-fold
+```
+Fold 1 : entraîne sur 2-5, évalue sur 1
+Fold 2 : entraîne sur 1,3-5, évalue sur 2
+...
+Performance = moyenne des 5 résultats
+```
+
+Avantage : chaque donnée est utilisée pour apprendre (k-1 fois) et pour l'évaluation (1 fois).
+
+Inconvénient : k fois plus lent.
+
+## Solutions pratiques contre l'overfitting
+
+### 1. Plus de données
+
+La meilleure solution si tu peux. Plus de diversité rend la mémorisation impossible.
+
+### 2. Data Augmentation
+
+Crée des variantes de tes données sans réellement créer de nouvelles données vraies.
+
+**Images** : rotation, flip horizontal, zoom, recadrage aléatoire, bruits, changements de luminosité.
+
+**Texte** : paraphrase, substitution de mots, traduction puis retraduction (pour garder le sens).
+
+**Tableaux** : ajoute du bruit gaussien, utilise SMOTE pour classes rares.
+
+Augmentation intelligente (RandAugment, AutoAugment) choisit automatiquement les meilleures augmentations.
+
+### 3. Régularisation
+
+Ajoute des pénalités qui forcent le modèle à rester simple.
+
+**L2 (weight decay)** : pénalise les gros poids.
+
+**Dropout** : désactive aléatoirement des neurones.
+
+**Early stopping** : arrête avant que le modèle commence à surapprenez.
+
+(Détails dans la section suivante.)
+
+### 4. Early Stopping
+
+Super simple et super efficace. Surveille l'erreur de validation pendant l'entraînement. Dès qu'elle arrête de descendre (ou commence à remonter), arrête et garde les meilleurs poids.
+
+```
+Epoch 1-10 : erreur validation baisse (garde les poids)
+Epoch 11-15 : erreur validation remonte (stop, utilise poids epoch 10)
+```
+
+Zéro surcoût computationnel. Fait presque toujours du bien.
+
+### 5. Réduire la complexité
+
+Moins de couches, moins de neurones, modèle plus simple.
+
+Attention : trop simple = underfitting.
+
+### 6. Ensembles
+
+Plusieurs modèles, en voting ou stacking. Ça réduit la variance automatiquement.
+
+Exemple : 10 arbres de décision plutôt qu'1. La variation aléatoire de l'un est annulée par les autres.
+
+## La double descente : contre-intuitif
+
+Recherche récente : très gros modèles (sur-paramétrés) peuvent généraliser **mieux** que des modèles de taille intermédiaire. Phénomène de "double descente" :
+
+
+
+L'erreur augmente puis diminue à nouveau. Explique pourquoi les GPT géants (7B, 13B paramètres) marchent si bien malgré leur énorme sur-paramétrisation.
+
+## Checklist diagnostique rapide
+
+1. Trace erreur train vs erreur validation
+2. Écart train/validation grand ? -> **Overfitting**. Régularise, ajoute données, réduire complexité
+3. Erreur train élevée ? -> **Underfitting**. Augmente capacité, entraîne plus
+4. Les deux basses et proches ? -> **Bon ajustement**. Valide sur test set
+5. Vérifie tes données : erreurs d'étiquetage, outliers bizarres créent un plafond d'erreur
+
+Rapidement diagnostiquer le problème = compétence qui sépare les praticiens expérimentés des débutants.
+
+## Pourquoi c'est important
+
+L'overfitting et l'underfitting sont les deux principaux ennemis du ML appliqué. Tant que tu ne maîtrise pas comment les reconnaître et les fixer, tu construit en aveugle. C'est le plus important après d'avoir des données.

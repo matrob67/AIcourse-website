@@ -1,0 +1,137 @@
+---
+title: "Architectures hybrides : Attention + SSM"
+description: "Panorama des architectures hybrides combinant mécanismes d'attention et State Space Models pour optimiser le ratio performance/efficacité des modèles de langage."
+---
+
+## Ni l'un, ni l'autre : les deux à la fois
+
+Un chef cuisinier qui ne connaît que les crudités rate tous les plats chauds. Un chef qui ne fait que frire rate toutes les salades. Le chef vraiment polyvalent sait quand utiliser chaque technique.
+
+C'est exactement la philosophie des **architectures hybrides** : l'attention pour ce qu'elle fait mieux qu'aucune autre technique, les SSM (Mamba, RWKV...) pour ce qu'ils font mieux que l'attention.
+
+Ni l'un, ni l'autre seul n'est optimal. Les deux ensemble, au bon endroit, donnent le meilleur résultat.
+
+## Pourquoi l'hybridation est nécessaire
+
+**Les Transformers purs** excellent en recall précis (retrouver une info exacte dans le contexte) et en few-shot learning (apprendre d'exemples dans le prompt). Mais leur KV cache explose quadratiquement, et la mémoire devient limitante à partir de quelques dizaines de milliers de tokens.
+
+**Les SSM purs** (Mamba, RWKV, RetNet) offrent une inférence à coût constant et une mémoire fixe. Mais ils compriment l'historique avec perte — difficile de retrouver une information précise vue loin dans le contexte.
+
+<Callout type="info" title="Le principe directeur">
+L'attention est un outil puissant mais coûteux — à utiliser avec parcimonie pour les opérations qui en ont vraiment besoin. Les SSM sont efficaces et scalables — à utiliser pour la majorité du traitement séquentiel courant. La question clé : où placer les couches d'attention, et combien en mettre ?
+</Callout>
+
+
+## Les architectures hybrides majeures
+
+### Jamba (AI21 Labs)
+
+Jamba est le premier modèle hybride SSM+Attention+MoE à grande échelle, publié par AI21 Labs.
+
+Son architecture alterne des blocs Mamba et des blocs d'attention avec un **ratio de 7:1** (7 couches Mamba pour 1 couche d'attention). Certaines couches intègrent aussi des Mixture of Experts pour encore plus d'efficacité.
+
+- **Contexte** : 256 000 tokens efficacement
+- **KV cache** : réduit de ~80% (seules les couches d'attention contribuent)
+- **Paramètres** : 52B total, ~12B actifs via MoE
+- **Performance** : comparable aux Transformers MoE de taille similaire
+
+### Griffin et RecurrentGemma (Google)
+
+Google a proposé **Griffin**, qui combine des couches de récurrence linéaire appelées **RG-LRU** (Real-Gated Linear Recurrent Unit) avec de l'**attention locale** (fenêtre limitée à 2 048 tokens).
+
+Le RG-LRU est plus simple que Mamba : une récurrence linéaire avec gating, sans la complexité du scan sélectif. Moins expressif, mais plus rapide.
+
+<Callout type="paper" title="L'insight de Griffin">
+Griffin montre qu'une attention **locale** (fenêtre de 2 048 tokens) combinée avec des couches récurrentes est aussi performante qu'une attention globale sur la majorité des benchmarks, tout en étant beaucoup plus efficace. L'attention globale est souvent superflue quand un mécanisme récurrent gère les dépendances à long terme. On n'a pas besoin de voir toute la bibliothèque pour comprendre la phrase qu'on est en train de lire.
+</Callout>
+
+**RecurrentGemma** est l'instanciation officielle de Griffin par Google, publiée en open-source en versions 2B et 9B paramètres.
+
+### Zamba (Zyphra)
+
+Zamba prend une approche originale : davantage de couches d'attention, mais les **couches d'attention partagent leurs poids** entre elles. Une seule matrice d'attention est réutilisée à plusieurs endroits dans le réseau, réduisant fortement le nombre de paramètres.
+
+Les couches Mamba intercalées traitent les représentations entre ces couches d'attention partagées. Bonne efficacité paramétrique pour les modèles de petite taille.
+
+### StripedHyena (Together AI)
+
+StripedHyena alterne des couches Hyena (convolutions longues) avec des couches d'attention standard. Preuve que le principe hybride n'est pas limité aux SSM — n'importe quel mécanisme sous-quadratique peut être combiné avec l'attention.
+
+### Samba (Microsoft)
+
+Samba combine Mamba avec du **Sliding Window Attention** (attention à fenêtre glissante) dans un arrangement intercalé, optimisé pour l'efficacité sur les séquences de longueur variable. L'attention locale complète la récurrence Mamba sans les contraintes d'un KV cache global.
+
+## Questions clés de conception hybride
+
+### Le placement des couches d'attention
+
+Où mettre les précieuses couches d'attention ? La recherche n'a pas encore de réponse définitive, mais des tendances émergent :
+
+- **Régulier** : une couche d'attention toutes les N couches SSM (Jamba, ratio 7:1)
+- **Début et fin** : plus d'attention dans les premières et dernières couches du réseau
+- **Adaptatif** : déterminé par recherche d'architecture automatique (NAS)
+
+<Callout type="tip" title="Ce que suggèrent les études empiriques">
+Placer les couches d'attention de manière **régulière** dans le réseau, avec un ratio entre 1:4 et 1:8 (une couche attention pour 4 à 8 couches SSM), offre un bon compromis. Les études suggèrent que les premières et dernières couches bénéficient davantage de l'attention que les couches du milieu.
+</Callout>
+
+### Attention globale ou locale dans l'hybride ?
+
+Dans un contexte hybride, les couches SSM gèrent déjà les dépendances à long terme. L'attention n'a donc pas nécessairement besoin d'être globale.
+
+| Type d'attention | Portée | KV cache | Usage typique |
+|-----------------|--------|----------|---------------|
+| Globale | Toute la séquence | O(L) | Recall à très longue distance |
+| Locale (fenêtre) | W derniers tokens | O(W) | Interactions locales précises |
+| Diluée | Positions espacées | O(L/k) | Couverture large à faible coût |
+
+Griffin démontre que l'attention locale (fenêtre de 2 048 tokens) suffit dans la majorité des cas quand les SSM gèrent le long terme.
+
+### La triple combinaison MoE + SSM + Attention
+
+Jamba prouve que les trois technologies — MoE, SSM, Attention — sont **compatibles et complémentaires** :
+
+- Les **SSM** réduisent le coût computationnel par rapport à l'attention pure
+- L'**attention** préserve les capacités de recall et de few-shot learning
+- Les **MoE** augmentent la capacité du modèle sans augmenter le coût par token
+
+Chaque technique adresse un aspect différent de l'efficacité.
+
+## Analyse des compromis
+
+### Impact sur la mémoire d'inférence
+
+| Architecture | KV cache | Taille pour 100K tokens, 32 couches, d=4096 |
+|-------------|----------|----------------------------------------------|
+| Transformer pur | Toutes les couches | ~100 GB |
+| Hybride 7:1 | 1/8 des couches | ~12,5 GB |
+| SSM pur | Aucun | 0 GB (état fixe ~quelques MB) |
+
+La réduction de 8x du KV cache est transformatrice pour les déploiements à large contexte.
+
+<Callout type="warning" title="Le coût caché de l'état SSM">
+Les couches SSM ne nécessitent pas de KV cache mais maintiennent un état caché. Pour Mamba, cet état fait N × d par couche. Pour RetNet, c'est d × d par tête. Ces états sont généralement bien plus compacts que le KV cache, mais ne sont pas négligeables — surtout si l'état est matriciel (RetNet) ou si on a beaucoup de couches.
+</Callout>
+
+### Impact sur la qualité du modèle
+
+Les résultats empiriques montrent que les hybrides **préservent l'essentiel des capacités des Transformers purs** :
+
+- **Perplexité** : comparable aux Transformers de même taille
+- **Recall** : légère dégradation sur le recall exact à très longue distance
+- **Few-shot learning** : préservé grâce aux couches d'attention
+- **Séquences très longues** : supérieur aux Transformers purs grâce aux couches SSM
+
+## Les tendances émergentes
+
+### Hybridation adaptative
+
+Des recherches explorent des architectures qui **choisissent dynamiquement** entre attention et SSM selon la nature du token courant. L'idée : allouer plus de calcul attentionnel aux tokens qui en ont besoin (termes complexes, références de rappel) et utiliser les SSM pour les tokens courants.
+
+### Unification théorique
+
+Le framework SSD de Mamba-2 suggère qu'attention et SSM sont des cas spéciaux d'un mécanisme plus général — une matrice semi-séparable paramétrisée différemment. Les futures architectures pourraient exploiter un **opérateur unifié** qui s'adapte dynamiquement sur ce spectre.
+
+<Callout type="info" title="La convergence industrielle">
+On observe une convergence dans l'industrie vers les architectures hybrides. Les modèles de prochaine génération de la plupart des grands laboratoires explorent activement les combinaisons SSM+Attention. Les architectures hybrides ne sont pas un compromis — c'est une synthèse. Elles offrent le meilleur des deux mondes : l'efficacité des SSM pour le traitement séquentiel courant et la puissance de l'attention pour les opérations critiques.
+</Callout>

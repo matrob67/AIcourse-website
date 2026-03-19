@@ -1,0 +1,138 @@
+---
+title: "Variational Autoencoders (VAE)"
+description: "Les autoencoders variationnels, le reparameterization trick, la fonction de perte ELBO, et comment les VAE permettent la génération de nouvelles données."
+---
+
+## Du classique au probabiliste
+
+Autoencoder classique = "je compresse et je reconstruit". Mais l'espace latent ? Chaotique. Deux z proches ne font pas x similaires. Et tu ne peux pas générer en échantillonnant z aléatoire.
+
+**VAE** (Kingma et Welling 2013) : ajoute une **structure probabiliste**. L'encodeur produit pas un z, mais une **distribution** sur z.
+
+<ArxivLink id="1312.6114" title="Auto-Encoding Variational Bayes" />
+
+
+
+## Intuition : modèle génératif probabiliste
+
+VAE = pas déterministe, probabiliste.
+
+Processus génération :
+1. Échantillonner z ~ N(0, I) (gaussienne standard)
+2. Générer x ~ p(x | z) via le décodeur
+
+L'objectif : apprendre un décodeur qui, partant de z, produit des x réalistes.
+
+### Le rôle de l'encodeur
+
+L'encodeur aproxime la **postérieure** p(z | x). Dire "vu cette image, quelle distribution de z l'a générée ?" Comme l'inverse : "vu l'image, recréer le processus génératif".
+
+Encodeur produit pas z, mais **paramètres d'une distribution** :
+```
+q(z | x) = N(mu(x), sigma^2(x))
+```
+
+Vecteur de moyennes, vecteur de variances. Chaque image → sa propre distribution sur z.
+
+
+
+<Callout type="info" title="Pourquoi distribu">
+Distributions structurent l'espace latent. Images similaires → distributions chevauchantes → z proches. Régions intermédiaires = données intermédiaires valides. Permet génération et interpolation. C'est ça qui magique.
+</Callout>
+
+## Le problème du gradient : reparameterization trick
+
+### Pourquoi c'est hard
+
+Pendant entraînement, tu dois échantillonner z ~ N(mu, sigma^2). Mais l'échantillonnage est **stochastique, non-différentiable**. Tu ne peux pas faire backprop à travers un tirage aléatoire !
+
+### La solution : externaliser l'aléa
+
+Au lieu de z ~ N(mu, sigma^2), tu fais :
+```
+z = mu + sigma * epsilon,  où epsilon ~ N(0, I)
+```
+
+epsilon = aléa pur, indépendant. z = transformation **déterministe** de mu, sigma, epsilon. Gradient coule à travers mu et sigma. L'aléa est "externalisé".
+
+<Callout type="tip" title="C'est juste du reparamétrisation">
+Mathématiquement équivalent à la distribution originale. Mais numériquement ? Différentiable. C'est comment tu peux entraîner des VAE avec SGD. Sans ça, il faudrait des estimateurs gradients bizarres et lents.
+</Callout>
+
+## La perte ELBO : le cœur
+
+### Qu'est-ce qu'on optimise ?
+
+Maximiser log p(x) (vraisemblance des données). Impossible analytiquement. À la place : optimiser une **borne inférieure** = **ELBO** (Evidence Lower Bound).
+
+```
+ELBO = E_q[log p(x | z)] - KL(q(z | x) || p(z))
+```
+
+Ou minimiser la loss :
+```
+L = -E_q[log p(x | z)] + KL(q(z | x) || p(z))
+```
+
+### Les deux termes
+
+**Terme 1 : Reconstruction** -E_q[log p(x | z)]
+
+Qualité de reconstruction. En pratique : MSE ou BCE (même que autoencoders classiques), moyenné sur plusieurs z échantillonnés. Encourage : "encode assez d'info pour reconstruire".
+
+**Terme 2 : Régularisation (KL divergence)** KL(q(z | x) || p(z))
+
+Distance entre q(z | x) appris et p(z) = N(0, I) prior. Force : "reste proche d'une gaussienne standard". Structure l'espace.
+
+Pour gaussiennes, forme analytique simple :
+```
+KL = -0.5 * somme_j (1 + log(sigma_j^2) - mu_j^2 - sigma_j^2)
+```
+
+<Callout type="info" title="La tension">
+Reconstruction veut : codes précis et informatifs. KL veut : codes lisses et réguliers. Entraînement = équilibre. Bonne recon + espace bien structuré.
+</Callout>
+
+## Problème : posterior collapse
+
+### Ça peut dérailler
+
+Parfois, le modèle apprend à **ignorer z**. Décodeur génère les données seules, z unused. Distribution q s'effondre vers p(z) = N(0, I). KL → 0. Meh.
+
+### Solutions
+
+- **KL annealing** : augmente progressivement le poids de KL (commence à 0)
+- **Free bits** : impose un minimum KL par dimension
+- **beta-VAE** : poids beta devant KL (beta < 1 = recon, beta > 1 = structure)
+- **Décodeur faible** : si décodeur trop puissant (autorégressif massif), il peut ignorer z
+
+## Génération et exploration
+
+### Générer nouvelles données
+
+1. Échantillonner z ~ N(0, I)
+2. Passer dans décodeur : x = decoder(z)
+
+KL régularise que le prior couvre l'espace, donc z aléatoire → x cohérent.
+
+### Interpolation
+
+1. Encoder deux images : z_1 = mu(x_1), z_2 = mu(x_2)
+2. Interpoler : z_alpha = alpha * z_1 + (1 - alpha) * z_2
+3. Décoder : decoder(z_alpha)
+
+Transitions lisses et sémantiques. Prouve que VAE apprend une représentation continue.
+
+### Arithmétique latente
+
+Comme les word embeddings : z_smile - z_neutral + z_autre_neutral ≈ z_autre_smile
+
+Pas garanti, mais parfois marche. Espace latent a structure sémantique.
+
+<Callout type="paper" title="Extensions">
+**Conditional VAE (CVAE)** : conditionne sur une classe ou label. **VQ-VAE** : espace latent discret (base de DALL-E). **Hierarchical VAE** : variables latentes multi-échelles. Innovations sur innovations.
+</Callout>
+
+## Résumé final
+
+VAE = autoencoder + probabilités. Encodeur produit distributions, pas points. Reparameterization trick rend ça trainable. ELBO = recon + structure. Permet génération réelle et interpolation. Limite : recons flous (optimise pixel par pixel). Les modèles de diffusion ont résolu ça en sacrifiant la vitesse (mieux la qualité). Fondateur quand même.

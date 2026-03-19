@@ -1,0 +1,173 @@
+---
+title: "Continual Pre-training et adaptation de domaine"
+description: "Techniques de continual pre-training pour adapter les LLM à de nouveaux domaines : stratégies d'entraînement, prévention de l'oubli catastrophique et adaptation efficace."
+---
+
+## L'idée : tu n'as pas besoin de repartir de zéro
+
+Un LLM généraliste entraîné sur l'internet entier a des connaissances superficielles dans les domaines spécialisés. Tu veux un modèle médical, juridique, ou financial expert.
+
+Options :
+1. **Pré-entraîner from scratch** : très cher (100K+ GPU-heures)
+2. **Continual pre-training (CPT)** : reprendre un modèle existant sur des données domaine. 10-100x moins cher.
+
+CPT est le chemin pragmatique : tu pars d'une fondation forte et l'affines sur un domaine.
+
+## Motivations pour CPT
+
+### Adaptation de domaine
+
+Un modèle généraliste se désangage rapidement en dehors de ses domaines de pré-entraînement. CPT l'enracine dans une spécialité.
+
+Exemples réels :
+
+| Modèle | Domaine | Budget CPT | Gain benchmark |
+|--------|---------|-----------|-----------------|
+| Code LLaMA | Code | 500B tokens | +30% sur HumanEval |
+| BioMistral | Biomédical | 100B tokens | +25% sur MedQA |
+| SaulLM | Droit | 200B tokens | +40% sur benchmark légal |
+
+### Mise à jour de connaissances
+
+Les LLM ont une date limite d'entraînement (knowledge cutoff). Tes données d'entraînement s'arrêtent en avril 2024, mais le monde continue. CPT peut injecter des données récentes.
+
+### Adaptation multilingue
+
+Un modèle entraîné principalement en anglais peut être adapté en français, chinois, etc., via CPT sur les données cibles.
+
+## Stratégie de base pour le CPT
+
+### Hyperparamètres clés
+
+```
+Learning rate      : 10-50% du LR initial (plus conservateur)
+Warmup             : court (quelques centaines d'itérations)
+Scheduling         : cosinus ou WSD
+Techniques         : mixed precision BF16, FSDP/ZeRO, checkpointing
+```
+
+Pourquoi LR plus bas ? Parce que tu modifies déjà un modèle entraîné. Des mises à jour trop grandes cassent les connaissances existantes.
+
+### Le secret : mélanger avec les données originales
+
+<Callout type="tip" title="Replay buffer : la prévention d'oubli">
+La technique la plus efficace : **mélanger** les données du nouveau domaine avec un échantillon des données d'entraînement original.
+
+Ratio typique : **70-80% données domaine + 20-30% données générales.**
+
+Pourquoi ? Les données générales "rappellent" au modèle ses connaissances générales et préviennent l'oubli catastrophique.
+</Callout>
+
+### Volume de données
+
+| Objectif | Tokens | Proportion du pré-entraînement |
+|----------|--------|-------------------------------|
+| Adaptation légère | 10-50B | 0.5-2% |
+| Adaptation moyenne | 50-200B | 2-10% |
+| Adaptation profonde | 200B+ | 10%+ |
+
+Exemple : tu veux adapter LLaMA 7B au domaine médical. CPT sur 100B tokens de PubMed + livres médicaux = adaptation substantielle sans oubli.
+
+
+
+## L'oubli catastrophique : le danger principal
+
+### C'est quoi exactement ?
+
+Le modèle se spécialise sur le nouveau domaine mais oublie ses connaissances générales. Test de benchmark généraliste = dégradation. Test de benchmark domaine = amélioration.
+
+### Manifestations
+
+- Perte de performance sur les benchmarks généraux (MMLU, HellaSwag)
+- Dégradation du suivi d'instructions
+- Réduction de la diversité du langage
+- Régression sur les langues minoritaires
+
+<Callout type="warning" title="Le silence de l'oubli">
+L'oubli catastrophique peut être **silencieux**. Ton benchmark domaine s'améliore tandis que les capacités générales se dégradent sans que tu le remarques. Tu dois monitorer les deux continuellement, pas seulement les métriques domaine-spécifiques.
+</Callout>
+
+### Techniques de prévention
+
+**1. Replay de données** : mélange avec les données originales (la meilleure défense)
+
+**2. Learning rate réduit** : mises à jour conservatrices préservent les connaissances
+
+**3. Elastic Weight Consolidation (EWC)** : pénalise les modifications des poids importants pour les tâches précédentes
+
+**4. Progressive freezing** : gèle les premières couches, fine-tune seulement les dernières
+
+**5. LoRA/PEFT** : utilise des adaptateurs paramétriquement efficaces qui ne modifient pas le modèle de base
+
+## Pipeline complet : du CPT à la spécialité
+
+```
+1. Continual pre-training (CPT)
+   └─ Données brutes du domaine (livres, articles, documents)
+   └─ Apprentissage du vocabulaire et des patterns domaine
+
+2. Instruction tuning domaine
+   └─ Paires (question, réponse) spécialisées
+   └─ Fine-tune sur le format instruction
+
+3. Alignement
+   └─ RLHF/DPO sur les préférences du domaine
+   └─ Alignement avec les standards du domaine
+
+4. Évaluation
+   └─ Benchmarks généraux (MMLU, etc.)
+   └─ Benchmarks domaine-spécifiques
+```
+
+### Exemple concret : adaptation médicale
+
+```
+CPT Phase (100B tokens)
+  ├─ PubMed Central (50B tokens)
+  ├─ Livres médicaux (30B tokens)
+  └─ Guidelines cliniques (20B tokens)
+
+Instruction tuning (10-50B tokens)
+  ├─ QA médicales (examen USMLE)
+  ├─ Cas cliniques avec explications
+  └─ Diagnostic et recommandations
+
+Alignement
+  └─ RLHF avec préférences de professionnels de santé
+
+Résultats
+  ├─ MedQA : +15-20%
+  ├─ MedMCQA : +12-18%
+  └─ MMLU : -2% (oubli acceptable)
+```
+
+<Callout type="paper" title="Résultats empiriques">
+Les modèles adaptés par CPT bien fait montrent 10-20% de gains sur les benchmarks domaine-spécifiques tout en préservant 95%+ des performances générales (quand CPT est configuré avec replay).
+</Callout>
+
+## Configuration optimale
+
+### Hyperparamètres
+
+- **Learning rate** : 1/10 à 1/5 du LR maximum d'entraînement original
+- **Warmup** : 1-5% des étapes totales
+- **Replay** : 20-30% de données générales
+- **Monitoring** : benchmarks généraux + domaine
+
+### Considération importante : le tokenizer
+
+<Callout type="warning" title="Extension du vocabulaire">
+Si le domaine contient beaucoup de termes spécialisés non couverts par le tokenizer original (noms chimiques, termes médicaux rares), il faut étendre le vocabulaire. Ça signifie initialiser et entraîner les embeddings des nouveaux tokens, ce qui complique le CPT.
+
+Solution : utiliser des tokenizers spécialisés (comme pour le code), ou accepter une moins bonne compression de certains termes.
+</Callout>
+
+### Checkpointing fréquent
+
+Sauvegarde le modèle régulièrement. En cas de dégradation détectée, tu peux revenir à un checkpoint antérieur sans tout perdre.
+
+## Résumé
+
+Le continual pre-training est la voie pragmatique et économique pour adapter les LLM à de nouveaux domaines sans le coût d'un pré-entraînement complet (100-1000x plus cher). La clé : **replay des données originales** pour prévenir l'oubli catastrophique, **learning rate réduit** pour des mises à jour conservatrices, et **monitoring continu** des deux benchmarks généraux et domaine-spécifiques.
+
+C'est devenu la méthode standard pour créer des modèles spécialisés dans l'industrie.

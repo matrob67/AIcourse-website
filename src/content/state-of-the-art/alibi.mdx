@@ -1,0 +1,102 @@
+---
+title: "ALiBi : quand les positions sont juste des petites pénalités"
+description: "ALiBi (Attention with Linear Biases) : une méthode ultra-simple pour encoder les positions des tokens que vous entraîniez sur 1024 tokens ? Générez 4000 sans problème."
+---
+
+## Le problème : les positions ne généralisent pas
+
+Imaginez que vous entraînez un modèle à lire des textes de 1024 mots. Puis un jour, quelqu'un lui donne un texte de 4000 mots. Le modèle perd complètement pied. C'est le problème de l'**extrapolation de position**.
+
+Pourquoi ? Parce que les encodages positionnels classiques (sinusoïdaux ou appris) sont comme des codes postaux : ils sont définis seulement aux adresses qu'on a vues. Au-delà, c'est le chaos.
+
+<ArxivLink id="2108.12409" title="Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation" />
+
+## L'idée de ALiBi : non, ne codez pas la position
+
+Au lieu de rajouter une valeur d'encodage au token pour dire "tu es à la position 42", ALiBi propose quelque chose de bien plus bête : **pénalisez directement les tokens lointains lors du calcul de l'attention**.
+
+### Formule simple
+
+```
+Attention(Q, K, V) = softmax(QK^T / sqrt(d_k) + m*B) * V
+```
+
+Où `B[i,j] = -|i - j|` : une matrice qui vaut `-1` pour les tokens voisins, `-100` pour les tokens éloignés.
+
+Et `m` ? Une **pente** qui varie par tête (les paramètres de l'attention multi-tête).
+
+<Callout type="info" title="Analogie : favoriser les voisins">
+C'est comme dire à une personne : "tu peux parler à ton voisin gratuitement, mais si tu veux parler à quelqu'un à 10 maisons de distance, ça te coûte 10 points d'énergie. À 100 maisons, 100 points". Les tokens proches deviennent naturellement plus intéressants à écouter.
+</Callout>
+
+## Pourquoi ça généralise miraculeusement bien ?
+
+Les pentes `m` sont fixes. Pour 8 têtes par exemple :
+
+```
+m[0] ≈ 1.0     (pénalise beaucoup les distances, attention très locale)
+m[1] ≈ 0.5
+m[2] ≈ 0.25
+...
+m[7] ≈ 0.004   (pénalise très peu, attention quasi-globale)
+```
+
+Cette formule fonctionne pour **n'importe quelle distance**, même celle qu'on n'a jamais vue. Un modèle entraîné sur 1024 tokens généralise sans rechapeau jusqu'à 4000-8000 tokens sans rien changer. C'est fou, non ?
+
+<Callout type="paper" title="Résultats réels">
+Un modèle BLOOM entraîné sur 1024 tokens fonctionne très bien jusqu'à 2048-4096 sans perplexité catastrophique. Les RoPE (la technique concurrente, plus populaire maintenant) échouent complètement.
+</Callout>
+
+
+
+## ALiBi vs RoPE : pourquoi RoPE a gagné ?
+
+| Point | ALiBi | RoPE |
+|-------|-------|------|
+| Complexité | Ultra-simple | Rotation mathématique |
+| Généralisation native | Excellente | Pauvre |
+| Performance à courte portée | Correct | Meilleur |
+| Populaire ? | Non (BLOOM, MPT) | Oui (LLaMA, Mistral, 95% des LLM) |
+
+RoPE encode plus d'information fine via des rotations multi-fréquences. Les techniques d'extension (YaRN, NTK) ont "arrangé" le problème d'extrapolation. Voilà pourquoi RoPE a gagné la bataille, même si ALiBi était plus élégant.
+
+<Callout type="warning" title="Faiblesse de ALiBi">
+ALiBi force un biais fort vers les tokens récents. Si vous avez besoin que le token à la position 1 (votre system prompt) influence fortement le token à la position 800, c'est dur. Les premiers tokens reçoivent moins d'attention, c'est mécanique.
+</Callout>
+
+## Modèles avec ALiBi
+
+- **BLOOM** (BigScience) : le flagship
+- **MPT** (MosaicML)
+- **Falcon** (versions initiales)
+
+## Les alternatives oubliées
+
+### NoPE : zéro encodage
+
+Des études étonnantes montrent que les Transformers purs et durs peuvent apprendre les positions juste avec le masquage causal. Pas d'encodage nécessaire. Les positions émergent.
+
+### CoPE (Meta)
+
+Les positions ne sont pas absolues mais dépendent du contexte. Votre "position 2" n'est pas la même selon le contenu autour.
+
+### FIRE
+
+Une fonction apprise qui mappe les distances relatives → biais d'attention. Plus flexible que ALiBi tout en gardant la généralisation.
+
+<Callout type="tip" title="Tendance actuelle">
+Aujourd'hui : RoPE + YaRN/NTK pour l'extension. ALiBi ? Niche de nostalgiques et chercheurs. Mais les idées de ALiBi (simplicité du biais, généralisation) influencent toujours les nouvelles architectures.
+</Callout>
+
+## Pourquoi ça marche en profondeur ?
+
+ALiBi crée une décroissance exponentielle de l'attention avec la distance. C'est similaire aux **State Space Models** qui oublient aussi progressivement les tokens passés. Deux chemins différents, même intuition : l'oubli progressif régularise et généralise.
+
+Le spectre complet des approches positionnelles :
+- **Rigide** : ALiBi (biais fixe linéaire)
+- **Flexible** : RoPE (rotations apprises indirectement)
+- **Très flexible** : Encodages appris (pas de généralisation)
+
+<Callout type="info" title="Le leg de ALiBi">
+ALiBi a montré que l'information positionnelle n'a pas besoin d'être encodée dans les embeddings. Un simple biais au bon endroit suffit. Cette idée persiste même chez ceux qui utilisent RoPE au quotidien.
+</Callout>

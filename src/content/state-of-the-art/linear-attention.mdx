@@ -1,0 +1,134 @@
+---
+title: "Attention linéaire : abolir le softmax pour O(L)"
+description: "Attention linéaire : remplacez softmax par un kernel simple, refactorisez les multiplications, et boom : complexité O(L) au lieu de O(L²)."
+---
+
+## Le problème du softmax
+
+L'attention standard :
+
+```
+Attention = softmax(QK^T) × V
+```
+
+Le softmax lie ensemble toutes les paires (q_i, k_j). Impossible de refactoriser. Vous êtes coincés en `O(L²)`.
+
+## L'astuce : swapper softmax pour un kernel
+
+Au lieu du softmax, utilisez une fonction kernel `φ` :
+
+```
+LinAttn = φ(Q) × φ(K)^T × V / normalisateur
+```
+
+Le trick : **reordonner les multiplications** :
+
+```
+AVANT : compute QK^T (L×L matrice), puis softmax, puis multiplie par V
+APRÈS : compute φ(K)^T V (petit résumé), puis multiplie par φ(Q)
+```
+
+Le résumé `φ(K)^T V` est juste de dimension `d_phi × d_v`. Réutilisable pour tous les queries. Boom : `O(L)`.
+
+<Callout type="info" title="Le kernel trick de l'attention">
+C'est littéralement le kernel trick de la théorie kernels appliqué à l'attention. Au lieu de composer deux opérations L² dont une est softmax, factorisez via un intermédiaire plus petit.
+</Callout>
+
+## Les approches principales
+
+### Linear Transformer (ELU + 1)
+
+Utilisez `φ(x) = elu(x) + 1`. Pourquoi ? Elu est lisse, +1 garantit la positivité (les poids d'attention doivent être ≥ 0).
+
+Simple, différentiable, ça marche.
+
+### Performer (Random Fourier Features)
+
+Utilisez des features aléatoires pour approximer le softmax :
+
+```
+softmax(QK^T) ≈ φ(Q) × φ(K)^T
+```
+
+où `φ` utilise des sinusoides aléatoires (Fourier).
+
+Algorithme FAVOR+ : features orthogonales pour réduire la variance. `O(Lmd)` où m = nombre de features.
+
+<Callout type="paper" title="Performer">
+Le Performer montre qu'on peut approximer le softmax via random features sans introduire beaucoup d'erreur. C'est mathématiquement rigoureux.
+</Callout>
+
+### cosFormer
+
+Kernel cosinus avec biais positionnel :
+
+```
+A[i,j] = ReLU(Q_i) × ReLU(K_j) × cos(π/2 × (i-j)/L)
+```
+
+Combine attention linéaire + biais local (tokens proches favorisés).
+
+### Gated Linear Attention (GLA)
+
+Ajoutez un gate (comme dans les RNN) :
+
+```
+state[t] = gate[t] ⊙ state[t-1] + K[t]^T V[t]
+output[t] = Q[t] × state[t]
+```
+
+Ressemble à un SSM. La boucle récurrente capture la mémoire.
+
+<Callout type="tip" title="Convergence SSM et attention linéaire">
+Les travaux récents montrent que SSM et attention linéaire c'est presque la même chose, juste formulées différemment. Mamba-2 unifie les deux via un framework commun.
+</Callout>
+
+
+
+## La formulation récurrente
+
+L'attention linéaire peut s'écrire aussi comme une récurrence :
+
+```
+S[n] = S[n-1] + φ(K[n])^T V[n]
+z[n] = z[n-1] + φ(K[n])
+output[n] = φ(Q[n]) × S[n] / (φ(Q[n]) × z[n])
+```
+
+`S` est une matrice d'état. Vous pouvez exécuter ça en boucle au lieu de calculer en batch.
+
+C'est quasiment un SSM : même récurrence, même état caché.
+
+## Le gros problème : qualité
+
+L'attention linéaire est systématiquement pire que softmax sur les LLM. Pourquoi ?
+
+Le softmax crée une distribution **piquée** (peaked) : beaucoup de poids sur quelques tokens clés, quasi-zéro ailleurs. C'est très efficace pour "sélectionner" l'info pertinente.
+
+Les kernels linéaires produisent des distributions plus **uniformes**. Moins de sélectivité. La capacité du modèle en souffre.
+
+<Callout type="warning" title="La sélectivité manquante">
+Avec softmax, un token peut dire "j'écoute JUSTE CE token, zéro poids sur les autres". Avec une kernel linéaire, c'est difficile. Le modèle doit apprendre à ignorer les distractions manuellement. Perte d'expressivité.
+</Callout>
+
+## Benchmarks
+
+| Approche | Complexité | Qualité vs softmax | État infér. |
+|----------|-----------|---|---|
+| Softmax classique | O(L²) | 100% | O(L) cache |
+| Linear Transformer | O(L) | ~95% | État fixe |
+| Performer | O(Lm) | ~93% | État fixe |
+| GLA | O(L) | ~97% | État fixe |
+
+## Pertinence actuelle
+
+L'attention linéaire pure ? Morte pour les LLM. Supplantée par les SSM sélectifs (Mamba) qui restaurent la sélectivité tout en restant linéaires.
+
+Mais les concepts sont vivants :
+- **GLA** apparaît dans les architectures hybrides
+- **RetNet** utilise attention linéaire + decay
+- **Mamba-2** unifie SSM et attention linéaire
+
+<Callout type="info" title="Le legacy">
+L'attention linéaire a révélé une vérité : le bottleneck n'est pas vraiment la complexité O(L²), c'est la **sélectivité** que softmax offre. Les successeurs (SSM) résolvent ça mieux.
+</Callout>

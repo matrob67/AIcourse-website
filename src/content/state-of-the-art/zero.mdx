@@ -1,0 +1,134 @@
+---
+title: "ZeRO : Stages 1, 2, 3 (DeepSpeed)"
+description: "Analyse complète de ZeRO (Zero Redundancy Optimizer), la technique de DeepSpeed qui élimine la redondance mémoire dans l'entraînement distribué pour permettre l'entraînement de modèles massifs."
+---
+
+## Le problème : chaque GPU stocke la même chose 100 fois
+
+Imagine que tu entraînes un modèle sur 64 GPU. En Data Parallelism classique (DDP), chaque GPU a une copie complète du modèle. GPU 0 stocke les paramètres, GPU 1 stocke les mêmes paramètres, GPU 2 aussi... 64 fois le même modèle.
+
+C'est du pur gaspillage. L'information utile est stockée une fois, mais elle occupe 64x la mémoire.
+
+ZeRO dit : pourquoi ne pas diviser la mémoire en 64 ? GPU 0 stocke 1/64 de chaque état, GPU 1 stocke une autre fraction, etc. Quand tu as besoin de la version complète d'un état, tu la rassembles temporairement via une communication collective.
+
+<ArxivLink id="1910.02054" title="ZeRO: Memory Optimizations Toward Training Trillion Parameter Models" />
+
+
+
+## La mémoire en chiffres brutaux
+
+Avec un modèle Φ paramètres en mixed precision avec Adam :
+
+```
+Paramètres FP16            : 2Φ bytes
+Gradients FP16             : 2Φ bytes
+Paramètres maîtres FP32    : 4Φ bytes
+Momentum (Adam) FP32       : 4Φ bytes
+Variance (Adam) FP32       : 4Φ bytes
+─────────────────────────────────
+TOTAL par GPU (DDP)        : 16Φ bytes
+```
+
+Avec 64 GPU en DDP : 64 × 16Φ = 1024Φ bytes au total. Mais l'information utile est seulement 16Φ bytes. **98.4% de la mémoire est gaspillée.**
+
+ZeRO élimine cette redondance en trois étapes.
+
+<Callout type="info" title="Exemple concret">
+Pour un modèle de 7 milliards de paramètres : 16Φ = 16 × 7B × 4 bytes = 448 GB par GPU en DDP sur 64 GPU. Ça te demanderait 28 TB au total. Ridicule. ZeRO réduit ça à 448 GB / 64 = 7 GB par GPU. Soudain, c'est faisable.
+</Callout>
+
+## Les trois stages de ZeRO
+
+### ZeRO Stage 1 : partitionne les états de l'optimiseur
+
+Chaque GPU ne garde que 1/P des états d'Adam (momentum et variance) et des paramètres maîtres FP32.
+
+```
+Mémoire par GPU = 2Φ + 2Φ + 12Φ/P
+```
+
+Avec P=64 : environ 4.19Φ bytes (vs 16Φ en DDP).
+
+**Réduction mémoire** : environ 4x.
+**Communication** : identique à DDP.
+
+<Callout type="tip" title="Stage 1 = petit gain rapide">
+Stage 1 est facile à implémenter et donne un gain de 4x sans surcoût de communication. C'est le point de départ minimal.
+</Callout>
+
+### ZeRO Stage 2 : + partitionne aussi les gradients
+
+En plus du Stage 1, chaque GPU ne garde que 1/P des gradients. Les gradients sont réduits (reduce-scatter) au fur et à mesure du backward, et chaque GPU ne conserve que sa partition.
+
+```
+Mémoire par GPU = 2Φ + 2Φ/P + 12Φ/P
+```
+
+Avec P=64 : environ 2.22Φ bytes.
+
+**Réduction mémoire** : environ 8x vs DDP.
+**Communication** : identique à DDP (reduce-scatter + all-gather = all-reduce).
+
+C'est souvent le meilleur compromise : 8x moins de mémoire sans aucun surcoût de communication.
+
+### ZeRO Stage 3 : + partitionne les paramètres eux-mêmes
+
+Maintenant, les paramètres sont aussi partitionnés. Chaque GPU ne stocke que 1/P des paramètres. Avant le forward pass, les paramètres complets sont rassemblés (all-gather). Après, ils sont libérés.
+
+```
+Mémoire par GPU = 16Φ/P
+```
+
+Avec P=64 : 0.25Φ bytes.
+
+**Réduction mémoire** : 64x vs DDP.
+**Communication supplémentaire** : all-gather des paramètres pendant le forward et backward. Ça ajoute environ 50% de communication en plus.
+
+<Callout type="warning" title="Le prix du Stage 3">
+Le Stage 3 réduit la mémoire énormément, mais tu pales en communication. C'est excellent quand tu as de la bande passante réseau (InfiniBand HDR ou NVSwitch), mauvais sur un réseau limité. Le Stage 3 se justifie vraiment seulement à très grande échelle (centaines de GPU).
+</Callout>
+
+## Comparaison rapide
+
+| Stage | Mémoire/GPU | Communication | Quand l'utiliser |
+|-------|-----------|---------------|------------------|
+| DDP | 16Φ | 1x (baseline) | Petits modèles |
+| ZeRO-1 | 4Φ + 12Φ/P | 1x | Modèles moyens |
+| ZeRO-2 | 2Φ + 14Φ/P | 1x | Grands modèles (50B+) |
+| ZeRO-3 | 16Φ/P | 1.5x | Très grands modèles (200B+) |
+
+## ZeRO-Offload et ZeRO-Infinity : déborder vers le CPU/SSD
+
+### ZeRO-Offload
+
+Les états d'Adam et les mises à jour se font sur le CPU pendant que le GPU calcule le forward/backward suivant. La mémoire GPU est libérée pour les activations.
+
+### ZeRO-Infinity
+
+Extension folle : utilise le CPU ET le NVMe (SSD). Les paramètres inactifs sont stockés sur le SSD, chargés à la demande. En théorie, tu peux entraîner un modèle illimité sur un seul GPU (très lentement).
+
+<Callout type="paper" title="Capacités de ZeRO-Infinity">
+ZeRO-Infinity permet d'entraîner des modèles 10-50x plus grands que la mémoire GPU disponible. La vitesse est réduite par les transferts GPU ↔ CPU ↔ NVMe, mais c'est possible. C'est une option de dernier recours pour les expériences coûteuses.
+</Callout>
+
+## ZeRO vs FSDP : deux implémentations, même concept
+
+ZeRO (Microsoft/DeepSpeed) et FSDP (Meta/PyTorch) font essentiellement la même chose :
+
+| Aspect | ZeRO-3 | FSDP |
+|--------|--------|------|
+| Framework | DeepSpeed | PyTorch natif |
+| Configuration | JSON externe | API Python |
+| Offloading | Meilleur (ZeRO-Infinity) | Basique |
+| Intégration PyTorch | Plugin | Natif |
+| torch.compile | Non | Oui (FSDP2) |
+
+Pour les nouveaux projets, **FSDP est recommandé** car c'est natif PyTorch. DeepSpeed excelle quand tu as besoin d'offloading avancé ou que tu utilises Hugging Face Transformers.
+
+<Callout type="info" title="Leçon historique">
+ZeRO a été révolutionnaire en 2020—c'était le premier à montrer que tu pouvais entraîner des modèles massifs sans Tensor Parallelism. Ça a démocratisé l'accès à l'entraînement de grands modèles. Aujourd'hui, FSDP et ZeRO-3 sont comparables et la plupart des projets utilisent FSDP pour sa meilleure intégration.
+</Callout>
+
+## Résumé
+
+ZeRO élimine la redondance mémoire du Data Parallelism classique en partitionnant les états du modèle. Stage 2 est le sweet spot pour la plupart des cas (8x moins de mémoire, pas de surcoût). Stage 3 pour l'ultra-grand-scale. C'est une contribution fondamentale qui a rendu possible l'entraînement des modèles à centaines de milliards de paramètres.
