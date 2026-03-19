@@ -6,7 +6,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const { partId, slug, afterBlockIndex, src, alt, source, sourceUrl, caption, size } = body;
 
-  if (!partId || !slug || afterBlockIndex === undefined || !src || !alt || !source) {
+  if (!partId || !slug || afterBlockIndex === undefined || !src) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
@@ -40,15 +40,15 @@ export async function POST(request: NextRequest) {
   const targetRawIndex = nonEmptyIndices[afterBlockIndex] ?? nonEmptyIndices[nonEmptyIndices.length - 1];
 
   // Build the ImageWithSource component string
+  const safeAlt = alt ? alt.replace(/"/g, "'") : "";
   const safeCaption = caption ? caption.replace(/"/g, "'") : "";
-  const safeAlt = alt.replace(/"/g, "'");
-  const safeSource = source.replace(/"/g, "'");
+  const safeSource = source ? source.replace(/"/g, "'") : "";
   const safeSourceUrl = sourceUrl ? sourceUrl.replace(/"/g, "'") : "";
   const imageComponent = [
     `<ImageWithSource`,
     `  src="${src}"`,
-    `  alt="${safeAlt}"`,
-    `  source="${safeSource}"`,
+    safeAlt ? `  alt="${safeAlt}"` : null,
+    safeSource ? `  source="${safeSource}"` : null,
     safeSourceUrl ? `  sourceUrl="${safeSourceUrl}"` : null,
     safeCaption ? `  caption="${safeCaption}"` : null,
     `  size="${size || "large"}"`,

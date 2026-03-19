@@ -3,6 +3,7 @@ import { getLessonBySlug, getAdjacentLessons, getAllLessons } from "@/lib/course
 import { getLessonContent } from "@/lib/content";
 import { renderMDX } from "@/lib/mdx";
 import LessonNav from "@/components/LessonNav";
+import AdminImagePanel from "@/components/AdminImagePanel";
 
 interface Props {
   params: Promise<{ partId: string; slug: string }>;
@@ -112,6 +113,11 @@ export default async function LessonPage({ params }: Props) {
 
       {/* Navigation */}
       <LessonNav prev={prev} next={next} />
+
+      {/* Admin: insert image (dev only) */}
+      {process.env.NODE_ENV === "development" && (
+        <AdminImagePanel partId={partId} slug={slug} />
+      )}
     </div>
   );
 }
