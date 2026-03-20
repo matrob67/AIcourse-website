@@ -7,13 +7,13 @@ description: "Tensor Parallelism : au lieu de répliquer la couche entière, div
 
 En Data Parallelism, chaque GPU possède une copie complète du modèle. Mais que faire quand une seule couche est trop grosse pour un GPU ? C'est la que le **Tensor Parallelism** (TP) entre en jeu : au lieu de répliquer les matrices de poids, on les **découpe** et on distribue les morceaux sur plusieurs GPU.
 
-Imagine un mur de briques a construire. Plutôt que de donner a chaque maçon un plan complet du mur et de lui demander de le construire en entier (Data Parallelism), on divise le mur en sections et chaque maçon construit sa section. Si une couche attention pèse 12 GB, on la divise sur 2 GPU = 6 GB chacun. Le modèle qui ne tenait pas sur un GPU tient maintenant sur deux.
+Imagine un mur de briques a construire. Plutôt que de donner à chaque maçon un plan complet du mur et de lui demander de le construire en entier (Data Parallelism), on divise le mur en sections et chaque maçon construit sa section. Si une couche attention pèse 12 GB, on la divise sur 2 GPU = 6 GB chacun. Le modèle qui ne tenait pas sur un GPU tient maintenant sur deux.
 
-## Comment ca marche : découpe de matrices
+## Comment ça marche : découpe de matrices
 
-Le coeur du TP repose sur une propriété mathématique simple. Pour une multiplication matricielle `Y = X * W`, il y a deux facons de découper W :
+Le cœur du TP repose sur une propriété mathématique simple. Pour une multiplication matricielle `Y = X * W`, il y a deux façons de découper W :
 
-**Par colonnes** : on partitionne W en colonnes, et chaque GPU calcule son morceau de Y en parallèle. Aucune communication nécessaire a cette étape !
+**Par colonnes** : on partitionne W en colonnes, et chaque GPU calcule son morceau de Y en parallèle. Aucune communication nécessaire à cette étape !
 
 $$W = [W_1 \mid W_2 \mid \ldots \mid W_P]$$
 
@@ -60,17 +60,17 @@ L'architecture proposée par Megatron-LM place stratégiquement les all-reduce p
 
 ## Le coût : communications sur le chemin critique
 
-A chaque all-reduce, on communique un tenseur de taille `B * L * d` (batch x séquence x dimension cachée). Pour P GPU, le volume total est approximativement `2 * (P-1)/P * B * L * d`.
+À chaque all-reduce, on communique un tenseur de taille `B * L * d` (batch x séquence x dimension cachée). Pour P GPU, le volume total est approximativement `2 * (P-1)/P * B * L * d`.
 
-Le point critique ici : contrairement a DDP ou les communications peuvent se chevaucher avec le calcul, en TP les communications sont **sur le chemin critique**. Le GPU calcule, puis **attend** que l'all-reduce finisse avant de passer a la couche suivante. C'est pour ca que la bande passante inter-GPU est si importante.
+Le point critique ici : contrairement a DDP ou les communications peuvent se chevaucher avec le calcul, en TP les communications sont **sur le chemin critique**. Le GPU calcule, puis **attend** que l'all-reduce finisse avant de passer à la couche suivante. C'est pour ça que la bande passante inter-GPU est si importante.
 
 <Callout type="warning" title="TP demande NVLink">
-Le TP ne doit être utilisé qu'entre GPU du même noeud connectés par NVLink (900 GB/s sur H100). Entre noeuds via InfiniBand (100-400 Gb/s), la latence et la bande passante limitée créent un goulot d'étranglement qui annule les bénéfices du parallélisme. Règle d'or : TP intra-noeud uniquement.
+Le TP ne doit être utilisé qu'entre GPU du même nœud connectés par NVLink (900 GB/s sur H100). Entre nœuds via InfiniBand (100-400 Gb/s), la latence et la bande passante limitée créent un goulot d'étranglement qui annule les bénéfices du parallélisme. Règle d'or : TP intra-nœud uniquement.
 </Callout>
 
 ## Degré de TP : combien de GPU ?
 
-Typiquement : 2, 4 ou 8, correspondant au nombre de GPU connectés par NVLink au sein d'un noeud (par exemple un DGX H100 a 8 GPU).
+Typiquement : 2, 4 ou 8, correspondant au nombre de GPU connectés par NVLink au sein d'un nœud (par exemple un DGX H100 à 8 GPU).
 
 | Degré TP | Overhead comm. | Usage typique |
 |---|---|---|
@@ -82,12 +82,12 @@ Typiquement : 2, 4 ou 8, correspondant au nombre de GPU connectés par NVLink au
 Au-delà de 8 GPU en TP, les matrices par GPU deviennent trop petites pour utiliser efficacement les Tensor Cores. Les calculs sont alors dominés par l'overhead de lancement des kernels plutôt que par le calcul utile.
 
 <Callout type="tip" title="Stratégie pratique">
-Utilise le **plus petit** degré TP qui permet au modèle de tenir en mémoire. Complète ensuite avec **Pipeline Parallelism** (distribuer les couches sur plusieurs noeuds) et **Data Parallelism** (distribuer les données). Combinaison classique : TP=8 au sein du noeud, pipeline entre noeuds, DDP pour le batch.
+Utilise le **plus petit** degré TP qui permet au modèle de tenir en mémoire. Complète ensuite avec **Pipeline Parallelism** (distribuer les couches sur plusieurs nœuds) et **Data Parallelism** (distribuer les données). Combinaison classique : TP=8 au sein du nœud, pipeline entre nœuds, DDP pour le batch.
 </Callout>
 
 ## Sequence Parallelism (optimisation complémentaire)
 
-Certaines opérations comme LayerNorm, dropout et les connexions résiduelles ne se prêtent pas au TP. Elles sont normalement répliquées sur tous les GPU du groupe TP, ce qui gaspille a la fois du calcul et de la mémoire.
+Certaines opérations comme LayerNorm, dropout et les connexions résiduelles ne se prêtent pas au TP. Elles sont normalement répliquées sur tous les GPU du groupe TP, ce qui gaspille à la fois du calcul et de la mémoire.
 
 **Sequence Parallelism** (SP) résout ce problème en partitionnant ces opérations le long de la **dimension de séquence** au lieu de la dimension cachée :
 
@@ -103,14 +103,14 @@ Le TP est rarement utilisé seul. On le combine généralement avec d'autres for
 
 - **TP + Data Parallelism** : chaque groupe TP traite un micro-batch différent
 - **TP + Pipeline Parallelism** : les couches sont distribuées en stages, chaque stage utilise TP en interne
-- **TP + ZeRO/FSDP** : partitionnement des etats d'optimiseur entre les groupes TP
+- **TP + Zéro/FSDP** : partitionnement des états d'optimiseur entre les groupes TP
 
 Cette combinaison s'appelle le **parallélisme 3D** (TP x PP x DP). C'est le standard pour entraîner les LLM de grande taille.
 
 <Callout type="info" title="Scalabilité massive">
-Pour entraîner un modèle 175B comme GPT-3, aucune technique individuelle ne suffit. On empile TP au sein du noeud (8 GPU) + PP entre noeuds (dizaines de stages) + DP pour distribuer le batch (centaines de répliques). L'orchestration est complexe mais c'est le seul moyen d'utiliser des milliers de GPU efficacement.
+Pour entraîner un modèle 175B comme GPT-3, aucune technique individuelle ne suffit. On empile TP au sein du nœud (8 GPU) + PP entre nœuds (dizaines de stages) + DP pour distribuer le batch (centaines de répliques). L'orchestration est complexe mais c'est le seul moyen d'utiliser des milliers de GPU efficacement.
 </Callout>
 
 ## Conclusion
 
-Tensor Parallelism découpe les matrices de poids pour les répartir sur plusieurs GPU. C'est essentiel pour les modèles dont une seule couche ne tient pas en mémoire. Mais cette technique demande une bande passante inter-GPU très élevée car les communications sont sur le chemin critique. C'est pourquoi le TP se limite au sein d'un noeud NVLink, et on combine avec PP et DP pour le scaling multi-noeud. Si ton modèle tient sur un GPU, tu n'as pas besoin de TP. Si ce n'est pas le cas, c'est ta première arme.
+Tensor Parallelism découpe les matrices de poids pour les répartir sur plusieurs GPU. C'est essentiel pour les modèles dont une seule couche ne tient pas en mémoire. Mais cette technique demande une bande passante inter-GPU très élevée car les communications sont sur le chemin critique. C'est pourquoi le TP se limite au sein d'un nœud NVLink, et on combine avec PP et DP pour le scaling multi-nœud. Si ton modèle tient sur un GPU, tu n'as pas besoin de TP. Si ce n'est pas le cas, c'est ta première arme.

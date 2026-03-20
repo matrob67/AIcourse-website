@@ -12,8 +12,8 @@ Un modèle de 70B paramètres en FP16, c'est 140 Go de poids. Ton GPU le plus co
 C'est exactement l'idée derrière l'optimisation mémoire : jouer sur plusieurs leviers pour faire tenir des modèles trop gros dans des GPU trop petits, ou pour libérer de la mémoire pour augmenter le batch size ou la longueur de contexte.
 
 <Callout type="info" title="La recette de la consommation mémoire">
-**A l'inférence** : poids du modèle (fixe) + KV cache (grandit linéairement avec la séquence) + activations temporaires (pic pendant le forward pass).
-**A l'entraînement** : tout ça + gradients (même taille que les poids) + états de l'optimiseur (2-3x les poids pour Adam : momentum + variance + poids maîtres en FP32).
+**À l'inférence** : poids du modèle (fixe) + KV cache (grandit linéairement avec la séquence) + activations temporaires (pic pendant le forward pass).
+**À l'entraînement** : tout ça + gradients (même taille que les poids) + états de l'optimiseur (2-3x les poids pour Adam : momentum + variance + poids maîtres en FP32).
 </Callout>
 
 ## Offloading CPU : stocker ailleurs, calculer sur le GPU
@@ -40,7 +40,7 @@ Le `device_map="auto"` fait le travail automatiquement : il remplit d'abord le G
 Le goulot d'étranglement, c'est le bus PCIe 4.0 à 32 Go/s. Charger une couche de 4 Go depuis la RAM CPU prend environ 130 ms. Pendant ce transfert, le GPU attend. C'est le prix de l'offloading.
 
 <Callout type="warning" title="Est-ce que ça vaut le coup ?">
-Ca dépend entièrement de ton cas d'usage. Pour de l'inférence batch offline (pas de contrainte de latence), perdre un facteur 3 en vitesse pour gagner un facteur 4 en taille de modèle est souvent acceptable. Pour du streaming temps réel, c'est rédhibitoire. Pour du prototypage et de l'expérimentation, c'est parfait.
+Ça dépend entièrement de ton cas d'usage. Pour de l'inférence batch offline (pas de contrainte de latence), perdre un facteur 3 en vitesse pour gagner un facteur 4 en taille de modèle est souvent acceptable. Pour du streaming temps réel, c'est rédhibitoire. Pour du prototypage et de l'expérimentation, c'est parfait.
 </Callout>
 
 ## Gradient Checkpointing : oublier pour mieux recommencer
@@ -55,27 +55,27 @@ model.gradient_checkpointing_enable()
 
 Le surcoût en temps est d'environ 33% (tu refais le forward pass une deuxième fois), mais le gain en mémoire est d'environ 60%. C'est presque toujours un bon deal pour le fine-tuning : la mémoire libérée te permet d'utiliser un batch size plus grand, ce qui accélère la convergence et peut compenser (voire dépasser) le surcoût de calcul.
 
-## DeepSpeed ZeRO : partager au lieu de dupliquer
+## DeepSpeed Zéro : partager au lieu de dupliquer
 
-Pour l'entraînement distribué sur plusieurs GPU, le Data Parallelism classique a un défaut majeur : chaque GPU stocke une copie complète des poids, des gradients, ET des états de l'optimiseur. Avec un modèle 70B et Adam, ça fait environ 840 Go de mémoire totale par GPU (poids + gradients + 2 états optimizer + poids maîtres FP32).
+Pour l'entraînement distribué sur plusieurs GPU, le Data Parallelism classique à un défaut majeur : chaque GPU stocke une copie complète des poids, des gradients, ET des états de l'optimiseur. Avec un modèle 70B et Adam, ça fait environ 840 Go de mémoire totale par GPU (poids + gradients + 2 états optimizer + poids maîtres FP32).
 
-ZeRO (Zero Redundancy Optimizer) de Microsoft élimine cette redondance en **partageant** les données entre GPU au lieu de les dupliquer :
+Zéro (Zéro Redundancy Optimizer) de Microsoft élimine cette redondance en **partageant** les données entre GPU au lieu de les dupliquer :
 
-- **Stage 1** : partage les états de l'optimiseur entre GPU. Chaque GPU ne stocke que 1/N des états. Economie : ~4x en mémoire
-- **Stage 2** : + partage des gradients. Economie totale : ~8x
-- **Stage 3** : + partage des paramètres eux-mêmes. Economie totale : ~16x (proportionnel au nombre de GPU)
+- **Stage 1** : partage les états de l'optimiseur entre GPU. Chaque GPU ne stocke que 1/N des états. Économie : ~4x en mémoire
+- **Stage 2** : + partage des gradients. Économie totale : ~8x
+- **Stage 3** : + partage des paramètres eux-mêmes. Économie totale : ~16x (proportionnel au nombre de GPU)
 
 Stage 2 est le "sweet spot" pour la plupart des cas : bon gain mémoire, complexité de communication raisonnable. Stage 3 est plus puissant mais ajoute de la latence (les paramètres doivent être rassemblés avant chaque forward/backward).
 
 <Callout type="tip" title="FSDP : l'alternative PyTorch native">
-PyTorch propose **FSDP** (Fully Sharded Data Parallel), qui fait essentiellement la même chose que ZeRO Stage 3 mais avec une intégration native dans l'écosystème PyTorch. Si tu utilises PyTorch, FSDP est généralement plus simple à configurer et à débugger que DeepSpeed.
+PyTorch propose **FSDP** (Fully Sharded Data Parallel), qui fait essentiellement la même chose que Zéro Stage 3 mais avec une intégration native dans l'écosystème PyTorch. Si tu utilises PyTorch, FSDP est généralement plus simple à configurer et à débugger que DeepSpeed.
 </Callout>
 
 ## KV Cache : quantifier et compresser
 
-A l'inférence, le KV cache grandit linéairement avec la longueur de la séquence. Pour un modèle 70B avec 128K tokens de contexte, le KV cache en FP16 peut dépasser 100 Go. Deux leviers pour le compresser :
+À l'inférence, le KV cache grandit linéairement avec la longueur de la séquence. Pour un modèle 70B avec 128K tokens de contexte, le KV cache en FP16 peut dépasser 100 Go. Deux leviers pour le compresser :
 
-**Quantification du KV cache** : stocker les clés et valeurs en INT8 ou FP8 au lieu de FP16. Ca divise la taille par 2 avec une perte de qualité quasi imperceptible.
+**Quantification du KV cache** : stocker les clés et valeurs en INT8 ou FP8 au lieu de FP16. Ça divise la taille par 2 avec une perte de qualité quasi imperceptible.
 
 ```python
 llm = LLM(model="mistral-7b", kv_cache_dtype="fp8")
@@ -102,7 +102,7 @@ Résultat : quelque chose qu'on pensait impossible il y a deux ans fonctionne ma
 |---|---|
 | Inférence, GPU limité | Quantification 4-bit + offloading partiel |
 | Fine-tuning, GPU limité | QLoRA + gradient checkpointing |
-| Entraînement multi-GPU | FSDP ou DeepSpeed ZeRO Stage 2 |
+| Entraînement multi-GPU | FSDP ou DeepSpeed Zéro Stage 2 |
 | Inférence long contexte | GQA + KV cache quantifié (FP8) |
 | Hardware très limité | GGUF + offloading CPU complet |
 

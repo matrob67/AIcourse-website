@@ -9,7 +9,7 @@ description: "Présentation de Megatron-LM, le framework d'entraînement distrib
 
 Quand on parle d'entraîner un modèle de 175 milliards de paramètres sur 1000+ GPU pendant des semaines, il ne suffit pas d'avoir du bon matériel. Il faut un logiciel capable d'orchestrer cette armée de GPU avec une efficacité chirurgicale. C'est exactement le rôle de **Megatron-LM**, le framework d'entraînement distribué développé par NVIDIA.
 
-Megatron-LM est construit spécifiquement pour le hardware NVIDIA (NVLink, InfiniBand, Tensor Cores), ce qui lui permet d'extraire des performances supérieures à des solutions plus génériques comme ZeRO ou FSDP à grande échelle. C'est le framework de référence quand la performance maximale est non négociable.
+Megatron-LM est construit spécifiquement pour le hardware NVIDIA (NVLink, InfiniBand, Tensor Cores), ce qui lui permet d'extraire des performances supérieures à des solutions plus génériques comme Zéro ou FSDP à grande échelle. C'est le framework de référence quand la performance maximale est non négociable.
 
 ## Le parallélisme 3D : l'architecture centrale
 
@@ -18,18 +18,18 @@ Megatron organise les GPU en **trois dimensions**, chaque GPU ayant une coordonn
 $$\text{GPU\_ID} = (\text{tensor\_rank},\ \text{pipeline\_rank},\ \text{data\_rank})$$
 
 Chaque dimension correspond à un type de parallélisme :
-- **Tensor Parallelism (TP)** : partitionne chaque couche entre GPU au sein d'un noeud DGX (8 GPU connectés par NVLink ultra-rapide)
-- **Pipeline Parallelism (PP)** : distribue les couches entre noeuds (connectés par InfiniBand)
+- **Tensor Parallelism (TP)** : partitionne chaque couche entre GPU au sein d'un nœud DGX (8 GPU connectés par NVLink ultra-rapide)
+- **Pipeline Parallelism (PP)** : distribue les couches entre nœuds (connectés par InfiniBand)
 - **Data Parallelism (DP)** : réplique le pipeline complet pour traiter des batches différents en parallèle
 
-Exemple concret pour un modèle de 175B sur 1024 GPU (128 noeuds DGX H100) :
-- TP = 8 (au sein de chaque noeud)
-- PP = 16 (entre 16 noeuds en séquence)
+Exemple concret pour un modèle de 175B sur 1024 GPU (128 nœuds DGX H100) :
+- TP = 8 (au sein de chaque nœud)
+- PP = 16 (entre 16 nœuds en séquence)
 - DP = 8 (8 répliques du pipeline complet)
 - Total : 8 x 16 x 8 = 1024 GPU
 
 <Callout type="info" title="Pourquoi 3D et pas seulement 2D ?">
-Avec uniquement TP + DP, chaque réplique utilise un seul noeud (8 GPU). Pour un modèle de 175B, 8 GPU ne suffisent pas en mémoire. Le PP permet de répartir les couches sur plusieurs noeuds, réduisant la mémoire par réplique. De plus, le PP utilise des communications point-à-point efficaces entre noeuds, tandis que le TP (qui nécessite des all-reduce fréquents) reste confiné au NVLink rapide intra-noeud.
+Avec uniquement TP + DP, chaque réplique utilise un seul nœud (8 GPU). Pour un modèle de 175B, 8 GPU ne suffisent pas en mémoire. Le PP permet de répartir les couches sur plusieurs nœuds, réduisant la mémoire par réplique. De plus, le PP utilise des communications point-à-point efficaces entre nœuds, tandis que le TP (qui nécessite des all-reduce fréquents) reste confiné au NVLink rapide intra-nœud.
 </Callout>
 
 ## Les optimisations qui font la différence
@@ -45,7 +45,7 @@ Cette optimisation réduit la latence de communication de moitié, ce qui est cr
 
 ### Sequence Parallelism intégré
 
-Les opérations non-TP (LayerNorm, dropout, additions résiduelles) sont partitionnées le long de la séquence. Ca élimine la redondance des activations sans surcoût de communication, car les all-reduce du TP sont remplacés par des reduce-scatter + all-gather de même volume total.
+Les opérations non-TP (LayerNorm, dropout, additions résiduelles) sont partitionnées le long de la séquence. Ça élimine la redondance des activations sans surcoût de communication, car les all-reduce du TP sont remplacés par des reduce-scatter + all-gather de même volume total.
 
 <Callout type="paper" title="SP dans Megatron">
 Le Sequence Parallelism de Megatron est un "free lunch" en termes de communication : il remplace des all-reduce par des opérations reduce-scatter + all-gather qui transportent exactement le même volume de données, tout en libérant la mémoire des activations dupliquées. C'est une optimisation pure, sans compromis.
@@ -64,7 +64,7 @@ Support intégré pour les très longues séquences (100K+ tokens), avec des éc
 
 ## Optimisations d'entraînement
 
-### Mixed precision avancée
+### Mixed précision avancée
 
 Megatron utilise une hiérarchie de précisions numériques :
 - **BF16** pour le forward et le backward pass (bon compromis vitesse/précision)
@@ -96,12 +96,12 @@ Le MFU mesure quelle fraction des FLOP théoriques du GPU est réellement utilis
 
 | Configuration | MFU | Notes |
 |--------------|-----|--------|
-| 8 GPU (1 noeud, TP=8) | 95-98% | Proche du peak, très peu de communication |
-| 64 GPU (8 noeuds, TP=8 + PP=8) | 88-95% | Excellent, la bulle PP est faible |
-| 1024 GPU (3D: 8x16x8) | 75-85% | Bon, limité par la communication inter-noeud |
+| 8 GPU (1 nœud, TP=8) | 95-98% | Proche du peak, très peu de communication |
+| 64 GPU (8 nœuds, TP=8 + PP=8) | 88-95% | Excellent, la bulle PP est faible |
+| 1024 GPU (3D: 8x16x8) | 75-85% | Bon, limité par la communication inter-nœud |
 | 4096+ GPU | 60-75% | Les communications deviennent le facteur dominant |
 
-Sur DGX H100 + InfiniBand HDR, Megatron-LM atteint 150-180 TFLOP/s par GPU (sur un peak théorique de 990 TFLOP/s en BF16). Ca représente 15-18% du peak brut, ce qui pour du scaling distribué sur 1000+ GPU est remarquable (les communications, la bulle, et les opérations non-matmul consomment le reste).
+Sur DGX H100 + InfiniBand HDR, Megatron-LM atteint 150-180 TFLOP/s par GPU (sur un peak théorique de 990 TFLOP/s en BF16). Ça représente 15-18% du peak brut, ce qui pour du scaling distribué sur 1000+ GPU est remarquable (les communications, la bulle, et les opérations non-matmul consomment le reste).
 
 <Callout type="warning" title="MFU vs utilisation GPU">
 Ne confonds pas MFU et taux d'occupation GPU. Un MFU de 50% est considéré **excellent** pour l'entraînement distribué. Les 50% "manquants" sont consommés par : les communications réseau, les opérations non-matricielles (normalisation, activation), la bulle de pipeline, et les limites de bande passante mémoire.
@@ -128,7 +128,7 @@ NeMo est la couche d'abstraction de NVIDIA au-dessus de Megatron-LM :
 | Framework | Développeur | Force principale |
 |-----------|------------|------------------|
 | Megatron-LM | NVIDIA | Performance maximale sur hardware NVIDIA |
-| DeepSpeed | Microsoft | ZeRO, facilité d'usage, flexibilité |
+| DeepSpeed | Microsoft | Zéro, facilité d'usage, flexibilité |
 | FSDP | Meta/PyTorch | Intégration native PyTorch, simplicité |
 | ColossalAI | HPC-AI | Multi-backend, facilité de configuration |
 
@@ -138,4 +138,4 @@ Si tu disposes d'un cluster GPU NVIDIA (DGX, InfiniBand) et que la performance m
 
 ## Résumé
 
-Megatron-LM est le framework le plus performant pour l'entraînement distribué des LLM sur GPU NVIDIA. Son parallélisme 3D (TP + PP + DP), ses optimisations hardware-aware (overlap communication/calcul, mixed precision, checkpointing sélectif) et son intégration avec l'écosystème NVIDIA en font le choix incontournable pour les projets de très grande échelle. C'est complexe à maîtriser, mais à l'échelle de 1000+ GPU, la performance en vaut largement l'investissement.
+Megatron-LM est le framework le plus performant pour l'entraînement distribué des LLM sur GPU NVIDIA. Son parallélisme 3D (TP + PP + DP), ses optimisations hardware-aware (overlap communication/calcul, mixed précision, checkpointing sélectif) et son intégration avec l'écosystème NVIDIA en font le choix incontournable pour les projets de très grande échelle. C'est complexe à maîtriser, mais à l'échelle de 1000+ GPU, la performance en vaut largement l'investissement.

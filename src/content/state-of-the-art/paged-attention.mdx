@@ -5,9 +5,9 @@ description: "Emprunter à Unix une astuce vieille de 60 ans pour multiplier par
 
 ## Le problème de gaspillage mémoire
 
-Quand tu déploies un LLM en production, chaque requête utilisateur a besoin d'espace mémoire pour stocker son **KV cache** (les clés et valeurs d'attention calculées). Le problème : on ne sait pas a l'avance combien de tokens la réponse fera. 50 ? 500 ? 2000 ?
+Quand tu déploies un LLM en production, chaque requête utilisateur a besoin d'espace mémoire pour stocker son **KV cache** (les clés et valeurs d'attention calculées). Le problème : on ne sait pas à l'avance combien de tokens la réponse fera. 50 ? 500 ? 2000 ?
 
-Les systèmes naïfs pré-allouent un bloc de mémoire **contigu** pour la longueur maximale possible de chaque requête. C'est comme réserver une table de 20 couverts au restaurant pour chaque client, même si la plupart viennent seuls. Résultat : **60 a 80% de la mémoire GPU est gaspillée** en espace vide réservé mais jamais utilisé.
+Les systèmes naïfs pré-allouent un bloc de mémoire **contigu** pour la longueur maximale possible de chaque requête. C'est comme réserver une table de 20 couverts au restaurant pour chaque client, même si la plupart viennent seuls. Résultat : **60 à 80% de la mémoire GPU est gaspillée** en espace vide réservé mais jamais utilisé.
 
 
 
@@ -29,7 +29,7 @@ Le KV cache est divisé en **blocs (pages)** de taille fixe, typiquement 16 toke
 
 Chaque requête possède une **table de pages** qui fait le lien entre les positions logiques (token 0-15 dans le bloc 0, tokens 16-31 dans le bloc 1...) et les blocs physiques en mémoire. Les blocs n'ont pas besoin d'être contigus : la table de pages s'occupe de la traduction.
 
-### Allocation a la demande
+### Allocation à la demande
 
 - Un nouveau bloc n'est alloué que quand le bloc précédent est **plein** (les 16 slots occupés)
 - Quand une requête se termine, ses blocs sont **immédiatement libérés** et réutilisables pour d'autres requêtes
@@ -37,19 +37,19 @@ Chaque requête possède une **table de pages** qui fait le lien entre les posit
 
 ### Le kernel d'attention modifié
 
-L'opération d'attention doit être adaptée pour lire les clés et valeurs depuis des blocs potentiellement dispersés en mémoire. Un **block table** stocké en GPU indique ou trouver chaque bloc logique. Grace a la taille fixe des blocs (16 tokens), les lectures mémoire au sein de chaque bloc restent efficaces et coalescées.
+L'opération d'attention doit être adaptée pour lire les clés et valeurs depuis des blocs potentiellement dispersés en mémoire. Un **block table** stocké en GPU indique ou trouver chaque bloc logique. Grâce à la taille fixe des blocs (16 tokens), les lectures mémoire au sein de chaque bloc restent efficaces et coalescées.
 
 ## Les résultats concrets
 
-PagedAttention réduit le gaspillage de KV cache de **60-80% a moins de 4%**. En pratique, ca signifie :
+PagedAttention réduit le gaspillage de KV cache de **60-80% a moins de 4%**. En pratique, ça signifie :
 
-- **2 a 4 fois plus de requêtes simultanées** avec la même quantité de VRAM
+- **2 à 4 fois plus de requêtes simultanées** avec la même quantité de VRAM
 - **Réduction proportionnelle des coûts d'inférence** (même performance, moins de GPU)
 - **Utilisation mémoire stable et prévisible** même avec des longueurs de réponse très variées
 
-## vLLM : le framework qui a tout lancé
+## vLLM : le framework qui à tout lancé
 
-vLLM est le framework open-source créé par les auteurs de PagedAttention. Il est devenu le **standard de facto** pour le serving de LLM en production grace a son efficacité et sa simplicité d'utilisation.
+vLLM est le framework open-source créé par les auteurs de PagedAttention. Il est devenu le **standard de facto** pour le serving de LLM en production grâce à son efficacité et sa simplicité d'utilisation.
 
 ### Fonctionnalités principales
 
@@ -77,13 +77,13 @@ vllm serve mistralai/Mistral-7B-v0.1 \
     --tensor-parallel-size 2
 ```
 
-Ca lance un serveur avec une API REST compatible OpenAI. Tu peux remplacer tes appels a l'API OpenAI par des appels a ce serveur local sans changer ton code client.
+Ça lance un serveur avec une API REST compatible OpenAI. Tu peux remplacer tes appels à l'API OpenAI par des appels à ce serveur local sans changer ton code client.
 
 ## Optimisations avancées
 
 ### Prefix Caching
 
-Quand plusieurs requêtes partagent le **même préfixe** (un system prompt identique, des exemples few-shot communs, un contexte RAG partagé), les blocs de KV cache correspondant a ce préfixe sont **partagés** entre toutes les requêtes :
+Quand plusieurs requêtes partagent le **même préfixe** (un system prompt identique, des exemples few-shot communs, un contexte RAG partagé), les blocs de KV cache correspondant à ce préfixe sont **partagés** entre toutes les requêtes :
 
 - **System prompt** (calculé une seule fois, partagé)
   - Requête 1 : blocs spécifiques
@@ -97,7 +97,7 @@ Au lieu de recalculer et stocker le KV cache du system prompt pour chaque requê
 Pour le beam search ou le sampling multiple (générer N réponses différentes pour le même prompt), les séquences partagent initialement les mêmes blocs de KV cache. Un bloc n'est dupliqué que quand une séquence diverge et a besoin de modifier ce bloc. C'est le même mécanisme que les systèmes d'exploitation utilisent pour la gestion de la mémoire des processus.
 
 <Callout type="tip" title="RAG + Prefix Caching = combo optimal">
-Si tu utilises un long contexte RAG identique pour 100 requêtes, le prefix caching évite de recalculer et stocker son KV cache 100 fois. Pour un contexte RAG de 4000 tokens avec un modèle 7B, ca économise environ 200 Go de mémoire GPU et des milliers de TFLOP de calcul.
+Si tu utilises un long contexte RAG identique pour 100 requêtes, le prefix caching évite de recalculer et stocker son KV cache 100 fois. Pour un contexte RAG de 4000 tokens avec un modèle 7B, ça économise environ 200 Go de mémoire GPU et des milliers de TFLOP de calcul.
 </Callout>
 
 ## Benchmarks de performance
@@ -142,4 +142,4 @@ PagedAttention multiplie l'efficacité mémoire par 3-4x, mais c'est une ressour
 
 ## Impact sur l'industrie
 
-PagedAttention a **fondamentalement transformé l'économie du serving de LLM**. Multiplier le throughput par 3-4x réduit d'autant le coût par token d'inférence. C'est une de ces innovations système qui ne change rien au modèle lui-même mais qui rend son déploiement en production économiquement viable a grande échelle. Pratiquement tous les systèmes de serving de LLM l'utilisent aujourd'hui.
+PagedAttention a **fondamentalement transformé l'économie du serving de LLM**. Multiplier le throughput par 3-4x réduit d'autant le coût par token d'inférence. C'est une de ces innovations système qui ne change rien au modèle lui-même mais qui rend son déploiement en production économiquement viable à grande échelle. Pratiquement tous les systèmes de serving de LLM l'utilisent aujourd'hui.

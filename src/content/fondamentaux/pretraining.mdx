@@ -12,7 +12,7 @@ C'est exactement ce qu'est le **pré-entraînement** d'un LLM. C'est la premièr
 
 
 <Callout type="info" title="Auto-supervisé, qu'est-ce que ça veut dire ?">
-Dans l'apprentissage supervisé classique, quelqu'un étiquette les données à la main : "cette photo c'est un chat", "cet email c'est du spam". C'est lent, cher, et ça ne passe pas à l'échelle de milliards d'exemples. L'apprentissage auto-supervisé est malin : il crée ses propres étiquettes à partir du texte. Si la phrase dit "La capitale de la France est ___", la réponse "Paris" est déjà là, cachée dans les données. C'est un truc élégant : on a un dataset infini de paires (contexte, mot suivant) sans jamais demander à un humain d'annoter quoi que ce soit.
+Dans l'apprentissage supervisé classique, quelqu'un étiquette les données à la main : "cette photo c'est un chat", "cet email c'est du spam". C'est lent, cher, et ça ne passe pas à l'échelle de milliards d'exemples. L'apprentissage auto-supervisé est malin : il crée ses propres étiquettes à partir du texte. Si la phrase dit "La capitale de la France est ___", la réponse "Paris" est déjà là, cachée dans les données. C'est un truc élégant : on à un dataset infini de paires (contexte, mot suivant) sans jamais demander à un humain d'annoter quoi que ce soit.
 </Callout>
 
 ## La grande question : comment apprendre exactement ?
@@ -59,25 +59,25 @@ BERT (2018) a dominé le NLP pendant des années pour la classification, la rech
 
 ## Objectif 3 : Span Corruption — cacher des bouts entiers
 
-C'est l'approche de T5 et BART. On va plus loin que cacher un seul mot : on cache des **séquences entières** (des "spans" de 3-5 tokens) et on les remplace par un token sentinelle unique. Le modèle encoder-decoder doit ensuite régénérer les séquences manquantes.
+C'est l'approche de T5 et BART. On va plus loin que cacher un seul mot : on cache des **séquences entières** (des "spans" de 3-5 tokens) et on les remplace par un token sentinelle unique. Le modèle encoder-décoder doit ensuite régénérer les séquences manquantes.
 
 **Entrée** : "Le chat \<X\> dans le jardin \<Y\> souris."
 **Cible** : "\<X\> dormait paisiblement \<Y\> en chassant une"
 
-C'est un exercice nettement plus difficile que le MLM : le modèle doit non seulement deviner *quels* mots manquent, mais aussi *combien* il y en a (la longueur du span caché n'est pas connue). L'encoder lit le texte corrompu avec son attention bidirectionnelle et le comprend malgré les trous. Le decoder régénère les spans manquants token par token.
+C'est un exercice nettement plus difficile que le MLM : le modèle doit non seulement deviner *quels* mots manquent, mais aussi *combien* il y en a (la longueur du span caché n'est pas connue). L'encoder lit le texte corrompu avec son attention bidirectionnelle et le comprend malgré les trous. Le décoder régénère les spans manquants token par token.
 
-Cette approche hybride combine donc compréhension bidirectionnelle (encoder) et génération séquentielle (decoder). T5 a été pionnier dans l'idée d'unifier toutes les tâches NLP sous un format unique "texte-vers-texte" : la traduction, le résumé, la classification — tout devient "traduis ce texte en ce résultat".
+Cette approche hybride combine donc compréhension bidirectionnelle (encoder) et génération séquentielle (décoder). T5 a été pionnier dans l'idée d'unifier toutes les tâches NLP sous un format unique "texte-vers-texte" : la traduction, le résumé, la classification — tout devient "traduis ce texte en ce résultat".
 
 ## Pourquoi le Causal Language Modeling a gagné
 
 | Objectif | Architecture | Direction | Bon pour |
 |---|---|---|---|
-| CLM (next token) | Decoder-only | Gauche vers droite | Génération, conversation |
+| CLM (next token) | Décoder-only | Gauche vers droite | Génération, conversation |
 | MLM (masqué) | Encoder-only | Bidirectionnel | Compréhension, classification |
-| Span corruption | Encoder-decoder | Les deux | Tâches texte-vers-texte |
+| Span corruption | Encoder-décoder | Les deux | Tâches texte-vers-texte |
 
 <Callout type="paper" title="Le CLM scale mieux">
-Le CLM a fini par dominer pour plusieurs raisons convergentes. D'abord, il se prête naturellement à la génération de texte — c'est ce que les utilisateurs veulent (des chatbots, de l'écriture, du code). Ensuite, les **scaling laws** (Kaplan et al., 2020) montrent que quand on augmente la taille des modèles decoder-only, les gains en performance sont plus réguliers et plus prédictibles. Enfin, le CLM ne nécessite aucune paire de données : n'importe quel texte brut suffit, ce qui donne accès à des corpus d'entraînement quasi illimités. La simplicité paie.
+Le CLM a fini par dominer pour plusieurs raisons convergentes. D'abord, il se prête naturellement à la génération de texte — c'est ce que les utilisateurs veulent (des chatbots, de l'écriture, du code). Ensuite, les **scaling laws** (Kaplan et al., 2020) montrent que quand on augmente la taille des modèles décoder-only, les gains en performance sont plus réguliers et plus prédictibles. Enfin, le CLM ne nécessite aucune paire de données : n'importe quel texte brut suffit, ce qui donne accès à des corpus d'entraînement quasi illimités. La simplicité paie.
 </Callout>
 
 ## Les ficelles techniques qui font que ça marche
@@ -92,9 +92,9 @@ On ne commence pas à fond. L'entraînement utilise un **warmup** : pendant les 
 
 On ne traite pas les textes un par un — ce serait désespérément lent. On en traite des millions à la fois : souvent 4 à 16 millions de tokens par batch. Certains entraînements modernes commencent avec de petits batches (le signal est plus bruité, ce qui favorise l'exploration de l'espace des paramètres) et grossissent progressivement (signal plus stable pour un affinage fin des poids). LLaMA-3, par exemple, double la taille du batch à mi-parcours.
 
-### Mixed precision : la mémoire a un prix
+### Mixed précision : la mémoire à un prix
 
-Les GPU ont de la mémoire limitée (40-80 Go pour les meilleurs). Pour faire tenir des milliards de paramètres, on utilise la **mixed precision** : les poids de référence sont stockés en FP32 (32 bits, précision complète) mais les calculs du forward et du backward pass se font en BF16 (16 bits, la moitié). On divise l'empreinte mémoire par deux avec quasi aucune perte de qualité. Le format BF16 est particulièrement adapté car il garde le même range que FP32 (contrairement à FP16 qui peut overflow).
+Les GPU ont de la mémoire limitée (40-80 Go pour les meilleurs). Pour faire tenir des milliards de paramètres, on utilise la **mixed précision** : les poids de référence sont stockés en FP32 (32 bits, précision complète) mais les calculs du forward et du backward pass se font en BF16 (16 bits, la moitié). On divise l'empreinte mémoire par deux avec quasi aucune perte de qualité. Le format BF16 est particulièrement adapté car il garde le même range que FP32 (contrairement à FP16 qui peut overflow).
 
 ### Diviser le modèle sur des centaines de GPU
 
@@ -113,7 +113,7 @@ Un aspect souvent sous-estimé : la qualité des données de pré-entraînement 
 
 ## Ce qu'on obtient — et ce qu'il manque encore
 
-Au terme du pré-entraînement, on a un **modèle de base** (base model, aussi appelé "foundation model"). Il est bluffant pour compléter du texte de façon cohérente. Donnez-lui le début d'un article de physique, et il continuera avec des phrases qui ressemblent à de la physique. Donnez-lui du code Python, et il complétera avec du code syntaxiquement correct.
+Au terme du pré-entraînement, on à un **modèle de base** (base model, aussi appelé "foundation model"). Il est bluffant pour compléter du texte de façon cohérente. Donnez-lui le début d'un article de physique, et il continuera avec des phrases qui ressemblent à de la physique. Donnez-lui du code Python, et il complétera avec du code syntaxiquement correct.
 
 Mais si vous lui posez une question, il risque de... continuer avec d'autres questions. "Quelle est la capitale de l'Allemagne ?" pourrait être suivi de "Quelle est la capitale de l'Italie ? Quelle est la capitale du Japon ?". Parce que dans ses données d'entraînement, les listes de questions étaient fréquentes, et le modèle ne fait que compléter le pattern le plus probable.
 

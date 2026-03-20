@@ -5,15 +5,15 @@ description: "Comprendre le gradient accumulation, technique permettant de simul
 
 ## Le problème : tu veux un batch de 4M tokens mais ton GPU peut faire 32K
 
-Les lois d'échelle pour les LLM disent qu'il faut des **millions de tokens par batch** pour un entraînement stable et efficace. Mais ton GPU ne peut traiter que quelques dizaines de milliers de tokens a la fois (par exemple, un micro-batch de 4 séquences de 4K tokens = 16K tokens).
+Les lois d'échelle pour les LLM disent qu'il faut des **millions de tokens par batch** pour un entraînement stable et efficace. Mais ton GPU ne peut traiter que quelques dizaines de milliers de tokens à la fois (par exemple, un micro-batch de 4 séquences de 4K tokens = 16K tokens).
 
 Le calcul est simple : il te faut un batch de 4M tokens, ton GPU en gère 16K. Pas assez de mémoire pour tout charger d'un coup. Que faire ?
 
-**Gradient Accumulation** est la réponse : au lieu de faire une mise a jour des poids après chaque micro-batch, tu **accumules** les gradients de plusieurs micro-batches, puis tu fais une seule mise a jour. Le modèle voit mathématiquement un grand batch, mais le GPU ne traite que de petits morceaux a la fois.
+**Gradient Accumulation** est la réponse : au lieu de faire une mise à jour des poids après chaque micro-batch, tu **accumules** les gradients de plusieurs micro-batches, puis tu fais une seule mise à jour. Le modèle voit mathématiquement un grand batch, mais le GPU ne traite que de petits morceaux à la fois.
 
 C'est comme remplir une piscine avec un seau : tu ne peux pas la remplir en un seul voyage, mais en faisant suffisamment d'allers-retours, le résultat est le même.
 
-## Comment ca marche
+## Comment ça marche
 
 L'algorithme est d'une simplicité désarmante :
 
@@ -22,7 +22,7 @@ L'algorithme est d'une simplicité désarmante :
    - Forward pass
    - Backward pass : les gradients s'**additionnent** aux gradients existants (pas de `zero_grad` ici)
 3. Diviser les gradients accumulés par $A$ (pour obtenir la moyenne)
-4. `optimizer.step()` (mise a jour des poids)
+4. `optimizer.step()` (mise à jour des poids)
 5. `optimizer.zero_grad()` (remise a zéro pour le prochain cycle)
 
 C'est tout. Pas de magie, pas d'approximation.
@@ -37,7 +37,7 @@ Prenons un exemple concret :
 - Data Parallelism : 64 GPU
 - **Batch effectif : 2 x 16 x 64 = 2048 séquences = 8M tokens**
 
-Tu obtiens l'équivalent d'un batch de 8M tokens, mais a chaque instant ton GPU ne traite que 2 séquences. La mémoire nécessaire est celle de 2 séquences, pas de 2048.
+Tu obtiens l'équivalent d'un batch de 8M tokens, mais à chaque instant ton GPU ne traite que 2 séquences. La mémoire nécessaire est celle de 2 séquences, pas de 2048.
 
 <Callout type="info" title="Équivalence mathématique">
 Les gradients accumulés sont mathématiquement **identiques** a ceux d'un batch unique de taille 2x16x64. Ce n'est pas une approximation : la moyenne des gradients de N petits batches est exactement la même que le gradient d'un seul grand batch (aux effets de batch normalization près, mais les LLM n'utilisent quasiment jamais la BatchNorm).
@@ -80,9 +80,9 @@ Les gradients s'accumulent automatiquement dans PyTorch si tu ne calls pas `zero
 ## Avec DDP/FSDP : optimiser la synchronisation
 
 <Callout type="tip" title="Le contexte no_sync() : une optimisation cruciale">
-En DDP, chaque appel a `backward()` lance automatiquement un all-reduce pour synchroniser les gradients entre GPU. Avec 16 steps d'accumulation, ca fait 16 all-reduce, dont 15 sont inutiles (on n'a besoin de synchroniser qu'au dernier step).
+En DDP, chaque appel a `backward()` lance automatiquement un all-reduce pour synchroniser les gradients entre GPU. Avec 16 steps d'accumulation, ça fait 16 all-reduce, dont 15 sont inutiles (on n'a besoin de synchroniser qu'au dernier step).
 
-Solution : utilise le contexte `no_sync()` pour les 15 premiers steps. Seul le dernier backward lance l'all-reduce. Résultat : la communication réseau est réduite d'un facteur 16. Sur un cluster multi-noeud, ce gain est considérable.
+Solution : utilise le contexte `no_sync()` pour les 15 premiers steps. Seul le dernier backward lance l'all-reduce. Résultat : la communication réseau est réduite d'un facteur 16. Sur un cluster multi-nœud, ce gain est considérable.
 </Callout>
 
 ```python
@@ -111,7 +111,7 @@ Exemple concret :
 Attention : un learning rate plus élevé rend le début de l'entraînement plus instable. Il faut donc allonger la phase de **warmup** (progressivement augmenter le lr depuis zéro) pour laisser l'optimiseur se calibrer.
 
 <Callout type="warning" title="Un batch trop grand nuit a la généralisation">
-Au-delà d'un certain seuil, augmenter le batch devient contre-productif. Le bruit dans les gradients d'un petit batch agit comme un régularisateur naturel (il empêche le modèle de suroptimiser une direction). Un batch trop grand supprime ce bruit, ce qui peut nuire a la généralisation. De plus, pour un budget fixe de tokens d'entraînement, un batch plus grand signifie moins d'itérations (moins de mises a jour des poids), ce qui peut aussi être préjudiciable.
+Au-delà d'un certain seuil, augmenter le batch devient contre-productif. Le bruit dans les gradients d'un petit batch agit comme un régularisateur naturel (il empêche le modèle de suroptimiser une direction). Un batch trop grand supprime ce bruit, ce qui peut nuire à la généralisation. De plus, pour un budget fixe de tokens d'entraînement, un batch plus grand signifie moins d'itérations (moins de mises à jour des poids), ce qui peut aussi être préjudiciable.
 </Callout>
 
 ## Configuration typique pour un modèle 7B
@@ -123,13 +123,13 @@ Au-delà d'un certain seuil, augmenter le batch devient contre-productif. Le bru
 | GPU (DP) | 64 |
 | Batch effectif | 2048 séquences |
 | Tokens par batch | 8M |
-| Learning rate | 1e-4 a 3e-4 |
+| Learning rate | 1e-4 à 3e-4 |
 
-Cette configuration donne un batch effectif stable avec un bon ratio calcul/communication sur un cluster de 8 noeuds DGX.
+Cette configuration donne un batch effectif stable avec un bon ratio calcul/communication sur un cluster de 8 nœuds DGX.
 
 ## Interaction avec Pipeline Parallelism
 
-En Pipeline Parallelism (PP), les micro-batches traversent le pipeline séquentiellement, créant une "bulle" ou certains GPU sont inactifs. L'accumulation de gradients aide a remplir cette bulle : plus il y a de micro-batches, plus le pipeline est utilisé efficacement.
+En Pipeline Parallelism (PP), les micro-batches traversent le pipeline séquentiellement, créant une "bulle" ou certains GPU sont inactifs. L'accumulation de gradients aide à remplir cette bulle : plus il y a de micro-batches, plus le pipeline est utilisé efficacement.
 
 Avec M micro-batches et G GPU en pipeline, la fraction de temps perdu (la bulle) est : `(G - 1) / (M + G - 1)`. Avec 8 GPU et 16 accumulation steps : bulle = 7/23 = 30%. Pas négligeable, mais acceptable. Avec 32 steps : 7/39 = 18%, bien mieux.
 

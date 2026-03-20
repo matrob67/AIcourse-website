@@ -13,7 +13,7 @@ Cas réels:
 - **Moteur de recherche**: 1 milliard de pages web, trouver les 10 meilleures en <1 seconde
 - **Déduplication**: 100M produits, trouver les doublons
 - **Recommandations**: 10M utilisateurs, recommande des articles similaires
-- **RAG (Retrieval-Augmented Generation)**: 100k passages techniques, retrouve les plus pertinents pour répondre à une question
+- **RAG (Retrieval-Augmented Génération)**: 100k passages techniques, retrouve les plus pertinents pour répondre à une question
 
 ### Le problème naïf avec BERT
 
@@ -60,19 +60,19 @@ $$
 
 Les deux BERT utilisent **exactement les mêmes poids** (architecture siamoise). Chaque phrase est encodée **une fois** et stockée.
 
-### La magie: pre-compute et recherche ultra-rapide
+### La magie: pré-compute et recherche ultra-rapide
 
 **Jour 1 : Encoder les 1 million de documents (offline, une seule fois)**
 
-| Etape | Temps |
+| Étape | Temps |
 |---|---|
 | Forward pass BERT par doc | ~100 ms |
 | Total pour 1M docs | ~28 heures |
-| Resultat | 1M vecteurs stockes sur disque |
+| Résultat | 1M vecteurs stockes sur disque |
 
 **Jour 2 : Un utilisateur tape une requete (runtime)**
 
-| Etape | Temps |
+| Étape | Temps |
 |---|---|
 | Encoder la requete (1 forward pass) | ~100 ms |
 | Comparer requete vs 1M vecteurs (cosinus) | ~500 ms (CPU) |
@@ -124,10 +124,10 @@ Où:
 - -1 = opposés
 
 **En pratique pour des textes**:
-| Cosinus | Interpretation |
+| Cosinus | Interprétation |
 |---|---|
 | > 0.9 | Quasi-identique (paraphrase, copie) |
-| 0.7 - 0.9 | Tres similaires (meme sujet) |
+| 0.7 - 0.9 | Très similaires (même sujet) |
 | 0.5 - 0.7 | Similaires (contexte relie) |
 | 0.3 - 0.5 | Faiblement relies |
 | < 0.3 | Sans rapport |
@@ -165,7 +165,7 @@ Pour millions de vecteurs: utilise **ANN** (Approximate Nearest Neighbors) — F
 
 ## RAG: l'application ultime des embeddings
 
-**RAG** (Retrieval-Augmented Generation) est le framework favori des systèmes IA modernes. Idée: laisser un LLM répondre basé sur une base de connaissances fiable, plutôt que juste halluciner.
+**RAG** (Retrieval-Augmented Génération) est le framework favori des systèmes IA modernes. Idée: laisser un LLM répondre basé sur une base de connaissances fiable, plutôt que juste halluciner.
 
 ### Le pipeline RAG
 
@@ -188,17 +188,17 @@ Pour millions de vecteurs: utilise **ANN** (Approximate Nearest Neighbors) — F
 
 ### Pourquoi RAG fonctionne si bien
 
-**Sans RAG** : Utilisateur demande "Comment faire X ?" → Le LLM invente une reponse plausible mais potentiellement fausse.
+**Sans RAG** : Utilisateur demande "Comment faire X ?" → Le LLM inventé une réponse plausible mais potentiellement fausse.
 
-**Avec RAG** : Utilisateur demande "Comment faire X ?" → Documents pertinents retrouves (Doc1, Doc3, Doc5) → Le LLM genere une reponse precise basee sur les docs.
+**Avec RAG** : Utilisateur demande "Comment faire X ?" → Documents pertinents retrouves (Doc1, Doc3, Doc5) → Le LLM génère une réponse précis basee sur les docs.
 
 La différence est **dramatique**. RAG transforme un LLM en assistant fiable pour les domaines spécifiques.
 
 <Callout type="warning" title="Le goulot: qualité de retrieval">
 RAG est aussi bon que sa bonne retrieval. Si SBERT ne retrouve pas les bons passages, le LLM ne peut pas répondre juste:
 
-- **Bonne retrieval** : Utilisateur → SBERT → Documents pertinents → LLM genere une reponse juste
-- **Mauvaise retrieval** : Utilisateur → SBERT → Documents irrelevants → LLM genere une reponse fausse
+- **Bonne retrieval** : Utilisateur → SBERT → Documents pertinents → LLM génère une réponse juste
+- **Mauvaise retrieval** : Utilisateur → SBERT → Documents irrelevants → LLM génère une réponse fausse
 
 **Résultat**: choisir et fine-tuner le modèle d'embedding est **critique**.
 </Callout>
@@ -209,7 +209,7 @@ RAG est aussi bon que sa bonne retrieval. Si SBERT ne retrouve pas les bons pass
 
 Depuis SBERT, l'écosystème a explosé:
 
-- **E5** (Microsoft): entraîné sur paires texte du web, strong zero-shot
+- **E5** (Microsoft): entraîné sur paires texte du web, strong zéro-shot
 - **BGE** (BAAI): multilingues open-source, compétitifs
 - **text-embedding-3** (OpenAI): via API, dimensions ajustables
 - **Cohere Embed**: multilingues, optimisés pour search
@@ -218,14 +218,14 @@ Depuis SBERT, l'écosystème a explosé:
 
 ## Stratégie à deux étages: bi-encoder + cross-encoder
 
-En production, on ne fait jamais "just cosinus et return results". Il y a une technique en deux étages pour la qualité:
+En production, on ne fait jamais "just cosinus et return results". Il y à une technique en deux étages pour la qualité:
 
 ### Stage 1: Bi-encoder (retrieval initial)
 
 SBERT-base: ultra-rapide.
 
 - Requete → SBERT → vecteur **q**
-- 100 000 docs pre-encodes
+- 100 000 docs pré-encodes
 - Recherche ANN : top-100 similaires en ~50 ms
 
 Récupère top-100 passages candidats.
@@ -234,7 +234,7 @@ Récupère top-100 passages candidats.
 
 Pour les top-100, utilise un **cross-encoder** (modèle différent) qui encode la paire (requête, doc) ensemble:
 
-- Pour chaque doc dans le top-100 : (requete + doc) → Cross-encoder → score de pertinence precis
+- Pour chaque doc dans le top-100 : (requete + doc) → Cross-encoder → score de pertinence précis
 - Trier par score → Retourner top-5
 
 Cross-encoder est plus lent (un forward par paire), mais plus précis. C'est ok car on l'applique qu'aux top-100.
@@ -244,12 +244,12 @@ Cross-encoder est plus lent (un forward par paire), mais plus précis. C'est ok 
 | Aspect | Bi-encoder (retrieval) | Cross-encoder (reranking) |
 |---|---|---|
 | Architecture | Encode requête et doc séparément | Encode paire ensemble |
-| Vitesse | Rapide (pre-computed) | Lent (forward par paire) |
+| Vitesse | Rapide (pré-computed) | Lent (forward par paire) |
 | Précision | Bonne | Excellente |
 | Usage | Retrieval initial (large) | Re-ranking top-k |
 
 <Callout type="tip" title="Stratégie industrielle standard">
-Presque tous les systèmes de recherche sémantique production utilisent "bi-encoder pour recall, cross-encoder pour precision". C'est proven, rapide, et fiable.
+Presque tous les systèmes de recherche sémantique production utilisent "bi-encoder pour recall, cross-encoder pour précision". C'est proven, rapide, et fiable.
 </Callout>
 
 ## Pourquoi c'est important

@@ -15,13 +15,13 @@ Flash Attention 2, publié par Tri Dao en 2023, s'attaque précisément à ce pr
 
 ### Réduction des opérations non-matmul
 
-Pour comprendre cette optimisation, il faut saisir un point crucial sur les GPU modernes. Les GPU comme l'A100 ou le H100 possèdent des **Tensor Cores**, des unités spécialisées qui accélèrent les multiplications matricielles (matmul) par un facteur 16x. Mais toutes les autres opérations (additions, multiplications scalaires, comparaisons) tournent sur les coeurs CUDA classiques, bien plus lents.
+Pour comprendre cette optimisation, il faut saisir un point crucial sur les GPU modernes. Les GPU comme l'A100 ou le H100 possèdent des **Tensor Cores**, des unités spécialisées qui accélèrent les multiplications matricielles (matmul) par un facteur 16x. Mais toutes les autres opérations (additions, multiplications scalaires, comparaisons) tournent sur les cœurs CUDA classiques, bien plus lents.
 
 <Callout type="info" title="Tensor Cores et matmul">
-Imaginez une autoroute à 16 voies (les Tensor Cores) réservée aux multiplications matricielles, et une route départementale à une voie (les coeurs CUDA) pour tout le reste. Le débit de l'autoroute est énorme, mais si votre calcul alterne constamment entre l'autoroute et la départementale, vous perdez un temps fou dans les sorties et les entrées.
+Imaginez une autoroute à 16 voies (les Tensor Cores) réservée aux multiplications matricielles, et une route départementale à une voie (les cœurs CUDA) pour tout le reste. Le débit de l'autoroute est énorme, mais si votre calcul alterne constamment entre l'autoroute et la départementale, vous perdez un temps fou dans les sorties et les entrées.
 </Callout>
 
-Flash Attention 1 contenait des opérations de rescaling (correction du softmax en ligne) intercalées avec les matmul. Ces allers-retours entre Tensor Cores et coeurs CUDA gaspillaient du temps. Flash Attention 2 réorganise le calcul pour regrouper les opérations de rescaling et minimiser ces interruptions dans la boucle interne.
+Flash Attention 1 contenait des opérations de rescaling (correction du softmax en ligne) intercalées avec les matmul. Ces allers-retours entre Tensor Cores et cœurs CUDA gaspillaient du temps. Flash Attention 2 réorganise le calcul pour regrouper les opérations de rescaling et minimiser ces interruptions dans la boucle interne.
 
 ### Parallélisme sur la dimension séquence
 
@@ -31,7 +31,7 @@ Flash Attention 2 **inverse les boucles** : la boucle externe itère sur les blo
 
 ### Partitionnement du travail entre warps
 
-Un threadblock GPU contient plusieurs **warps** (groupes de 32 threads qui s'exécutent en parallèle). La manière dont le travail est réparti entre warps a un impact direct sur les performances.
+Un threadblock GPU contient plusieurs **warps** (groupes de 32 threads qui s'exécutent en parallèle). La manière dont le travail est réparti entre warps à un impact direct sur les performances.
 
 <Callout type="paper" title="Partitionnement warp">
 Flash Attention 1 partitionnait K et V entre les warps, ce qui nécessitait une synchronisation coûteuse après chaque bloc (les warps devaient combiner leurs résultats). Flash Attention 2 partitionne Q entre les warps, permettant à chaque warp de travailler de manière indépendante sur différentes lignes de la sortie. Résultat : plus de synchronisation intra-bloc, chaque warp avance à son rythme.

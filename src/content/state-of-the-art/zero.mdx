@@ -9,7 +9,7 @@ Imagine que tu entraînes un modèle sur 64 GPU. En Data Parallelism classique (
 
 C'est du gaspillage pur et dur. L'information utile existe en un seul exemplaire, mais elle occupe 64 fois sa taille en mémoire GPU. C'est comme si 64 étudiants photocopiaient chacun l'intégralité d'une encyclopédie alors qu'ils n'ont besoin que d'un chapitre chacun.
 
-**ZeRO** (Zero Redundancy Optimizer) dit : pourquoi ne pas diviser la charge ? GPU 0 stocke le 1/64e des états, GPU 1 un autre 1/64e, et ainsi de suite. Quand un GPU a besoin d'une information complète, il la rassemble temporairement via une communication collective avec les autres GPU, l'utilise, puis la libère.
+**Zéro** (Zéro Redundancy Optimizer) dit : pourquoi ne pas diviser la charge ? GPU 0 stocke le 1/64e des états, GPU 1 un autre 1/64e, et ainsi de suite. Quand un GPU a besoin d'une information complète, il la rassemble temporairement via une communication collective avec les autres GPU, l'utilise, puis la libère.
 
 <ArxivLink id="1910.02054" title="ZeRO: Memory Optimizations Toward Training Trillion Parameter Models" />
 
@@ -17,7 +17,7 @@ C'est du gaspillage pur et dur. L'information utile existe en un seul exemplaire
 
 ## La mémoire en chiffres : pourquoi le DDP est un gouffre
 
-Pour comprendre ZeRO, il faut d'abord comprendre ce qu'un modèle stocke réellement en mémoire. Avec un modèle de $\Phi$ paramètres entraîné en mixed precision (FP16/BF16) avec l'optimiseur Adam :
+Pour comprendre Zéro, il faut d'abord comprendre ce qu'un modèle stocke réellement en mémoire. Avec un modèle de $\Phi$ paramètres entraîné en mixed précision (FP16/BF16) avec l'optimiseur Adam :
 
 | Composant | Mémoire par GPU (DDP) | Rôle |
 |---|---|---|
@@ -31,12 +31,12 @@ Pour comprendre ZeRO, il faut d'abord comprendre ce qu'un modèle stocke réelle
 Avec 64 GPU en DDP, le coût total est 64 x 16$\Phi$ = 1024$\Phi$ bytes. Mais l'information unique représente seulement 16$\Phi$ bytes. **98.4% de la mémoire GPU est gaspillée en copies redondantes.**
 
 <Callout type="info" title="Exemple concret : LLaMA-7B">
-Pour un modèle de 7 milliards de paramètres : 16$\Phi$ = 16 x 7 x 10^9 = 112 Go par GPU en DDP. Sur 64 GPU, c'est 7.2 To au total pour un modèle qui ne "pèse" réellement que 112 Go d'information unique. ZeRO Stage 3 réduit ça à 112 / 64 = 1.75 Go par GPU. Soudain, un modèle qui semblait impossible à entraîner tient confortablement sur des GPU standards.
+Pour un modèle de 7 milliards de paramètres : 16$\Phi$ = 16 x 7 x 10^9 = 112 Go par GPU en DDP. Sur 64 GPU, c'est 7.2 To au total pour un modèle qui ne "pèse" réellement que 112 Go d'information unique. Zéro Stage 3 réduit ça à 112 / 64 = 1.75 Go par GPU. Soudain, un modèle qui semblait impossible à entraîner tient confortablement sur des GPU standards.
 </Callout>
 
-## Les trois stages de ZeRO : du prudent au radical
+## Les trois stages de Zéro : du prudent au radical
 
-### ZeRO Stage 1 : partitionner les états de l'optimiseur
+### Zéro Stage 1 : partitionner les états de l'optimiseur
 
 Le Stage 1 s'attaque au plus gros morceau de mémoire gaspillée : les états de l'optimiseur Adam (momentum, variance) et les paramètres maîtres FP32. Chaque GPU ne garde que sa fraction 1/P de ces états.
 
@@ -50,7 +50,7 @@ Avec P=64 GPU : environ 4.19$\Phi$ bytes (contre 16$\Phi$ en DDP).
 Le Stage 1 est le point de départ recommandé pour tout projet. Il donne un gain de 4x en mémoire sans le moindre surcoût de communication. Si votre modèle ne rentre pas en mémoire avec DDP, activez Stage 1 en premier --- c'est souvent suffisant pour débloquer la situation.
 </Callout>
 
-### ZeRO Stage 2 : partitionner aussi les gradients
+### Zéro Stage 2 : partitionner aussi les gradients
 
 Le Stage 2 va plus loin : en plus des états de l'optimiseur, les **gradients** sont également partitionnés. Pendant le backward pass, les gradients sont réduits (reduce-scatter) au fur et à mesure, et chaque GPU ne conserve que la partition qui lui appartient.
 
@@ -62,7 +62,7 @@ Avec P=64 : environ 2.22$\Phi$ bytes.
 
 C'est le **sweet spot** pour la majorité des cas d'usage : 8 fois moins de mémoire, sans payer un centime supplémentaire en communication. Si vous ne savez pas quel stage choisir, prenez le Stage 2.
 
-### ZeRO Stage 3 : partitionner les paramètres eux-mêmes
+### Zéro Stage 3 : partitionner les paramètres eux-mêmes
 
 Le Stage 3 pousse la logique jusqu'au bout. Maintenant, même les **paramètres du modèle** sont partitionnés. Chaque GPU ne stocke qu'une fraction 1/P des poids. Avant chaque couche du forward pass, les paramètres complets de cette couche sont rassemblés temporairement (all-gather), utilisés pour le calcul, puis libérés de la mémoire.
 
@@ -81,44 +81,44 @@ Le Stage 3 est extraordinairement efficace en mémoire, mais cette économie se 
 | Stage | Mémoire/GPU | Communication | Quand l'utiliser |
 |-------|-----------|---------------|------------------|
 | DDP | 16$\Phi$ | 1x (baseline) | Petits modèles (< 1B) |
-| ZeRO-1 | ~4$\Phi$ | 1x | Modèles moyens (1-10B) |
-| ZeRO-2 | ~2$\Phi$ | 1x | Grands modèles (10-100B) |
-| ZeRO-3 | 16$\Phi$/P | 1.5x | Très grands modèles (100B+) |
+| Zéro-1 | ~4$\Phi$ | 1x | Modèles moyens (1-10B) |
+| Zéro-2 | ~2$\Phi$ | 1x | Grands modèles (10-100B) |
+| Zéro-3 | 16$\Phi$/P | 1.5x | Très grands modèles (100B+) |
 
-## ZeRO-Offload et ZeRO-Infinity : déborder vers le CPU et le SSD
+## Zéro-Offload et Zéro-Infinity : déborder vers le CPU et le SSD
 
-### ZeRO-Offload
+### Zéro-Offload
 
-Et si on allait encore plus loin ? ZeRO-Offload déplace les états de l'optimiseur et les mises à jour de paramètres sur le **CPU**, pendant que le GPU se concentre sur le forward et backward pass. La mémoire GPU est libérée pour les activations (qui sont souvent le vrai goulot d'étranglement pour les grands batch sizes).
+Et si on allait encore plus loin ? Zéro-Offload déplace les états de l'optimiseur et les mises à jour de paramètres sur le **CPU**, pendant que le GPU se concentre sur le forward et backward pass. La mémoire GPU est libérée pour les activations (qui sont souvent le vrai goulot d'étranglement pour les grands batch sizes).
 
 Le trick : les mises à jour Adam sont suffisamment simples pour que le CPU les fasse en parallèle du forward pass suivant sur le GPU. On masque ainsi la latence du transfert GPU-CPU.
 
-### ZeRO-Infinity
+### Zéro-Infinity
 
 L'extension la plus audacieuse : utiliser le CPU **et** le NVMe (SSD) comme mémoire de débordement. Les paramètres et états inactifs sont stockés sur le SSD, chargés à la demande sur le CPU, puis transférés au GPU juste avant leur utilisation. En théorie, vous pouvez entraîner un modèle de taille arbitraire sur un seul GPU --- extrêmement lentement, mais c'est possible.
 
 <Callout type="paper" title="Les capacités de ZeRO-Infinity">
-ZeRO-Infinity permet d'entraîner des modèles 10 à 50 fois plus grands que la mémoire GPU disponible. La vitesse est significativement réduite par les transferts GPU ↔ CPU ↔ NVMe, mais pour les expériences de recherche où seul le résultat final compte (pas le temps d'entraînement), c'est une option précieuse.
+Zéro-Infinity permet d'entraîner des modèles 10 à 50 fois plus grands que la mémoire GPU disponible. La vitesse est significativement réduite par les transferts GPU ↔ CPU ↔ NVMe, mais pour les expériences de recherche où seul le résultat final compte (pas le temps d'entraînement), c'est une option précieuse.
 </Callout>
 
-## ZeRO vs FSDP : deux implémentations, même idée
+## Zéro vs FSDP : deux implémentations, même idée
 
-ZeRO (Microsoft/DeepSpeed) et FSDP (Meta/PyTorch) implémentent fondamentalement le même concept : partitionner les états du modèle entre les GPU pour éliminer la redondance. Les différences sont dans l'implémentation et l'écosystème :
+Zéro (Microsoft/DeepSpeed) et FSDP (Meta/PyTorch) implémentent fondamentalement le même concept : partitionner les états du modèle entre les GPU pour éliminer la redondance. Les différences sont dans l'implémentation et l'écosystème :
 
-| Aspect | ZeRO-3 (DeepSpeed) | FSDP (PyTorch natif) |
+| Aspect | Zéro-3 (DeepSpeed) | FSDP (PyTorch natif) |
 |--------|--------|------|
 | Framework | Plugin DeepSpeed | Intégré à PyTorch |
 | Configuration | Fichier JSON externe | API Python native |
-| Offloading | Meilleur (ZeRO-Infinity) | Basique (CPU seulement) |
+| Offloading | Meilleur (Zéro-Infinity) | Basique (CPU seulement) |
 | Intégration PyTorch | Via plugin | Native et transparente |
 | torch.compile | Non compatible | Oui (FSDP2) |
 
-Pour les **nouveaux projets**, FSDP est généralement recommandé : c'est natif PyTorch, mieux intégré avec l'écosystème (torch.compile, profiler), et activement maintenu par Meta. DeepSpeed reste le meilleur choix quand vous avez besoin d'offloading avancé (ZeRO-Infinity) ou que vous utilisez Hugging Face Transformers (qui a une intégration DeepSpeed mature).
+Pour les **nouveaux projets**, FSDP est généralement recommandé : c'est natif PyTorch, mieux intégré avec l'écosystème (torch.compile, profiler), et activement maintenu par Meta. DeepSpeed reste le meilleur choix quand vous avez besoin d'offloading avancé (Zéro-Infinity) ou que vous utilisez Hugging Face Transformers (qui à une intégration DeepSpeed mature).
 
 <Callout type="info" title="La perspective historique">
-ZeRO a été révolutionnaire quand Microsoft l'a publié en 2020. C'était le premier à démontrer qu'on pouvait entraîner des modèles massifs **sans recourir au Tensor Parallelism** --- démocratisant l'accès à l'entraînement de grands modèles pour les équipes qui n'avaient pas l'expertise NVIDIA. Aujourd'hui, ZeRO-3 et FSDP sont fonctionnellement comparables, et le choix entre les deux dépend surtout de votre écosystème existant.
+Zéro a été révolutionnaire quand Microsoft l'a publié en 2020. C'était le premier à démontrer qu'on pouvait entraîner des modèles massifs **sans recourir au Tensor Parallelism** --- démocratisant l'accès à l'entraînement de grands modèles pour les équipes qui n'avaient pas l'expertise NVIDIA. Aujourd'hui, Zéro-3 et FSDP sont fonctionnellement comparables, et le choix entre les deux dépend surtout de votre écosystème existant.
 </Callout>
 
 ## Résumé
 
-ZeRO résout un problème simple mais critique : la redondance mémoire massive du Data Parallelism classique. En partitionnant intelligemment les paramètres, gradients et états d'optimiseur entre les GPU, il rend possible l'entraînement de modèles qui seraient autrement trop grands pour la mémoire disponible. Le Stage 2 est le sweet spot pour la majorité des situations (8x moins de mémoire, zéro surcoût). Le Stage 3 est l'arme nucléaire pour les modèles véritablement massifs. C'est une contribution fondamentale qui a rendu possible l'ère des LLM à centaines de milliards de paramètres.
+Zéro résout un problème simple mais critique : la redondance mémoire massive du Data Parallelism classique. En partitionnant intelligemment les paramètres, gradients et états d'optimiseur entre les GPU, il rend possible l'entraînement de modèles qui seraient autrement trop grands pour la mémoire disponible. Le Stage 2 est le sweet spot pour la majorité des situations (8x moins de mémoire, zéro surcoût). Le Stage 3 est l'arme nucléaire pour les modèles véritablement massifs. C'est une contribution fondamentale qui a rendu possible l'ère des LLM à centaines de milliards de paramètres.

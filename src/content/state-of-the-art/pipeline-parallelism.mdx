@@ -9,7 +9,7 @@ description: "Étude du Pipeline Parallelism, la technique qui distribue les cou
 
 Imagine une chaîne de montage dans une usine. Tu as 8 postes de travail en série pour assembler un produit. Si tu envoies une seule pièce dans la chaîne, voici ce qui se passe : le poste 1 travaille pendant 10 secondes, puis passe la pièce au poste 2. Pendant que le poste 2 travaille, les postes 3 à 8 sont complètement inactifs -- ils attendent que la pièce arrive jusqu'à eux. 7 postes sur 8 ne font rien. C'est un gaspillage colossal.
 
-C'est exactement ce qui se passe quand tu distribues naïvement un modèle sur plusieurs GPU. Tu mets les couches 0-11 sur le GPU 0, les couches 12-23 sur le GPU 1, et ainsi de suite. Pendant que le GPU 0 traite le batch, tous les autres dorment. Puis le GPU 0 passe le relais au GPU 1, et c'est au tour du GPU 0 de dormir. A tout instant, un seul GPU travaille.
+C'est exactement ce qui se passe quand tu distribues naïvement un modèle sur plusieurs GPU. Tu mets les couches 0-11 sur le GPU 0, les couches 12-23 sur le GPU 1, et ainsi de suite. Pendant que le GPU 0 traite le batch, tous les autres dorment. Puis le GPU 0 passe le relais au GPU 1, et c'est au tour du GPU 0 de dormir. À tout instant, un seul GPU travaille.
 
 Le **Pipeline Parallelism** résout ce problème avec une astuce empruntée aux chaînes de montage industrielles : au lieu de traiter un seul batch à la fois, tu le divises en 4, 8, ou 16 **micro-batches** et tu les fais circuler dans le pipeline en continu. Pendant que le GPU 0 traite le micro-batch 2, le GPU 1 travaille sur le micro-batch 1, le GPU 2 sur le micro-batch 0... tout le monde est occupé simultanément.
 
@@ -23,11 +23,11 @@ Pour un modèle avec N couches et P stages (GPU), chaque stage gère environ N/P
 - ...
 - GPU 7 : couches 84-95
 
-Chaque GPU ne stocke que les paramètres de ses propres couches. Ca divise la mémoire nécessaire par P (ici par 8). C'est l'avantage fondamental du Pipeline Parallelism : un modèle trop gros pour un seul GPU peut être réparti sur plusieurs.
+Chaque GPU ne stocke que les paramètres de ses propres couches. Ça divise la mémoire nécessaire par P (ici par 8). C'est l'avantage fondamental du Pipeline Parallelism : un modèle trop gros pour un seul GPU peut être réparti sur plusieurs.
 
 ### Le problème de la bulle de pipeline
 
-Même avec le micro-batching, il y a un moment d'inefficacité inévitable : la **bulle de pipeline**. Au tout début, seul le GPU 0 a du travail (le premier micro-batch). A l'étape suivante, GPU 0 et GPU 1 sont occupés. Ce n'est qu'à la 8ème étape (pour 8 GPU) que tout le pipeline est enfin rempli et que tous les GPU travaillent. Cette phase de remplissage, c'est du temps perdu.
+Même avec le micro-batching, il y à un moment d'inefficacité inévitable : la **bulle de pipeline**. Au tout début, seul le GPU 0 a du travail (le premier micro-batch). À l'étape suivante, GPU 0 et GPU 1 sont occupés. Ce n'est qu'à la 8ème étape (pour 8 GPU) que tout le pipeline est enfin rempli et que tous les GPU travaillent. Cette phase de remplissage, c'est du temps perdu.
 
 De même, à la fin du traitement, le pipeline se vide progressivement : le GPU 0 finit en premier et attend les autres.
 
@@ -56,29 +56,29 @@ L'avantage crucial : tu libères les activations d'un micro-batch dès que son b
 
 ### Interleaved 1F1B : réduire encore la bulle
 
-Variante plus sophistiquée : au lieu d'attribuer à chaque GPU un bloc contigu de couches, tu lui donnes **plusieurs petits blocs non-contigus**. Par exemple, GPU 0 gère les couches 0-5, 48-53, 96-101. Ca augmente le nombre effectif de stages dans le pipeline, ce qui réduit proportionnellement la bulle. Le prix : plus de communications entre GPU, car un même micro-batch doit faire des allers-retours.
+Variante plus sophistiquée : au lieu d'attribuer à chaque GPU un bloc contigu de couches, tu lui donnes **plusieurs petits blocs non-contigus**. Par exemple, GPU 0 gère les couches 0-5, 48-53, 96-101. Ça augmente le nombre effectif de stages dans le pipeline, ce qui réduit proportionnellement la bulle. Le prix : plus de communications entre GPU, car un même micro-batch doit faire des allers-retours.
 
 ## Combinaison avec d'autres parallélismes
 
 Le Pipeline Parallelism ne s'utilise presque jamais seul en pratique. Il brille quand tu le combines avec les autres formes de parallélisme dans un système **3D** :
 
-**Tensor Parallelism (au sein d'un noeud)** : utilise les liens NVLink ultra-rapides d'NVIDIA pour partitionner chaque couche sur 8 GPU locaux. Chaque opération matricielle est divisée entre les GPU du même noeud.
+**Tensor Parallelism (au sein d'un nœud)** : utilise les liens NVLink ultra-rapides d'NVIDIA pour partitionner chaque couche sur 8 GPU locaux. Chaque opération matricielle est divisée entre les GPU du même nœud.
 
 **Data Parallelism (répliques)** : multiplie le pipeline complet pour traiter plusieurs copies du même modèle en parallèle sur des données différentes.
 
-Pour un modèle de 175 milliards de paramètres sur 512 GPU (64 noeuds DGX) :
-- Tensor Parallelism = 8 (dans chaque noeud, via NVLink)
-- Pipeline Parallelism = 8 (entre 8 noeuds, via InfiniBand)
+Pour un modèle de 175 milliards de paramètres sur 512 GPU (64 nœuds DGX) :
+- Tensor Parallelism = 8 (dans chaque nœud, via NVLink)
+- Pipeline Parallelism = 8 (entre 8 nœuds, via InfiniBand)
 - Data Parallelism = 8 (8 répliques du pipeline complet)
 - Total : 8 x 8 x 8 = 512 GPU
 
 <Callout type="tip" title="Pourquoi PP fonctionne bien inter-noeud">
-PP n'a besoin que de communications **point-à-point** : le GPU N envoie les activations au GPU N+1. C'est très efficace sur InfiniBand (faible latence, haut débit). Le Tensor Parallelism, lui, nécessite des all-reduce fréquents entre tous les GPU du groupe, ce qui est bien plus coûteux en bande passante. D'ou la répartition classique : TP intra-noeud (NVLink rapide), PP inter-noeud (InfiniBand).
+PP n'a besoin que de communications **point-à-point** : le GPU N envoie les activations au GPU N+1. C'est très efficace sur InfiniBand (faible latence, haut débit). Le Tensor Parallelism, lui, nécessite des all-reduce fréquents entre tous les GPU du groupe, ce qui est bien plus coûteux en bande passante. D'ou la répartition classique : TP intra-nœud (NVLink rapide), PP inter-nœud (InfiniBand).
 </Callout>
 
 ## Quand utiliser le Pipeline Parallelism ?
 
-PP est indispensable quand ton modèle est trop gros pour tenir sur les GPU d'un seul noeud, même avec le Tensor Parallelism. C'est le cas pour tous les modèles de 100B+ paramètres. Pour les "petits" modèles (7B-70B), TP + Data Parallelism suffisent généralement.
+PP est indispensable quand ton modèle est trop gros pour tenir sur les GPU d'un seul nœud, même avec le Tensor Parallelism. C'est le cas pour tous les modèles de 100B+ paramètres. Pour les "petits" modèles (7B-70B), TP + Data Parallelism suffisent généralement.
 
 Le coût principal du PP est la bulle. Avec suffisamment de micro-batches (M >> P), elle devient négligeable. Combiné avec TP et DP, le Pipeline Parallelism forme la base du scaling de tous les plus grands LLM (GPT-4, Claude, LLaMA 405B, etc.).
 

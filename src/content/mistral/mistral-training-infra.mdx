@@ -22,7 +22,7 @@ Le H100 est le GPU de référence pour l'entraînement de LLM depuis 2023. C'est
 | Spécification | Valeur |
 |--------------|--------|
 | Architecture | Hopper (GH100) |
-| Coeurs CUDA | 16 896 |
+| Cœurs CUDA | 16 896 |
 | Tensor Cores | 528 (4e génération) |
 | Mémoire HBM3 | 80 Go |
 | Bande passante mémoire | 3,35 TB/s |
@@ -51,11 +51,11 @@ Entraîner un modèle comme Mistral Large 3 (675B paramètres) nécessite un clu
 
 #### Topologie réseau
 
-**Intra-noeud (dans un serveur) :** 8 GPU H100/H200 par noeud, connectés via NVLink 4.0 (900 GB/s bidirectionnels). Le NVSwitch permet une communication all-to-all à pleine bande passante entre les 8 GPU d'un même noeud. C'est comme 8 personnes assises autour d'une même table : la communication est instantanée.
+**Intra-nœud (dans un serveur) :** 8 GPU H100/H200 par nœud, connectés via NVLink 4.0 (900 GB/s bidirectionnels). Le NVSwitch permet une communication all-to-all à pleine bande passante entre les 8 GPU d'un même nœud. C'est comme 8 personnes assises autour d'une même table : la communication est instantanée.
 
-**Inter-noeud (entre serveurs) :** Les noeuds sont connectés via InfiniBand NDR (400 Gb/s par port), avec une topologie fat-tree qui maximise la bande passante agrégée. C'est comme des tables reliées par des couloirs : plus lent que la communication intra-table, mais suffisant pour coordonner le travail.
+**Inter-nœud (entre serveurs) :** Les nœuds sont connectés via InfiniBand NDR (400 Gb/s par port), avec une topologie fat-tree qui maximise la bande passante agrégée. C'est comme des tables reliées par des couloirs : plus lent que la communication intra-table, mais suffisant pour coordonner le travail.
 
-**À l'échelle du cluster :** Un cluster typique pour entraîner un modèle frontier comprend entre 1 000 et 10 000 GPU, répartis sur des centaines de noeuds. C'est une infrastructure industrielle, pas un labo de recherche.
+**À l'échelle du cluster :** Un cluster typique pour entraîner un modèle frontier comprend entre 1 000 et 10 000 GPU, répartis sur des centaines de nœuds. C'est une infrastructure industrielle, pas un labo de recherche.
 
 ### Parallélisme multi-dimensionnel : comment distribuer un modèle géant
 
@@ -67,7 +67,7 @@ Chaque GPU (ou groupe de GPU) traite un sous-ensemble différent du batch de don
 
 #### Tensor Parallelism (TP) : découper les opérations
 
-Les opérations matricielles individuelles (les grosses multiplications de matrices dans l'attention et les FFN) sont découpées et distribuées sur plusieurs GPU au sein d'un même noeud. Ça nécessite une communication inter-GPU ultra-rapide (NVLink), d'où le fait que c'est limité à l'intra-noeud.
+Les opérations matricielles individuelles (les grosses multiplications de matrices dans l'attention et les FFN) sont découpées et distribuées sur plusieurs GPU au sein d'un même nœud. Ça nécessite une communication inter-GPU ultra-rapide (NVLink), d'où le fait que c'est limité à l'intra-nœud.
 
 #### Pipeline Parallelism (PP) : l'usine en chaîne
 
@@ -78,12 +78,12 @@ Le modèle est découpé en "étages", chaque étage contenant un sous-ensemble 
 Les différents experts sont distribués sur différents GPU. Quand le routeur sélectionne un expert, le token est envoyé au GPU qui héberge cet expert via une communication all-to-all. C'est une forme de parallélisme naturellement adaptée à l'architecture MoE.
 
 <Callout type="paper" title="L'art de combiner les parallélismes">
-En pratique, ces formes de parallélisme sont combinées. Une configuration typique pourrait être : TP=8 (8 GPU par groupe de tenseurs, intra-noeud), PP=4 (4 étages de pipeline), EP=8 (8 groupes d'experts), et DP=N (N répliques de données). Trouver la combinaison optimale est un problème d'ingénierie complexe qui nécessite de comprendre les trade-offs entre réseau, calcul et mémoire. C'est l'un des savoir-faire les plus précieux de Mistral.
+En pratique, ces formes de parallélisme sont combinées. Une configuration typique pourrait être : TP=8 (8 GPU par groupe de tenseurs, intra-nœud), PP=4 (4 étages de pipeline), EP=8 (8 groupes d'experts), et DP=N (N répliques de données). Trouver la combinaison optimale est un problème d'ingénierie complexe qui nécessite de comprendre les trade-offs entre réseau, calcul et mémoire. C'est l'un des savoir-faire les plus précieux de Mistral.
 </Callout>
 
 ### Optimisations d'entraînement
 
-#### Mixed Precision Training
+#### Mixed Précision Training
 
 L'entraînement utilise des précisions mixtes : les calculs forward et backward sont effectués en BF16 (bfloat16), tandis que les poids "maîtres" sont maintenus en FP32 pour la stabilité numérique. Pourquoi BF16? Les Tensor Cores des H100 sont optimisés pour ce format, offrant des performances maximales. BF16 a aussi un avantage sur FP16 : sa plage dynamique est identique à FP32, ce qui évite les débordements numériques pendant l'entraînement.
 
@@ -91,9 +91,9 @@ L'entraînement utilise des précisions mixtes : les calculs forward et backward
 
 Pour économiser la mémoire, au lieu de stocker toutes les activations intermédiaires pendant le forward pass (pour les réutiliser pendant le backward), on les recalcule à la volée. C'est un échange calcul contre mémoire : on réduit l'empreinte mémoire d'un facteur 3-5x, au prix d'environ 30% de calcul supplémentaire. Sur des modèles géants, c'est indispensable.
 
-#### ZeRO (Zero Redundancy Optimizer)
+#### Zéro (Zéro Redundancy Optimizer)
 
-Développé par Microsoft (DeepSpeed), ZeRO élimine la redondance dans le stockage des états de l'optimiseur. Au lieu que chaque GPU stocke une copie complète des moments Adam, des gradients et des poids, ces données sont réparties entre les GPU. Chaque GPU ne stocke qu'une fraction, et demande aux autres quand il en a besoin. L'empreinte mémoire par GPU est drastiquement réduite.
+Développé par Microsoft (DeepSpeed), Zéro élimine la redondance dans le stockage des états de l'optimiseur. Au lieu que chaque GPU stocke une copie complète des moments Adam, des gradients et des poids, ces données sont réparties entre les GPU. Chaque GPU ne stocke qu'une fraction, et demande aux autres quand il en a besoin. L'empreinte mémoire par GPU est drastiquement réduite.
 
 ### Estimations de coûts : les ordres de grandeur
 

@@ -5,21 +5,21 @@ description: "Faire traiter 100 questions au modèle en parallèle au lieu de le
 
 ## Le problème du batching classique
 
-Imagine un restaurant ou le serveur attend que les 8 clients a sa table aient tous fini de manger avant de débarrasser. Si un client finit son entrée en 5 minutes et un autre prend 45 minutes pour son plat, les 7 premiers restent plantés la a attendre. Le serveur est bloqué, les tables suivantes ne sont pas servies.
+Imagine un restaurant ou le serveur attend que les 8 clients à sa table aient tous fini de manger avant de débarrasser. Si un client finit son entrée en 5 minutes et un autre prend 45 minutes pour son plat, les 7 premiers restent plantés la a attendre. Le serveur est bloqué, les tables suivantes ne sont pas servies.
 
 C'est exactement ce qui arrive avec le batching classique (statique) pour les LLM. Tu groupes 8 requêtes ensemble et les traites en parallèle. Mais si une requête génère 500 tokens et une autre seulement 50, le GPU calcule du vide pour les 7 requêtes terminées pendant que la dernière finit sa génération. C'est du gaspillage pur et simple.
 
 <Callout type="info" title="L'ampleur du gaspillage">
-Avec un batch statique de 8 requêtes de longueurs variées, le GPU passe jusqu'a **90% de son temps a calculer du padding** pour les requêtes déja terminées. Le throughput réel est une fraction du potentiel théorique du matériel.
+Avec un batch statique de 8 requêtes de longueurs variées, le GPU passe jusqu'à **90% de son temps à calculer du padding** pour les requêtes déja terminées. Le throughput réel est une fraction du potentiel théorique du matériel.
 </Callout>
 
 ## Continuous Batching : la solution
 
 ### Le principe
 
-Au lieu de traiter les requêtes du début a la fin en bloc, le continuous batching gère chaque **step de génération** individuellement :
+Au lieu de traiter les requêtes du début à la fin en bloc, le continuous batching gère chaque **step de génération** individuellement :
 
-1. A chaque step, générer **un token** pour chaque requête active dans le batch
+1. À chaque step, générer **un token** pour chaque requête active dans le batch
 2. Quand une requête finit (token EOS ou limite atteinte), la **retirer immédiatement** du batch
 3. La remplacer instantanément par une **nouvelle requête** depuis la file d'attente
 4. Le batch reste **constamment rempli** a pleine capacité
@@ -33,10 +33,10 @@ Les LLM ont deux phases de traitement très différentes :
 - **Prefill** : traiter le prompt d'entrée en une seule passe. C'est une opération **parallélisable** qui exploite bien les GPU (toute la séquence d'entrée est traitée simultanément).
 - **Decode** : générer la réponse token par token. C'est **séquentiel** par nature et beaucoup moins efficace en termes d'utilisation GPU.
 
-Le continuous batching mélange les deux phases dans le même batch : certaines requêtes en sont a leur phase de prefill tandis que d'autres génèrent déja des tokens. Ca maximise l'utilisation du GPU a tout instant.
+Le continuous batching mélange les deux phases dans le même batch : certaines requêtes en sont à leur phase de prefill tandis que d'autres génèrent déja des tokens. Ça maximise l'utilisation du GPU à tout instant.
 
 <Callout type="tip" title="Gain de throughput">
-Le continuous batching peut améliorer le throughput de **2 a 8x** par rapport au batching statique, selon la variabilité des longueurs de réponse. Plus les longueurs sont hétérogènes (ce qui est le cas en production), plus le gain est important.
+Le continuous batching peut améliorer le throughput de **2 à 8x** par rapport au batching statique, selon la variabilité des longueurs de réponse. Plus les longueurs sont hétérogènes (ce qui est le cas en production), plus le gain est important.
 </Callout>
 
 ## Dynamic Batching
@@ -58,7 +58,7 @@ Exemple : un prompt de 8000 tokens est découpé en chunks de 512 tokens. Chaque
 
 ### Le problème mémoire
 
-Le **KV cache** (Key-Value cache) stocke les clés et valeurs d'attention déja calculées pour chaque requête. Sans lui, il faudrait recalculer toute l'attention a chaque nouveau token. Mais sa taille croît avec la longueur de la séquence :
+Le **KV cache** (Key-Value cache) stocke les clés et valeurs d'attention déja calculées pour chaque requête. Sans lui, il faudrait recalculer toute l'attention à chaque nouveau token. Mais sa taille croît avec la longueur de la séquence :
 
 Pour un modèle 7B (32 couches, 32 têtes, 128 dimensions par tête) :
 
@@ -68,14 +68,14 @@ Pour un modèle 7B (32 couches, 32 têtes, 128 dimensions par tête) :
 | Pour 4096 tokens | 2 Go par requête |
 | Pour 32 requêtes | 64 Go |
 
-C'est **énorme**. Et le problème, c'est qu'on ne connaît pas la longueur finale de la réponse a l'avance. Combien réserver ?
+C'est **énorme**. Et le problème, c'est qu'on ne connaît pas la longueur finale de la réponse à l'avance. Combien réserver ?
 
 ### Stratégies d'allocation
 
 Trois approches existent :
 
 1. **Pré-allocation maximale** : réserver la longueur max pour chaque requête. Simple, mais gaspille 60-80% de la mémoire avec du vide.
-2. **PagedAttention** : allocation par pages de taille fixe, a la demande. Réduit le gaspillage a < 4%. C'est le standard actuel.
+2. **PagedAttention** : allocation par pages de taille fixe, à la demande. Réduit le gaspillage a < 4%. C'est le standard actuel.
 3. **Radix Tree** : organiser les KV caches en arbre pour partager automatiquement les préfixes communs entre requêtes.
 
 <Callout type="warning" title="Le vrai facteur limitant">
@@ -96,7 +96,7 @@ Quand la mémoire GPU est saturée, il faut faire de la place :
 
 ### Multi-step scheduling
 
-Au lieu de prendre des décisions de scheduling a chaque token, planifier plusieurs steps de decode a l'avance. Ca réduit l'overhead de gestion et permet des optimisations de batching plus intelligentes.
+Au lieu de prendre des décisions de scheduling à chaque token, planifier plusieurs steps de decode à l'avance. Ça réduit l'overhead de gestion et permet des optimisations de batching plus intelligentes.
 
 ## Support dans les frameworks
 
@@ -125,4 +125,4 @@ Pour un chatbot interactif, on vise un TPOT < 50ms pour une expérience fluide. 
 
 ## Impact réel
 
-Le continuous batching est devenu **indispensable** en production. Sans lui, les coûts d'inférence seraient **5 a 10 fois plus élevés** pour le même niveau de service. C'est une optimisation système qui ne change rien au modèle lui-même mais transforme radicalement l'économie du déploiement.
+Le continuous batching est devenu **indispensable** en production. Sans lui, les coûts d'inférence seraient **5 à 10 fois plus élevés** pour le même niveau de service. C'est une optimisation système qui ne change rien au modèle lui-même mais transforme radicalement l'économie du déploiement.
