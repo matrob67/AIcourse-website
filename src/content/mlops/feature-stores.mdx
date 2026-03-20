@@ -5,140 +5,136 @@ description: "Centralisez vos features ML. Évitez le training-serving skew. Fea
 
 ## Le problème : vos features sont partout et incohérentes
 
-Les **features** d'un modèle = les variables d'entrée. Pour une fraude, c'est peut-être "montant moyen des 7 derniers jours", "nombre de transactions dernière heure", etc.
+Les **features** d'un modèle ML, ce sont ses variables d'entrée. Pour un modèle de détection de fraude, ça pourrait être "montant moyen des transactions sur les 7 derniers jours", "nombre de transactions dans la dernière heure", "distance entre le lieu d'achat et l'adresse habituelle".
 
-Sans gestion centralisée :
+Dans la réalité des entreprises, sans gestion centralisée, c'est le chaos :
 
-- **Duplication** : les équipes recalculent les mêmes features
-- **Incohérence** : feature calculée en train ≠ feature servie en inférence (training-serving skew)
-- **Non-reproductibilité** : impossible de reconstruire les features d'un modèle ancien
-- **Latence** : recalculer les features en temps réel à chaque requête = trop lent
+- **Duplication massive** : trois équipes différentes calculent la même feature "montant moyen 7 jours" avec trois implémentations légèrement différentes. Résultat : trois versions incompatibles de la même chose.
+- **Training-serving skew** : la feature est calculée d'une manière pendant l'entraînement (batch Python sur Spark) et d'une autre en inférence (service Java temps réel). Les résultats diffèrent subtilement. Le modèle reçoit des données qu'il n'a jamais vues pendant l'entraînement.
+- **Non-reproductibilité** : impossible de reconstruire exactement les features utilisées par un modèle déployé il y a 6 mois
+- **Latence prohibitive** : recalculer toutes les features à chaque requête d'inférence en temps réel, c'est trop lent pour un service qui doit répondre en 50ms
 
-<Callout type="info" title="Le training-serving skew">
-C'est l'un des bugs les plus insidieux du ML en production. Si la logique de calcul d'une feature diffère entre l'entraînement (Python/Spark batch) et l'inférence (Java/Go temps réel), le modèle reçoit des données différentes. Les performances dégringolent sans explication.
+<Callout type="info" title="Le training-serving skew : le bug le plus insidieux du ML en production">
+C'est le cauchemar classique : votre modèle a 95% de précision en évaluation offline, mais 80% en production. Pourquoi ? La logique de calcul d'une feature diffère entre le pipeline batch d'entraînement (Python/Spark) et le service d'inférence temps réel (Java/Go). Le modèle reçoit des inputs légèrement différents en production, et ses performances s'effondrent sans aucune erreur visible dans les logs.
 </Callout>
 
-## Qu'est-ce qu'un Feature Store ?
+## Qu'est-ce qu'un Feature Store exactement ?
 
-Un système centralisé qui gère la définition, le calcul, le stockage et le serving des features. **Même features** de manière cohérente pour l'entraînement (batch) ET l'inférence (temps réel).
+Un feature store est un système centralisé qui gère tout le cycle de vie des features : définition, calcul, stockage et serving. Son objectif fondamental est de garantir que les **mêmes features**, calculées de la **même manière**, sont servies de manière cohérente pour l'entraînement (batch) ET l'inférence (temps réel).
 
-### Architecture
+### Architecture type
 
-1. **Définition et transformation** : définissez une feature une seule fois avec sa logique
-2. **Stockage** :
-   - **Offline** : data warehouse pour l'entraînement (batch)
-   - **Online** : cache rapide pour l'inférence (Redis, DynamoDB)
-3. **Serving** : une API uniforme récupère les features (training ou inférence)
+1. **Définition et transformation** : chaque feature est définie une seule fois, avec sa logique de calcul. Une source de vérité unique.
+2. **Stockage dual** :
+   - **Offline store** : un data warehouse (BigQuery, Snowflake, Parquet) pour l'entraînement batch. Contient l'historique complet.
+   - **Online store** : un cache ultra-rapide (Redis, DynamoDB) pour l'inférence temps réel. Contient uniquement les valeurs les plus récentes.
+3. **Serving unifié** : une API unique récupère les features, que ce soit pour construire un dataset d'entraînement ou pour servir une prédiction en temps réel
 
-### Concepts clés
+### Concepts clés à maîtriser
 
-- **Feature** : variable calculée (ex: `avg_transaction_7d`)
-- **Feature View** : groupe logique de features
-- **Entity** : l'objet auquel se rapporte la feature (utilisateur, produit)
-- **Point-in-time join** : garantit qu'on utilise que des données **disponibles au moment** (pas de data leakage)
-
-
+- **Feature** : une variable calculée avec un nom explicite, par exemple `avg_transaction_amount_7d`
+- **Feature View** : un groupe logique de features qui vont ensemble (toutes les features transactionnelles d'un utilisateur)
+- **Entity** : l'objet auquel les features se rapportent (un utilisateur, un produit, une transaction)
+- **Point-in-time join** : la garantie qu'on n'utilise que des données qui étaient **réellement disponibles au moment de la prédiction**. Sans ça, vous avez du data leakage : le modèle "triche" en utilisant des informations du futur pendant l'entraînement.
 
 ## Feast : le feature store open source
 
-**Feast** populaire, lightweight, créé par Gojek/Google, maintenu par Tecton maintenant.
+**Feast** (Feature Store) est le projet open source le plus populaire dans cette catégorie. Créé chez Gojek/Google, il est maintenant maintenu par Tecton.
 
-### Architecture déclarative
+### Déclaration et déploiement
 
 ```python
-# Vous définissez vos features
+# Définissez vos features une fois
 @dataset
 def my_features(entity_df):
     return features_from_database()
 
-# Feast apply déploie
-# Feast materialize pousse au online store
+# feast apply : déploie la définition
+# feast materialize : pousse les valeurs dans l'online store
 ```
 
-### Supports
+### Backends supportés
 
-- **Offline** : BigQuery, Snowflake, Redshift, Parquet, Spark
-- **Online** : Redis, DynamoDB, SQLite, Cassandra, Postgres
-- **Registry** : catalogue centralisé des features
+- **Offline store** : BigQuery, Snowflake, Redshift, fichiers Parquet, Spark
+- **Online store** : Redis, DynamoDB, SQLite, Cassandra, PostgreSQL
+- **Registry** : catalogue centralisé de toutes les features disponibles, consultable par toutes les équipes
 
-### Forces
+### Forces de Feast
 
-- Open source et gratuit
-- Simple à déployer (même avec Parquet + SQLite pour débuter)
-- Multi-backend
-- **Point-in-time join** natif (critique pour pas leaker du futur)
+- Open source et gratuit, déployable sur votre propre infrastructure
+- Simple à démarrer : vous pouvez commencer avec des fichiers Parquet + SQLite localement, sans infrastructure
+- Multi-backend : changez de backend sans modifier votre code applicatif
+- **Point-in-time join natif** : c'est la feature critique. Feast garantit qu'aucune donnée future ne fuite dans vos features d'entraînement.
+
+### Limites honnêtes
+
+- Pas de streaming temps réel natif : les features sont matérialisées en batch, pas calculées en continu
+- L'orchestration de la matérialisation est à votre charge (Airflow, cron, etc.)
+- Le monitoring des features est basique
+
+<Callout type="tip" title="Commencez petit, scalez après">
+Feast peut tourner avec des fichiers Parquet et une base SQLite locale. C'est largement suffisant pour le prototypage et les petites équipes. Quand le besoin grandit, vous migrez vers Redis + BigQuery sans changer une ligne de code applicatif. C'est cette progressivité qui fait la force de Feast.
+</Callout>
+
+## Tecton : le feature store managé pour l'entreprise
+
+**Tecton** a été créé par les fondateurs de Feast (qui avaient construit le feature store interne d'Uber). C'est la version enterprise, managée et complète.
+
+### Ce que Tecton ajoute par rapport à Feast
+
+- **Transformations temps réel** : calcul continu sur des flux de données streaming (Spark Streaming, Kinesis). La feature "nombre de transactions dans les 5 dernières minutes" est mise à jour en permanence.
+- **Transformations on-demand** : calculées au moment exact de la requête. Par exemple, la distance entre la position GPS actuelle de l'utilisateur et le magasin.
+- **Orchestration automatique** : Tecton planifie et exécute automatiquement les transformations batch (quotidiennes), streaming (continues) et on-demand (à la requête)
+- **Monitoring complet** : alertes sur la qualité des features, la fraîcheur des données, les anomalies statistiques
+- **Governance** : permissions par feature, audit trail complet, lineage de bout en bout
+
+### Les 3 modes de calcul unifiés
+
+- **Batch** : "moyenne des transactions sur 30 jours", recalculée quotidiennement
+- **Streaming** : "somme des achats dans la dernière heure", mise à jour en continu
+- **On-demand** : "heure actuelle de la journée", calculée à chaque requête
+
+L'élégance de Tecton : vous définissez la feature une seule fois, et Tecton gère les trois modes d'exécution automatiquement. Même source de vérité, zéro training-serving skew, quel que soit le mode.
+
+<Callout type="paper" title="L'unification des modes de calcul, un gain considérable">
+Avant les feature stores, les entreprises maintenaient typiquement trois implémentations de chaque feature : un script Python batch, un job Spark Streaming, et un service Java on-demand. Trois codebases différentes, trois sources de bugs, trois risques de divergence. Tecton réduit ça à une seule définition.
+</Callout>
+
+### Forces de Tecton
+
+- Streaming temps réel natif et performant
+- Orchestration et monitoring automatiques, zéro ops
+- Intégration enterprise (SSO, RBAC, audit trail)
+- Support technique dédié
 
 ### Limites
 
-- Pas de streaming temps réel natif
-- Orchestration de matérialisation = à vous de gérer
-- Monitoring basique
+- SaaS payant avec un coût significatif (pas adapté aux petits budgets)
+- Vendor lock-in : migrer hors de Tecton demande du travail
+- Overkill pour les petites équipes ou les projets sans composante temps réel
 
-<Callout type="tip" title="Commencez simple">
-Feast peut rouler avec des fichiers Parquet et SQLite. C'est suffisant pour le prototypage. Vous migrez vers Redis/BigQuery après sans changer le code applicatif.
-</Callout>
-
-## Tecton : le feature store managé
-
-**Tecton** créé par les fondateurs de Feast (chez Uber), version enterprise.
-
-### Ce qu'il offre en plus
-
-- **Transformations temps réel** : calcul sur des flux streaming (Spark Streaming, Kinesis)
-- **Transformations on-demand** : calculées au moment de la requête (ex: distance utilisateur-magasin)
-- **Orchestration automatique** : Tecton gère la planification des transformations batch et streaming
-- **Monitoring** : alertes sur la qualité, freshness, anomalies des features
-- **Governance** : permissions, audit trail, lineage
-
-### Les 3 modes de calcul
-
-```
-Batch     : moyenne sur 30 jours, mise à jour quotidienne
-Streaming : somme des achats dernière heure, continu
-On-demand : heure du jour, calculée à la requête
-```
-
-Tecton unifie les trois. Même feature source, trois modes d'exécution, zéro training-serving skew.
-
-<Callout type="paper" title="L'unification c'est puissant">
-Avant, vous aviez trois implémentations différentes de chaque feature (batch Python, streaming Spark, on-demand Java). Tecton = une seule source de vérité.
-</Callout>
-
-### Forces
-
-- Streaming temps réel natif
-- Orchestration et monitoring automatiques
-- Intégration entreprise (SSO, RBAC, audit)
-- Support technique
-
-### Limites
-
-- SaaS payant (coût significatif)
-- Vendor lock-in
-- Overkill pour les petites équipes
-
-## Comparaison : qui choisir
+## Comparaison : qui choisir selon votre contexte
 
 | Critère | Feast | Tecton |
 |---|---|---|
-| **Type** | Open source | SaaS managé |
+| **Type** | Open source, auto-hébergé | SaaS managé |
 | **Batch** | Oui | Oui |
-| **Streaming** | Limité | Natif |
+| **Streaming** | Limité (via plugins) | Natif et performant |
 | **On-demand** | Non | Oui |
-| **Orchestration** | Manuelle | Automatique |
-| **Monitoring** | Basique | Avancé |
-| **Coût** | Gratuit | $$$$ |
-| **Idéal pour** | PME, prototypage | Enterprise, temps réel |
+| **Orchestration** | Manuelle (Airflow, etc.) | Automatique |
+| **Monitoring** | Basique | Avancé avec alertes |
+| **Coût** | Gratuit (+ votre infra) | $$$$ |
+| **Idéal pour** | PME, prototypage, petites équipes | Enterprise, temps réel critique |
 
-<Callout type="warning" title="Faut-il vraiment un feature store?">
-Non pour tous les projets. Si votre modèle a des features simples, pas de composante temps réel, et petite équipe : un pipeline de preprocessing classique suffit. Le feature store devient précieux quand plusieurs équipes partagent des features, temps réel nécessaire, ou training-serving skew c'est un risque réel.
+<Callout type="warning" title="Avez-vous vraiment besoin d'un feature store ?">
+Pas tous les projets ML en ont besoin. Si votre modèle a des features simples (pas de composante temporelle), pas de serving temps réel, et que vous travaillez en petite équipe : un pipeline de preprocessing classique avec des fichiers Parquet suffit. Le feature store devient précieux quand plusieurs équipes partagent des features, quand le temps réel est nécessaire, ou quand le training-serving skew est un risque identifié.
 </Callout>
 
 ## Alternatives notables
 
-- **Hopsworks** : open source avec Spark et Flink natifs
-- **SageMaker Feature Store** : managé AWS
-- **Vertex AI Feature Store** : managé GCP
-- **Databricks Feature Store** : intégré à Databricks
+- **Hopsworks** : open source avec Spark et Flink natifs, feature monitoring intégré
+- **SageMaker Feature Store** : managé AWS, intégré à l'écosystème SageMaker
+- **Vertex AI Feature Store** : managé GCP, intégré à Vertex AI
+- **Databricks Feature Store** : intégré à la plateforme Databricks, accès direct depuis les notebooks
 
-La tendance : tout le monde a compris que les features centralisées c'est important. Chaque cloud provider l'offre maintenant.
+La tendance est claire : chaque cloud provider et chaque plateforme ML offre maintenant un feature store intégré. Le concept a prouvé sa valeur et fait désormais partie de la stack ML standard en entreprise.

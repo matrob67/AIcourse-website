@@ -7,101 +7,107 @@ description: "Introduction aux State Space Models (SSM) et au modèle S4, une al
 
 ## Le problème des séquences vraiment longues
 
-Les Transformers sont brillants, mais ils ont un défaut majeur : leur coût mémoire et calcul **explose quadratiquement** avec la longueur des séquences. Doubler la longueur du texte quadruple le coût. Pour une séquence de 16 000 tokens, c'est 256 fois plus coûteux qu'une séquence de 1 000 tokens.
+Les Transformers sont brillants, mais ils ont un défaut structurel : leur coût mémoire et calcul **explose quadratiquement** avec la longueur des séquences. Doubler la longueur quadruple le coût. Pour une séquence de 16 000 tokens, c'est 256 fois plus cher qu'une séquence de 1 000 tokens.
 
-Ce n'est pas un problème pour la plupart des textes courts. Mais imaginez analyser un fichier audio de 30 secondes — à 16 000 échantillons par seconde, c'est 480 000 points de données. Ou séquencer un génome avec des millions de bases. Le Transformer explose.
+Ce n'est pas un problème quand on traite des tweets ou des paragraphes. Mais prenez un fichier audio de 30 secondes — à 16 000 échantillons par seconde, c'est 480 000 points de données. Ou une séquence génomique de quelques millions de bases. Ou même un long document juridique de 100 pages. Le Transformer, avec son attention quadratique, est tout simplement hors jeu.
 
-C'est exactement le problème que **S4** (Structured State Space for Sequences) vient résoudre.
+C'est exactement le problème que **S4** (Structured State Space for Sequences) vient résoudre — et sa solution est venue d'un endroit inattendu.
 
 <ArxivLink id="2111.00396" title="Efficiently Modeling Long Sequences with Structured State Spaces" />
 
 ## L'inspiration : les systèmes dynamiques
 
-S4 s'inspire d'une idée venue de l'ingénierie de contrôle. Imaginez le cerveau humain qui écoute de la musique : il ne mémorise pas chaque milliseconde depuis le début du morceau pour comprendre ce qui se passe maintenant. Il maintient un **état interne** qui résume ce qu'il a entendu, et cet état évolue au fil du temps.
+S4 s'inspire d'une branche des mathématiques appliquées qui n'a rien à voir avec le NLP : la **théorie du contrôle**. L'idée de base est intuitive. Quand vous écoutez de la musique, votre cerveau ne mémorise pas chaque milliseconde depuis le début du morceau. Il maintient un **état interne** — un résumé compressé de ce qu'il a entendu — et cet état évolue continuellement au fil des notes.
 
-C'est exactement la logique des **State Space Models (SSM)** : un système qui maintient un état caché `h(t)` et le met à jour continuellement en fonction de l'entrée `x(t)`.
+C'est exactement la logique des **State Space Models (SSM)** : un système qui maintient un état caché `h(t)` et le met à jour en continu en fonction de l'entrée `x(t)`.
 
 ### Les équations fondamentales
 
 Un SSM continu se définit avec quatre matrices (A, B, C, D) :
 
-```
-h'(t) = A * h(t) + B * x(t)   # comment l'état évolue
-y(t)  = C * h(t) + D * x(t)   # comment l'état produit la sortie
-```
+$$
+\begin{aligned}
+h'(t) &= A \cdot h(t) + B \cdot x(t) & \text{(comment l'état évolue)} \\
+y(t) &= C \cdot h(t) + D \cdot x(t) & \text{(comment l'état produit la sortie)}
+\end{aligned}
+$$
 
-En clair :
-- `A` : gouverne la dynamique de l'état (comment il "oublie" le passé et se met à jour)
-- `B` : contrôle comment l'entrée courante influence l'état
-- `C` : contrôle comment l'état produit une sortie
-- `D` : un terme de connexion directe entrée → sortie (souvent ignoré)
+En clair, chaque matrice a un rôle précis :
+- `A` : gouverne la dynamique interne de l'état. C'est elle qui détermine comment le modèle "oublie" le passé et se met à jour — le coeur du système.
+- `B` : contrôle comment l'entrée courante influence l'état. C'est la porte d'entrée.
+- `C` : contrôle comment l'état produit une sortie. C'est la porte de lecture.
+- `D` : un terme de connexion directe entrée vers sortie, souvent mis à zéro ou ignoré.
 
 ## De continu à discret : traiter du texte
 
-Le texte est une séquence discrète (un token, puis un autre), pas un signal continu. On doit donc **discrétiser** le SSM avec un pas de temps delta :
+Le texte est une séquence discrète — un token après l'autre — pas un signal continu comme un son. On doit donc **discrétiser** le SSM avec un pas de temps delta, en utilisant la méthode bilinéaire (Tustin) :
 
-```
-A_barre = (I - delta/2 * A)^(-1) * (I + delta/2 * A)
-B_barre = (I - delta/2 * A)^(-1) * delta * B
-```
+$$
+\begin{aligned}
+\bar{A} &= \left(I - \frac{\Delta}{2} A\right)^{-1} \left(I + \frac{\Delta}{2} A\right) \\
+\bar{B} &= \left(I - \frac{\Delta}{2} A\right)^{-1} \Delta \cdot B
+\end{aligned}
+$$
 
-Le système discret résultant fonctionne comme un RNN moderne :
+Le système discret résultant fonctionne comme un RNN classique :
 
-```
-h_k = A_barre * h_(k-1) + B_barre * x_k
-y_k = C * h_k + D * x_k
-```
+$$
+\begin{aligned}
+h_k &= \bar{A} \cdot h_{k-1} + \bar{B} \cdot x_k \\
+y_k &= C \cdot h_k + D \cdot x_k
+\end{aligned}
+$$
 
-À chaque pas `k`, l'état caché `h_k` est mis à jour à partir de l'état précédent et de l'entrée courante.
+À chaque pas `k`, l'état caché `h_k` est mis à jour à partir de l'état précédent (pondéré par `A_barre`) et de l'entrée courante (modulée par `B_barre`). C'est une récurrence simple — mais ce qui rend S4 spécial, c'est qu'il peut aussi être calculé autrement.
 
 <Callout type="info" title="La dualité magique : récurrence et convolution">
-Les SSM ont une propriété fascinante : ils peuvent être calculés de **deux manières équivalentes**. En mode récurrence (un token à la fois), ils sont efficaces pour l'inférence. En mode convolution (toute la séquence d'un coup), ils sont efficaces pour l'entraînement parallèle. Cette dualité est le coeur de leur avantage sur les RNN classiques et les Transformers.
+Les SSM ont une propriété fascinante et fondamentale : ils peuvent être calculés de **deux manières mathématiquement équivalentes**. En mode récurrence (un token à la fois), ils sont parfaits pour l'inférence — O(1) par token, état fixe. En mode convolution (toute la séquence d'un coup via FFT), ils sont parfaits pour l'entraînement parallèle — O(L log L) pour toute la séquence. Cette dualité est le superpower des SSM : ils prennent le meilleur des RNN (inférence efficace) et des Transformers (entraînement parallèle) sans les défauts de chacun.
 </Callout>
 
 ### Mode convolution : pourquoi c'est important
 
-En déroulant la récurrence, on obtient un noyau de convolution de longueur L :
+En déroulant la récurrence, on peut pré-calculer un noyau de convolution de longueur L :
 
-```
-K_barre = [C*B_barre, C*A_barre*B_barre, C*A_barre^2*B_barre, ..., C*A_barre^(L-1)*B_barre]
-```
+$$
+\bar{K} = \left[C\bar{B},\; C\bar{A}\bar{B},\; C\bar{A}^2\bar{B},\; \ldots,\; C\bar{A}^{L-1}\bar{B}\right]
+$$
 
-La sortie vaut alors `y = x * K_barre` (convolution), qui peut être calculée en **O(L log L)** via la FFT (Transformée de Fourier Rapide) — beaucoup mieux que le O(L²) de l'attention.
+La sortie est alors `y = x * K_barre` — une convolution simple — qui peut être calculée en **O(L log L)** via la FFT. Comparez ça au O(L²) de l'attention : pour une séquence de 100 000 tokens, c'est ~6 000 fois moins d'opérations.
 
 ## Le vrai défi de S4 : la matrice A
 
-Avoir ces équations c'est bien. Les faire fonctionner en pratique, c'est une autre histoire. Le problème central est la **matrice A** : si on l'initialise mal, les puissances `A^k` explosent vers l'infini ou s'écrasent vers zéro exponentiellement vite. Le modèle ne peut alors capturer aucune dépendance à long terme.
+Avoir ces équations, c'est le début. Les faire fonctionner en pratique sur de longues séquences, c'est le vrai défi. Le problème central est la **matrice A** : quand on calcule le noyau de convolution, on prend les puissances successives de A (`A, A², A³, ..., A^L`). Si A est mal initialisée, ces puissances explosent vers l'infini ou s'écrasent vers zéro exponentiellement vite. Dans les deux cas, le modèle ne capture aucune dépendance à long terme.
 
 ### La solution HiPPO : une initialisation mathématiquement fondée
 
-La contribution clé de S4 est la **matrice HiPPO** (High-Order Polynomial Projection Operator). Ce n'est pas une initialisation aléatoire — c'est une matrice construite à partir de la théorie de l'approximation.
+La contribution intellectuelle majeure de S4 est la **matrice HiPPO** (High-Order Polynomial Projection Operator). Ce n'est pas une initialisation aléatoire ni un heuristic — c'est une matrice dérivée de la théorie de l'approximation polynomiale.
 
-L'idée : on veut que l'état `h(t)` contienne une approximation **optimale** de l'historique de l'entrée. HiPPO construit une matrice A qui projette cet historique sur une base de **polynômes de Legendre** (des fonctions mathématiques bien connues pour leur capacité d'approximation).
+L'idée : on veut que l'état `h(t)` contienne à tout moment la meilleure approximation possible de tout l'historique de l'entrée. HiPPO construit une matrice A qui projette cet historique sur une base de **polynômes de Legendre** — des fonctions mathématiques optimales pour l'approximation. Chaque composante de l'état h encode un coefficient de cette approximation polynomiale, capturant le signal d'entrée à une résolution de plus en plus fine.
 
 <Callout type="paper" title="HiPPO : la fondation théorique de S4">
-La matrice HiPPO-LegS garantit que l'état caché est une approximation optimale de l'historique sur une fenêtre temporelle. Contrairement aux RNN classiques (LSTM, GRU) qui oublient exponentiellement le passé, S4 avec HiPPO peut capturer des dépendances sur des **milliers de pas de temps**. C'est ce qui le rend remarquable sur les longues séquences.
+La matrice HiPPO-LegS garantit que l'état caché est une approximation optimale de l'historique sur une fenêtre temporelle. Contrairement aux RNN classiques (LSTM, GRU) qui oublient exponentiellement le passé — incapables de capturer des dépendances au-delà de quelques centaines de pas — S4 avec HiPPO peut capturer des dépendances sur des **milliers de pas de temps**. C'est cette fondation théorique solide qui permet à S4 de réussir là où les RNN échouent depuis des années.
 </Callout>
 
 ### La paramétrisation NPLR et diagonale
 
-La matrice HiPPO est dense, ce qui rend les calculs coûteux. S4 introduit la **paramétrisation NPLR** (Normal Plus Low-Rank) pour la rendre calculable efficacement.
+La matrice HiPPO est dense (tous les éléments sont non-nuls), ce qui rend les calculs coûteux. S4 introduit la **paramétrisation NPLR** (Normal Plus Low-Rank) pour exploiter la structure spécifique de HiPPO et accélérer le calcul du noyau de convolution.
 
-Des travaux ultérieurs (S4D, DSS) ont montré qu'une **matrice A diagonale** est suffisante en pratique :
+Des travaux ultérieurs (S4D, DSS) ont montré qu'une simplification radicale fonctionne presque aussi bien : utiliser une **matrice A diagonale** :
 
-```
-A = diag(lambda_1, lambda_2, ..., lambda_N)
-```
+$$
+A = \text{diag}(\lambda_1, \lambda_2, \ldots, \lambda_N)
+$$
 
-Une matrice diagonale est bien plus simple à manipuler — les puissances sont triviales à calculer — tout en conservant l'essentiel des capacités de S4.
+Avec une matrice diagonale, les puissances sont triviales (`A^k = diag(lambda_1^k, ..., lambda_N^k)`) et l'implémentation devient beaucoup plus simple, tout en conservant l'essentiel des capacités de S4 sur les longues séquences.
 
 ## Résultats : S4 sur les longues séquences
 
 ### Le benchmark Long Range Arena
 
-Ce benchmark a été conçu spécifiquement pour tester la capacité des modèles à capturer des dépendances sur de longues séquences. Avant S4, aucun modèle ne le résolvait vraiment.
+Ce benchmark a été créé spécifiquement pour tester la capacité des modèles à capturer des dépendances sur de longues séquences. Avant S4, aucun modèle n'obtenait de résultats convaincants — les Transformers comme les RNN plafonnaient.
 
 <Callout type="info" title="Résultats sur le Long Range Arena">
-S4 atteint ~86% de précision moyenne sur le Long Range Arena, contre ~59% pour les Transformers standard et ~61% pour les variantes d'attention efficace. La tâche Path-X (séquences de 16 000 tokens) est résolue à ~94% par S4 — les modèles basés sur l'attention étaient au niveau du hasard sur cette tâche.
+S4 atteint ~86% de précision moyenne sur le Long Range Arena, contre ~59% pour les Transformers standard et ~61% pour les variantes d'attention efficace (Performer, Linformer, etc.). Le résultat le plus frappant : la tâche Path-X, qui nécessite de raisonner sur des séquences de 16 000 tokens, est résolue à ~94% par S4. Les modèles basés sur l'attention ? Au niveau du hasard. C'est ce résultat qui a mis les SSM sur la carte.
 </Callout>
 
 ### Comparaison de complexité
@@ -112,20 +118,20 @@ S4 atteint ~86% de précision moyenne sur le Long Range Arena, contre ~59% pour 
 | Inférence par token | O(L) via KV cache | N/A | O(1) |
 | Mémoire | O(L²) | O(L) | O(N) |
 
-Pour une séquence 10x plus longue, S4 (mode convolution) coûte ~33x moins cher que le Transformer. Pour une séquence 100x plus longue, c'est ~500x moins cher.
+Pour une séquence 10x plus longue, S4 en mode convolution coûte ~33x moins cher que le Transformer. Pour une séquence 100x plus longue, c'est ~500x moins cher. L'écart grandit avec la longueur — c'est exactement sur les longues séquences que S4 brille.
 
 ## Variantes et évolutions de S4
 
-**S4D (S4 Diagonal)** : simplifie la matrice A à une forme diagonale directement, rendant l'implémentation beaucoup plus accessible. Les performances sont quasi-identiques sur la plupart des tâches.
+**S4D (S4 Diagonal)** : simplifie la matrice A à une forme diagonale, rendant l'implémentation beaucoup plus accessible sans sacrifier significativement les performances. C'est cette version simplifiée qui a permis à de nombreuses équipes d'expérimenter avec les SSM.
 
-**S5** : version multi-entrée multi-sortie (MIMO) avec une matrice d'état partagée, réduisant le nombre de paramètres.
+**S5** : version multi-entrée multi-sortie (MIMO) avec une matrice d'état partagée entre dimensions, réduisant le nombre total de paramètres.
 
-**H3 (Hungry Hungry Hippos)** : combine deux couches SSM avec un gate multiplicatif pour mieux capturer les interactions entre tokens — une étape vers Mamba.
+**H3 (Hungry Hungry Hippos)** : combine deux couches SSM avec un gate multiplicatif entre elles. En ajoutant de la non-linéarité entre les couches séquentielles, H3 booste l'expressivité du modèle — c'est l'étape intermédiaire qui a mené directement à Hyena et à Mamba.
 
 <Callout type="tip" title="De S4 à Mamba">
-S4 a ouvert la voie. Son successeur Mamba ajoute la **sélectivité** : les matrices B, C et le pas de discrétisation delta deviennent dépendants de l'entrée. Au lieu d'un filtre fixe, Mamba peut adapter son comportement selon le contenu. C'est le passage d'un filtre audio fixe à un égaliseur intelligent qui s'adapte à la musique.
+S4 a posé les fondations, mais il avait une limite fondamentale : ses paramètres sont **fixes** — le même filtre s'applique à chaque token, indifféremment de son contenu. Mamba, son successeur, résout ce problème en rendant les matrices B, C et le pas de discrétisation delta **dépendants de l'entrée**. Au lieu d'un filtre audio fixe appliqué uniformément, Mamba est un égaliseur intelligent qui ajuste ses réglages à chaque note selon le contexte musical. C'est cette sélectivité qui permet à Mamba de rivaliser avec les Transformers sur les tâches de langage.
 </Callout>
 
 ## Conclusion
 
-S4 est une percée fondamentale. En combinant la théorie des systèmes dynamiques avec des techniques de calcul efficaces (HiPPO, NPLR, FFT), il démontre que l'attention n't est pas la seule voie pour modéliser des séquences longues. Les concepts qu'il introduit — dualité récurrence/convolution, initialisation HiPPO, paramétrisation structurée — sont les fondations sur lesquelles toute la famille SSM (Mamba, RWKV, RetNet) est construite.
+S4 est une percée fondamentale qui a ouvert un nouveau paradigme. En combinant la théorie des systèmes dynamiques avec des techniques de calcul efficaces (HiPPO pour l'initialisation, NPLR pour l'accélération, FFT pour la convolution), il a démontré que l'attention n'est pas la seule voie pour modéliser des séquences — et qu'on peut faire beaucoup mieux sur les longues séquences. Les concepts qu'il introduit — la dualité récurrence/convolution, l'initialisation HiPPO, la paramétrisation structurée de la matrice d'état — sont les fondations sur lesquelles toute la famille SSM (Mamba, RWKV, RetNet, Hyena) est construite.

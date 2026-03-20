@@ -3,143 +3,141 @@ title: "Nettoyer et dédupliquer les données : MinHash"
 description: "Détectez et supprimez les doublons de vos données d'entraînement avec MinHash. Améliorez la qualité du dataset sans tripler le coût."
 ---
 
-## Le problème : vos données sont remplies de doublons
+## Le problème : vos données sont truffées de doublons
 
-Common Crawl : 30-50% de doublons ou quasi-doublons. Pages miroirs. Contenu syndiqué. Templates e-commerce. Vos données d'entraînement en contiennent aussi.
+Common Crawl, la source de données web la plus utilisée pour entraîner les LLM, contient entre 30 et 50% de doublons ou quasi-doublons. Pages miroirs, contenu syndiqué copié sur des dizaines de sites, templates e-commerce quasi-identiques avec juste le nom du produit qui change... Si vous entraînez un modèle sur ces données brutes, vous gaspillez massivement du compute sur de l'information redondante.
 
-Pourquoi c'est un problème ?
+Et les conséquences vont bien au-delà du gaspillage :
 
-- **Mémorisation** : le modèle "apprend" les passages répétés
-- **Biais** : les sources surreprésentées biaisent le modèle
-- **Gaspillage** : tokens dupliqués = pas d'information nouvelle
-- **Évaluation pourrie** : si votre test set est dans le train set, les métriques mentent
+- **Mémorisation** : le modèle apprend par coeur les passages répétés au lieu de généraliser. Il peut recracher verbatim des paragraphes entiers de ses données d'entraînement.
+- **Biais amplifiés** : les sources surreprésentées dominent le modèle. Si 30% de vos données viennent de Wikipédia parce que chaque page est dupliquée 5 fois, votre modèle aura un biais encyclopédique.
+- **Gaspillage de compute** : des tokens dupliqués n'apportent aucune information nouvelle. Vous payez le même coût GPU pour un apprentissage nul.
+- **Évaluation faussée** : si des exemples de votre test set apparaissent dans le train set (via des doublons), vos métriques mentent. Vous croyez que votre modèle généralise, alors qu'il récite.
 
-<Callout type="info" title="Impact mesuré">
-Des études montrent : dédupliquer = 5-10% meilleur perplexity avec le même volume. Moins de text mémorisé verbatim. C'est rentable.
+<Callout type="info" title="Impact mesuré en pratique">
+Les études sur les grands modèles de langage montrent systématiquement : dédupliquer les données d'entraînement améliore la perplexité de 5-10% à volume de tokens constant, et réduit significativement la mémorisation verbatim. C'est l'une des interventions les plus rentables sur la qualité d'un dataset.
 </Callout>
 
+## Nettoyage d'abord, déduplication ensuite
 
+Avant de chercher les doublons, il faut nettoyer les données brutes. C'est comme trier ses affaires avant de chercher les doublons dans sa bibliothèque : ça ne sert à rien de comparer deux livres si l'un est en fait un prospectus.
 
-## Nettoyage d'abord
+1. **Extraction HTML vers texte** : trafilatura ou resiliparse extraient le contenu utile d'une page web en éliminant le HTML
+2. **Normalisation Unicode** : standardiser en NFKC pour que "é" et "é" (composé) soient identiques
+3. **Suppression du boilerplate** : menus de navigation, footers, publicités, barres latérales. Ce n'est pas du contenu utile.
+4. **Filtrage par langue** : fastText lid détecte la langue. Si vous voulez un dataset français, virez l'anglais.
+5. **Filtrage par longueur** : les documents trop courts (quelques mots) ou trop longs (dumps de base de données) sont rarement utiles
+6. **Lignes non-textuelles** : code source, longues listes d'URLs, compteurs de pages. À filtrer selon votre besoin.
+7. **Heuristiques de qualité** : les mots sont-ils bien formés ? Les phrases ont-elles une structure ? Le vocabulaire est-il diversifié ?
+8. **Suppression de PII** : emails, numéros de téléphone, adresses. Obligatoire pour la conformité RGPD.
 
-Avant la déduplication, nettoyez :
+### Des heuristiques simples mais redoutablement efficaces
 
-1. **Extraction HTML → texte** : trafilatura, resiliparse
-2. **Normalisation Unicode** : NFKC
-3. **Boilerplate** : éliminez menus, footers, pubs
-4. **Filtrage langue** : fastText lid
-5. **Longueur** : pas trop court, pas trop long
-6. **Lignes non-texte** : code, URLs, compteurs
-7. **Qualité** : heuristiques (mots bien formés? phrases? diversité?)
-8. **PII** : supprimez emails, numéros de téléphone
+| Règle | Ce qu'elle détecte |
+|---|---|
+| `ratio_words_to_chars > X` | Texte bizarre, caractères aléatoires (supprimer) |
+| `lines_ending_with_period > Y%` | Vrais paragraphes de texte rédigé (garder) |
+| `lines_duplicate_in_doc > Z%` | Document spammy ou template (supprimer) |
 
-### Heuristiques simples mais puissantes
+Les grands datasets de référence (C4, FineWeb, RedPajama) utilisent ces heuristiques. Ce n'est pas de la science sophistiquée, c'est de l'ingénierie pragmatique qui marche remarquablement bien.
 
-```
-ratio_words_to_chars > X → texte bizarre (supprimer)
-lines_ending_with_period > Y% → vraies phrases (garder)
-lines_duplicate_in_doc > Z% → document spam (supprimer)
-```
-
-Les datasets réputés (C4, FineWeb) utilisent ça. C'est pas rocket science, c'est just du bon sense engineering.
-
-<Callout type="tip" title="Nettoyage = art + science">
-Les seuils des heuristiques = empirique. Regardez manuellement les examples à la limite, ajustez les seuils, réitérez. C'est jamais automatisé 100%.
+<Callout type="tip" title="Le nettoyage, c'est un art autant qu'une science">
+Les bons seuils pour ces heuristiques se trouvent empiriquement. Inspectez manuellement des centaines d'exemples aux frontières de vos filtres, ajustez les seuils, réitérez. Les meilleurs datasets du monde sont le fruit de dizaines d'itérations de ce processus. C'est jamais automatisé à 100%.
 </Callout>
 
-## Déduplication exacte (le truc simple)
+## Déduplication exacte : le cas simple
 
-### Hash-based
+### Par hash cryptographique
 
-Calculez MD5/SHA-256 de chaque document. Même hash = même contenu. Supprimez les doublons.
+Calculez le SHA-256 (ou MD5) de chaque document. Deux documents avec le même hash = contenu identique octet pour octet. Supprimez les doublons.
 
-**Avantages** : rapide, zéro faux positifs
+**Avantages** : rapide à calculer, zéro faux positifs (impossible d'avoir le même hash pour deux contenus différents en pratique)
 
-**Limites** : un caractère différent = hash différent. Les quasi-doublons passent à côté.
+**Limites** : un seul caractère de différence produit un hash complètement différent. Les quasi-doublons (99% identiques) passent à travers les mailles du filet.
 
-### URL-based
+### Par URL normalisée
 
-Supprimez les documents avec la même URL normalisée (sans paramètres de tracking, etc.).
+Supprimez les documents provenant de la même URL après normalisation : retrait des paramètres de tracking (`?utm_source=...`), normalisation du protocole (http vs https), etc.
 
-**Limites** : deux URLs différentes peuvent pointer vers le même contenu.
+**Limites** : deux URLs différentes peuvent pointer vers le même contenu (pages miroirs, CDN, repost).
 
-## Déduplication fuzzy avec MinHash
+## Déduplication fuzzy avec MinHash : le coeur du sujet
 
 ### Le problème des quasi-doublons
 
-95% identique ≠ 100% identique. Mais c'est quand même un doublon pour vos besoins. Faut une **similarité approximative**.
+Un document identique à 95% n'est pas identique à 100%, mais c'est quand même un doublon pour vos besoins d'entraînement. Il vous faut une **mesure de similarité approximative** qui passe à l'échelle.
 
-### Similarité de Jaccard : l'idée simple
+### Similarité de Jaccard : l'idée fondatrice
 
-Pour deux ensembles A et B:
+Pour deux ensembles A et B :
 
-```
-J(A, B) = |A ∩ B| / |A ∪ B|
-```
+$$J(A, B) = \frac{|A \cap B|}{|A \cup B|}$$
 
-Représentez chaque document comme un ensemble de **n-grams** (sous-séquences de n mots). La similarité de Jaccard = le recouvrement textuel.
+Représentez chaque document comme un ensemble de **n-grams** (sous-séquences de n mots consécutifs, typiquement n=5). La similarité de Jaccard entre deux ensembles de n-grams mesure le recouvrement textuel entre les documents.
 
-**Problème** : comparer toutes les paires = O(N^2). Pour un milliard de documents, c'est impossible.
+**Le problème** : comparer toutes les paires de documents = O(N^2). Pour un milliard de documents, c'est environ 10^18 comparaisons. Totalement impraticable.
 
-### MinHash : le trick
+### MinHash : l'astuce probabiliste géniale
 
-Choisissez k fonctions de hachage aléatoires. Pour chaque document, appliquez les k fonctions à tous ses n-grams et gardez le minimum (d'où "MinHash"). La signature = ces k minima.
+L'idée : au lieu de stocker tous les n-grams d'un document (potentiellement des milliers), créez une **signature compacte** de taille fixe.
 
-**Le truc fondamental** : Pr[h_min(A) = h_min(B)] = J(A, B)
+Choisissez k fonctions de hachage aléatoires. Pour chaque document, appliquez les k fonctions à tous ses n-grams et gardez uniquement le minimum pour chaque fonction (d'où le nom "MinHash"). La signature d'un document = ces k valeurs minimales.
 
-Les probabilités de collision = exactement la similarité Jaccard. Magique.
+**La propriété mathématique fondamentale** : $\Pr[h_{min}(A) = h_{min}(B)] = J(A, B)$
 
-<Callout type="paper" title="La formule magique">
-Avec k hashes, vous estimez Jaccard avec variance 1/k. Plus de hashes = plus précis.
+La probabilité que deux documents partagent le même minimum pour une fonction de hachage aléatoire est **exactement** égale à leur similarité de Jaccard. C'est élégant et prouvable mathématiquement.
+
+<Callout type="paper" title="Précision contrôlable">
+Avec k fonctions de hachage, vous estimez la similarité de Jaccard avec une variance de 1/k. Plus k est grand, plus l'estimation est précise. En pratique, k=128 ou k=256 offre un excellent compromis précision/mémoire.
 </Callout>
 
-### LSH : éviter de comparer tout
+### LSH : éviter de comparer toutes les paires
 
-Vous avez k signatures, vous les divisez en **b bandes** de **r lignes** (k = b × r).
+Vous avez maintenant des signatures compactes, mais comparer toutes les paires reste O(N^2). C'est là qu'intervient le **LSH** (Locality-Sensitive Hashing).
 
-Pour chaque bande, hashlez les r valeurs ensemble dans une table. Deux documents sont **candidats** s'ils partagent au moins une bande identique.
+Divisez les k valeurs de la signature en **b bandes** de **r lignes** (k = b x r). Pour chaque bande, hachez les r valeurs ensemble dans une table de hachage. Deux documents sont **candidats** (potentiels doublons) s'ils partagent au moins une bande identique.
 
-Seulement comparez les paires candidates en détail.
+Ensuite, comparez en détail uniquement les paires candidates. Le nombre de candidats est drastiquement inférieur au nombre total de paires.
 
-**Tuning** :
-- Plus b est grand (beaucoup de petites bandes) → beaucoup de candidats (rappel élevé, faux positifs)
-- Plus r est grand (peu de bandes longues) → peu de candidats (précision élevée, on manque des doublons)
+**Le tuning b et r, c'est le levier principal** :
+- **Plus b est grand** (beaucoup de petites bandes) : beaucoup de candidats, rappel élevé, mais plus de faux positifs à vérifier
+- **Plus r est grand** (peu de grandes bandes) : peu de candidats, haute précision, mais on rate des doublons
 
-Pour un seuil de 0.8 (80% similaire):
-- k=128, b=20, r=5 (typique)
+Pour un seuil de similarité de 0.8 (80% similaire), une configuration typique est k=128, b=20, r=5 (20 bandes de 5 lignes).
 
-<Callout type="warning" title="Mémoire : le coût réel">
-10 milliards de documents × 128 hashes × 4 bytes = 5 To juste pour les signatures. Les tables LSH c'est encore plus. Faut du distribué (Spark, Dask).
+<Callout type="warning" title="La mémoire, le vrai coût de MinHash">
+10 milliards de documents x 128 hashes x 4 bytes = 5 To juste pour stocker les signatures. Les tables LSH rajoutent encore de la mémoire. À cette échelle, il faut impérativement du calcul distribué (Spark, Dask, Ray). C'est pour ça que les gros datasets sont toujours traités sur des clusters.
 </Callout>
 
-## Déduplication sous-document
+## Déduplication sous-document : les passages répétés
 
 ### Suffix Array Substring Dedup
 
-Le même paragraphe (disclaimers légaux, descriptions standards) peut apparaître dans 1000 documents différents. Detectez ça :
+Le même paragraphe (disclaimer légal, description standard, politique de cookies) peut apparaître dans 1 000 documents différents. Même si les documents globalement sont différents, ces passages répétés polluent l'entraînement.
 
-1. Concaténez tous les docs en une chaîne
-2. Construisez le suffix array
-3. Trouvez les sous-chaînes qui apparaissent > seuil
-4. Supprimez-les
+La technique :
+1. Concaténez tous les documents en une seule chaîne géante
+2. Construisez le suffix array (structure de données qui trie tous les suffixes)
+3. Identifiez les sous-chaînes qui apparaissent plus de N fois
+4. Supprimez-les des documents
 
-### N-gram frecuency
+### Fréquence de n-grams
 
-Plus simple : calculez la fréquence de chaque 10-20 gram dans le corpus. Supprimez les passages contenant des n-grams ultra-fréquents.
+Approche plus simple : calculez la fréquence de chaque n-gram long (10-20 mots) dans le corpus entier. Les passages contenant des n-grams ultra-fréquents sont probablement du boilerplate répétitif. Supprimez-les.
 
 ## Outils pratiques
 
-- **text-dedup** : Python, MinHash + SimHash
-- **datatrove** (HuggingFace) : pipeline complet pour LLM data
-- **datasketch** : Python MinHash + LSH
-- **Spark MinHashLSH** : distribué pour les gros volumes
+- **text-dedup** : bibliothèque Python pour MinHash et SimHash, simple à utiliser
+- **datatrove** (HuggingFace) : pipeline complet pour la préparation de données LLM, inclut déduplication
+- **datasketch** : implémentation Python de MinHash + LSH, très populaire
+- **Spark MinHashLSH** : implémentation distribuée native dans Spark pour les très gros volumes
 
-## Bonnes pratiques
+## Bonnes pratiques pour une déduplication efficace
 
-- **Multi-niveaux** : exact (URL, hash) → fuzzy (MinHash) → sous-document
-- **Calibrer** : inspectez manuellement à chaque seuil
-- **Train/test** : déduplicatio entre vos splits (sinon les métriques mentent)
-- **Documenter** : les paramètres affectent énormément le dataset final
-- **Itérer** : first pass n'attrape jamais tout
+- **Multi-niveaux** : procédez par étapes. D'abord exact (URL, hash), puis fuzzy (MinHash), puis sous-document. Chaque niveau attrape ce que le précédent a raté.
+- **Calibrer visuellement** : à chaque seuil, inspectez manuellement des dizaines d'exemples proches du seuil pour vérifier que vous ne supprimez pas du contenu utile
+- **Dédupliquer entre train et test** : si des exemples du test set sont dans le train set, vos métriques d'évaluation sont invalides. Déduplication inter-splits obligatoire.
+- **Documenter les paramètres** : les choix (k, b, r, seuil) affectent énormément le dataset final. Documentez-les pour la reproductibilité.
+- **Itérer** : un premier passage n'attrape jamais tous les doublons. Les meilleurs pipelines font plusieurs passes avec des paramètres différents.
 
-C'est pas un one-shot, c'est un processus itératif.
+La déduplication n'est pas un one-shot qu'on fait une fois et qu'on oublie. C'est un processus itératif qui demande de l'attention et du bon sens.

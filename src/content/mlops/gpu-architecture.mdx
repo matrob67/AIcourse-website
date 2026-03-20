@@ -3,112 +3,116 @@ title: "Architecture GPU : CUDA cores, Tensor Cores et HBM"
 description: "Pourquoi les GPU dominent le deep learning. Architecture interne, mémoire HBM, Tensor Cores. Du hardware pour humains."
 ---
 
-## Pourquoi les GPU dominent (spoiler: parallélisme massif)
+## Pourquoi les GPU dominent le deep learning
 
-Le deep learning = essentiellement des **multiplications de matrices massives**. Un CPU : quelques cœurs super puissants. Un GPU : 16 000 cœurs moyen.
+Le deep learning se résume, au fond, à des **multiplications de matrices massives**. Des millions de multiplications-additions, toutes indépendantes les unes des autres, qui peuvent donc s'exécuter en parallèle.
 
-Un NVIDIA H100 : 16 896 CUDA cores et 528 Tensor Cores. Chaque cœur est individuellement moins puissant qu'un cœur CPU, mais ensemble ça écrase.
+Un CPU moderne a quelques coeurs (8-64) extrêmement puissants et polyvalents. Un GPU a des milliers de coeurs plus simples mais massivement parallèles. Le NVIDIA H100 embarque 16 896 CUDA cores et 528 Tensor Cores. Chaque coeur individuel est moins puissant qu'un coeur CPU, mais quand 16 000 d'entre eux travaillent simultanément sur la même matrice, le résultat est sans appel.
 
-<Callout type="info" title="L'analogie pédago">
-Un CPU = professeur d'université résolvant des équations complexes rapidement. Un GPU = 10 000 collégiens faisant juste des additions simples, mais ensemble ils résolvent le problème massivement plus vite. C'est ça la différence.
+<Callout type="info" title="L'analogie pour comprendre">
+Imaginez que vous devez additionner un million de nombres. Un CPU, c'est un mathématicien génial qui fait 1 000 additions par seconde : il lui faut 1 000 secondes. Un GPU, c'est 10 000 élèves de primaire qui font chacun 10 additions par seconde : ensemble, ils finissent en 10 secondes. Pour les tâches massivement parallèles comme le deep learning, le nombre d'unités de calcul bat la puissance individuelle.
 </Callout>
-
-
 
 ## Structure interne d'un GPU
 
-### Streaming Multiprocessors (SM)
+### Streaming Multiprocessors (SM) : les briques de base
 
-Le GPU se divise en **Streaming Multiprocessors**, chacun une petite unité d'exécution. Sur le H100 : 132 SMs.
+Le GPU est divisé en **Streaming Multiprocessors** (SM), chacun étant une unité d'exécution quasi-autonome. Le H100 en contient 132.
 
 Chaque SM contient :
-- **128 CUDA cores** (FP32)
-- **4 Tensor Cores** (4ème génération)
-- **64 INT32 cores**
-- Mémoire partagée et cache L1
+- **128 CUDA cores** : pour les opérations en virgule flottante FP32
+- **4 Tensor Cores** (4eme génération) : pour les multiplications matricielles accélérées
+- **64 INT32 cores** : pour les opérations entières
+- De la **mémoire partagée** et du **cache L1** : ultra-rapides, partagés entre tous les threads du SM
 
-### CUDA Cores
+Pensez aux SM comme des mini-processeurs indépendants. Le GPU distribue le travail entre eux, et chacun exécute sa portion en parallèle.
 
-Les unités généralistes. Chaque CUDA core fait une opération flottante par cycle (addition, multiplication). Pour le deep learning :
+### CUDA Cores : les travailleurs généralistes
 
-- Opérations élément par élément (activations, normalisation)
-- Réductions (sommes, moyennes)
-- Tout ce qui n'est pas une grosse multiplication matricielle
+Les CUDA cores sont les unités de calcul de base. Chaque core effectue une opération flottante par cycle d'horloge (une addition, une multiplication). Pour le deep learning, ils gèrent :
 
-### Tensor Cores : la vraie puissance
+- Les opérations **élément par élément** : fonctions d'activation (ReLU, GELU), normalisation, dropout
+- Les **réductions** : sommes, moyennes, softmax
+- Tout ce qui n'est **pas** une grosse multiplication matricielle
 
-Les **Tensor Cores** ont été introduits en 2017 (architecture Volta). Ils font des **multiplications matricielles complètes** en un cycle.
+Les CUDA cores sont polyvalents mais pas spécialisés. Pour les opérations matricielles qui constituent le gros du compute en deep learning, les Tensor Cores prennent le relais.
 
-Un Tensor Core H100 calcule : **D = A × B + C** où A, B, C, D sont des matrices (pas des scalaires).
+### Tensor Cores : la vraie puissance du deep learning
 
-Performance du H100 :
-- CUDA cores FP32 : ~67 TFLOPS
-- Tensor Cores FP16 : ~990 TFLOPS
-- Tensor Cores FP8 : ~1 979 TFLOPS
+Les **Tensor Cores** ont été introduits en 2017 avec l'architecture Volta. Leur particularité : ils effectuent des **multiplications de matrices entières** en un seul cycle d'horloge, pas juste des multiplications scalaires.
 
-Les Tensor Cores = **15 à 30x plus rapides** pour les multiplications matricielles. C'est pourquoi le deep learning excelle sur GPU.
+Un Tensor Core du H100 calcule : **D = A x B + C** ou A, B, C, D sont des **matrices** (typiquement 4x4 ou 8x8), pas des nombres individuels. C'est une opération FMA (fused multiply-add) matricielle native.
 
-<Callout type="paper" title="Formats de précision">
-Le H100 supporte : FP64, TF32, BF16, FP16, FP8 (E4M3 et E5M2), INT8. Le **FP8** est radical : double le débit vs FP16 avec perte minimale de précision (grâce au scaling dynamique).
+Les chiffres de performance du H100 montrent l'ampleur de la différence :
+- CUDA cores en FP32 : ~67 TFLOPS
+- Tensor Cores en FP16 : ~990 TFLOPS
+- Tensor Cores en FP8 : ~1 979 TFLOPS
+
+Les Tensor Cores sont donc **15 a 30 fois plus rapides** que les CUDA cores pour les multiplications matricielles. C'est pour ça que le deep learning excelle sur GPU : 95% du compute d'un Transformer, ce sont des multiplications matricielles qui exploitent les Tensor Cores.
+
+<Callout type="paper" title="La révolution des formats de précision réduite">
+Le H100 supporte une gamme impressionnante de formats : FP64, TF32, BF16, FP16, FP8 (E4M3 et E5M2), INT8. Le **FP8** est particulièrement radical : il double le débit par rapport au FP16, avec une perte de précision minimale grâce au scaling dynamique par tenseur. C'est ce qui permet d'entraîner et de servir des modèles toujours plus gros sans exploser le budget compute.
 </Callout>
 
-## La mémoire HBM : le goulot critique
+## La mémoire HBM : le goulot d'étranglement critique
 
-### Pourquoi la mémoire compte
+### Pourquoi la mémoire est souvent plus importante que le compute
 
-Le deep learning est souvent **memory-bound**, pas compute-bound. Vos paramètres, activations, gradients, états optimiseur = tout doit rentrer en mémoire GPU.
+Contrairement à l'intuition, le deep learning est souvent **memory-bound**, pas compute-bound. Vos paramètres, activations, gradients et états de l'optimiseur doivent tous tenir en mémoire GPU simultanément.
 
-Un modèle de 70B paramètres en FP16 = **140 Go** juste pour les poids. Les GPU ont pas assez de mémoire. Faut distribuer.
+Prenez un modèle de 70 milliards de paramètres en FP16 : les poids seuls pèsent **140 Go**. Aucun GPU actuel n'a autant de mémoire (le H100 plafonne à 80 Go). Il faut donc distribuer le modèle sur plusieurs GPU, ce qui complexifie tout.
 
-### High Bandwidth Memory (HBM)
+### High Bandwidth Memory (HBM) : la mémoire empilée
 
-**HBM** = mémoire empilée verticalement sur le GPU via un interposer silicium. Contrairement à la GDDR classique autour du die, HBM est **empilée en couches** directement à côté.
+**HBM** (High Bandwidth Memory) est une technologie de mémoire empilée verticalement sur le GPU via un interposer en silicium. Contrairement à la GDDR classique (soudée autour du die GPU), la HBM est **empilée en couches** directement à côté du processeur, ce qui raccourcit drastiquement le chemin des données.
 
-Évolution :
-- **HBM2** (A100) : 80 Go, 2 To/s bande passante
-- **HBM3** (H100) : 80 Go, 3.35 To/s
-- **HBM3e** (B200) : 192 Go, 8 To/s
+L'évolution a été spectaculaire :
+- **HBM2** (A100) : 80 Go, 2 To/s de bande passante
+- **HBM3** (H100) : 80 Go, 3,35 To/s de bande passante
+- **HBM3e** (B200) : 192 Go, 8 To/s de bande passante
 
-La bande passante a **plus que doublé** à chaque génération. C'est critique.
+La bande passante a **plus que doublé** à chaque génération. C'est critique, parce que c'est la bande passante mémoire qui détermine le débit d'inférence, pas la puissance de calcul.
 
-### Le goulot mémoire en inférence
+### Le goulot mémoire en inférence LLM
 
-Pour l'inférence LLM, le goulot principal = lire tous les poids du modèle depuis la mémoire.
+Pour l'inférence autoregressive d'un LLM (génération token par token), le goulot principal est la lecture des poids du modèle depuis la HBM. À chaque token généré, le GPU doit lire la quasi-totalité des poids.
 
-Un modèle 70B FP16 avec H100 (3.35 To/s bande passante) : ~24 tokens/sec théorique maximum. Peu importe votre puissance de calcul.
+Calcul concret : un modèle 70B en FP16 (140 Go) sur un H100 (3,35 To/s de bande passante) = au maximum ~24 tokens/seconde théorique. Peu importe la puissance de calcul brute du GPU, c'est la bande passante mémoire qui fixe le plafond.
 
-C'est pourquoi **quantization** (réduire la taille des poids) et **batching** (amortir le coût) sont critiques.
+C'est pour ça que la **quantization** (réduire les poids en INT8 ou INT4 pour diviser la taille par 2 ou 4) et le **batching** (traiter plusieurs requêtes simultanément pour amortir le coût de lecture des poids) sont des techniques absolument critiques en inférence.
 
-## Hiérarchie mémoire
+## La hiérarchie mémoire : du plus rapide au plus lent
 
-Du plus rapide au plus lent :
+Un GPU a plusieurs niveaux de mémoire, chacun avec un compromis taille/vitesse :
 
-1. **Registres** (~20 To/s) : mémoire privée par thread
-2. **Mémoire partagée / L1** (~19 To/s) : partagée dans un SM
-3. **L2 cache** (~12 To/s) : partagé tous les SMs
-4. **HBM** (~3.35 To/s H100) : mémoire principale du GPU
-5. **RAM CPU (via PCIe/NVLink)** (~64-900 Go/s) : transferts host-device
+1. **Registres** (~20 To/s) : mémoire privée de chaque thread, ultra-rapide, mais minuscule
+2. **Mémoire partagée / L1** (~19 To/s) : partagée entre les threads d'un même SM, quelques dizaines de Ko
+3. **Cache L2** (~12 To/s) : partagé entre tous les SM, quelques Mo
+4. **HBM** (~3,35 To/s sur H100) : la mémoire principale du GPU, 80 Go
+5. **RAM CPU via PCIe/NVLink** (~64-900 Go/s) : les transferts entre le CPU et le GPU, le plus lent
 
-<Callout type="tip" title="FlashAttention et optimisation">
-FlashAttention garde les données dans la mémoire partagée (SRAM) plutôt que d'aller chercher à la HBM à chaque fois. Résultat : **2-4x plus rapide** par réduction drastique des accès mémoire.
+La différence entre le haut et le bas de la hiérarchie est d'un facteur 100x ou plus. Un algorithme qui garde ses données dans la mémoire partagée au lieu d'aller chercher en HBM sera considérablement plus rapide.
+
+<Callout type="tip" title="FlashAttention : l'optimisation qui exploite la hiérarchie mémoire">
+FlashAttention est une implémentation de l'attention qui réorganise les calculs pour garder les données dans la mémoire partagée (SRAM) du SM plutôt que d'aller lire et écrire en HBM à chaque étape. Résultat : **2-4x plus rapide** et consomme beaucoup moins de mémoire. C'est l'exemple parfait de l'importance de comprendre la hiérarchie mémoire GPU.
 </Callout>
 
-## SIMT : Single Instruction Multiple Threads
+## SIMT : le modèle d'exécution des GPU
 
-Les GPU exécutent avec le modèle **SIMT**. Les threads sont organisés en **warps** de 32 qui exécutent la même instruction.
+Les GPU exécutent selon le modèle **SIMT** (Single Instruction, Multiple Threads). Les threads sont regroupés en **warps** de 32 qui exécutent exactement la même instruction simultanément, mais sur des données différentes.
 
-Si une branche diverge (if/else), les deux branches se font séquentiellement. Moins efficace.
+Conséquence importante : si le code contient une branche conditionnelle (if/else), et que certains threads du warp prennent le "if" pendant que d'autres prennent le "else", les deux branches sont exécutées séquentiellement. Les threads inactifs attendent. C'est ce qu'on appelle la **divergence de warp**, et ça divise l'efficacité.
 
-C'est pourquoi les algos de deep learning sont uniformes : toutes les opérations se font sur tous les éléments sans branchement. Ça maximise l'utilisation.
+C'est pourquoi les algorithmes de deep learning sont conçus pour être aussi uniformes que possible : les mêmes opérations s'appliquent à tous les éléments d'un tenseur, sans branchement conditionnel. Cette uniformité maximise l'utilisation des warps et donc la performance.
 
 ## Métriques pour choisir un GPU
 
-- **TFLOPS Tensor Core** : capacité pour les multiplications matricielles
-- **Capacité HBM** : taille maximale du modèle
-- **Bande passante HBM** : débit d'inférence
-- **Interconnect** : NVLink pour le multi-GPU
-- **TDP** : consommation, critique pour le datacenter
+Quand vous comparez des GPU pour le ML, regardez ces métriques dans cet ordre :
 
-Votre "arithmetic intensity" (ratio compute/mémoire) détermine si vous êtes memory-bound ou compute-bound.
+- **TFLOPS Tensor Core** : la capacité brute pour les multiplications matricielles, le coeur du deep learning
+- **Capacité HBM** : détermine la taille maximale du modèle qui tient en mémoire
+- **Bande passante HBM** : détermine le débit d'inférence maximal pour les modèles memory-bound
+- **Interconnect** : NVLink pour la communication multi-GPU au sein d'un serveur (critique pour l'entraînement distribué)
+- **TDP** (Thermal Design Power) : la consommation électrique, facteur déterminant du coût en datacenter
 
-Pour l'inférence LLM : vous êtes presque toujours memory-bound. C'est **la** limite.
+Votre "arithmetic intensity" (ratio compute/accès mémoire de votre workload) détermine si vous êtes memory-bound ou compute-bound. Pour l'inférence LLM autoregressive, vous êtes presque toujours memory-bound. La bande passante HBM est **le** facteur limitant, pas les TFLOPS.

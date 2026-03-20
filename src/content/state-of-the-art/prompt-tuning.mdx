@@ -5,107 +5,109 @@ description: "Le prompt tuning simplifie le prefix tuning en n'ajoutant des embe
 
 
 
-## Version ultra-simplifiée du prefix tuning
+## La version ultra-simplifiée du prefix tuning
 
-Le prefix tuning ajoute des vecteurs à CHAQUE couche du Transformer. Pourquoi? Et si on les ajoutait juste au DÉBUT?
+Le prefix tuning ajoute des vecteurs à **chaque couche** du Transformer. C'est efficace, mais ça complexifie l'implémentation et multiplie les paramètres. Le prompt tuning se pose une question plus radicale : et si on ajoutait ces vecteurs **uniquement au début de l'entrée** et qu'on laissait le modèle les propager naturellement à travers ses couches ?
 
-C'est le prompt tuning: ajouter des vecteurs entraînables au début de l'entrée, puis laisser le modèle les propager.
+C'est exactement ça. Des vecteurs entraînables concaténés avant votre texte d'entrée, point final. Le reste du modèle est complètement gelé.
 
 <ArxivLink id="2104.08691" title="The Power of Scale for Parameter-Efficient Prompt Tuning (Lester et al., 2021)" />
 
 <Callout type="info" title="L'idée centrale">
-k tokens virtuels au début de votre séquence. Ces tokens n'existent pas dans le vocabulaire. Ce sont des vecteurs continus que le modèle apprend. Gelé le reste, entraînez juste ces k vecteurs.
+On ajoute $k$ "tokens virtuels" au début de la séquence. Ces tokens n'existent pas dans le vocabulaire : ce sont des vecteurs continus que le modèle apprend par gradient descent. Tout le reste du modèle est gelé. On entraîne uniquement ces $k$ vecteurs.
 </Callout>
 
-## Comment ça fonctionne
+## Comment ça fonctionne concrètement
 
-Pour une entrée `x = [x₁, x₂, ..., xₙ]`, vous créez:
+Pour une entrée classique $x = [x_1, x_2, \ldots, x_n]$, le prompt tuning crée :
 
-```
-x' = [p₁, p₂, ..., pₖ, x₁, x₂, ..., xₙ]
-```
+$$x' = [p_1, p_2, \ldots, p_k, x_1, x_2, \ldots, x_n]$$
 
-p₁...pₖ sont des vecteurs de dimension d (dimension des embeddings). Ce sont vos SEULS paramètres entraînables.
+Les vecteurs $p_1 \ldots p_k$ ont la dimension $d$ (dimension des embeddings du modèle). Ce sont vos **seuls** paramètres entraînables. Le modèle traite ces vecteurs exactement comme des embeddings de vrais tokens, les propage à travers toutes ses couches, et génère sa réponse conditionnée par eux.
 
-### Paramètres entraînables: k × d
+### Un nombre de paramètres dérisoire : $k \times d$
 
-C'est tout. Pour d=4096, k=20 soft tokens:
+C'est tout le calcul. Pour $d=4096$ et $k=20$ soft tokens :
 - **81 920 paramètres** (~82K)
-- Plusieurs ordres de grandeur en dessous de LoRA
+- C'est plusieurs ordres de grandeur en dessous de LoRA
+- Ça tient dans un fichier de quelques centaines d'octets
 
-### Initialisation: où vous commencez compte
+### L'initialisation compte beaucoup
 
-- **Aléatoire**: uniforme ou gaussien
-- **À partir de mots réels**: initialiser avec embeddings de mots pertinents
-- **Label-aware**: utiliser embeddings des labels de la tâche
+Comment initialiser ces vecteurs fait une vraie différence :
+- **Aléatoire** : initialisation uniforme ou gaussienne. Ça marche, mais converge lentement.
+- **A partir de mots réels** : on initialise chaque soft token avec l'embedding d'un mot pertinent pour la tâche. Le modèle part avec un "indice" utile.
+- **Label-aware** : on utilise les embeddings des labels de la tâche (ex: "positif", "négatif" pour l'analyse de sentiment).
 
-<Callout type="tip" title="L'initialisation accélère">
-Initialiser avec tokens pertinents (ex: "positif", "négatif" pour sentiment) améliore la convergence. Surtout en faible données.
+<Callout type="tip" title="L'initialisation intelligente accélère tout">
+Initialiser les soft tokens avec des embeddings de mots pertinents (par exemple "positif" et "négatif" pour une tâche de sentiment) améliore significativement la convergence, surtout quand on a peu de données. C'est donner un bon point de départ au modèle plutôt que de le laisser chercher dans le noir.
 </Callout>
 
-## La découverte clé: ça marche MIEUX sur gros modèles
+## La découverte clé : l'effet d'échelle
 
-Le résultat qui a choqué tout le monde:
+C'est le résultat qui a rendu ce papier célèbre. Les auteurs ont observé que :
 
-Plus le modèle est gros, plus le prompt tuning s'approche du fine-tuning complet. Sur T5-XXL (11B), 20 soft tokens = fine-tuning complet sur SuperGLUE.
+**Plus le modèle est gros, plus le prompt tuning se rapproche du fine-tuning complet.**
 
-Sur T5-Small? Écart significatif.
+Sur T5-XXL (11B paramètres), 20 soft tokens suffisent pour égaler le fine-tuning complet sur SuperGLUE, un benchmark exigeant. Sur T5-Small (60M paramètres), l'écart est significatif.
 
-<Callout type="paper" title="L'effet d'échelle">
-Les gros modèles sont tellement expressifs qu'un simple conditionnement par soft prompts suffit. Les petits modèles ont besoin de modifier les poids pour s'adapter. C'est une différence fondamentale.
+Pourquoi ? Parce que les gros modèles ont des représentations internes tellement riches et expressives qu'un simple "conditionnement" par des soft prompts suffit à les orienter vers n'importe quelle tâche. C'est comme un cuisinier expert : donnez-lui juste un thème ("cuisine japonaise"), et il sait quoi faire. Un débutant a besoin d'une recette détaillée.
+
+<Callout type="paper" title="L'effet d'échelle : une leçon fondamentale">
+Ce résultat nous dit quelque chose de profond sur les gros modèles : ils n'ont pas besoin qu'on modifie leurs poids pour s'adapter. Il suffit de les "orienter" correctement. C'est une propriété émergente de l'échelle qui a des implications profondes pour la façon dont on pense l'adaptation des LLM.
 </Callout>
 
-## Comparaison: qui fait quoi
+## Comparaison avec les autres méthodes
 
-| Méthode | Paramètres | Couches | Petit modèle | Gros modèle |
+| Méthode | Paramètres | Couches affectées | Petit modèle | Gros modèle |
 |---|---|---|---|---|
 | Prompt manuel | 0 | Entrée | Variable | Bon |
-| Prompt tuning | k × d | Entrée | Faible | Excellent |
-| Prefix tuning | k × d × L × 2 | Toutes | Moyen | Bon |
-| LoRA | r × (d+k) × modules | Ciblées | Bon | Excellent |
+| Prompt tuning | $k \times d$ | Entrée seule | Faible | Excellent |
+| Prefix tuning | $k \times d \times L \times 2$ | Toutes | Moyen | Bon |
+| LoRA | $r \times (d+k) \times$ modules | Ciblées | Bon | Excellent |
 | Full fine-tuning | Tous | Toutes | Excellent | Excellent |
 
-## Avantages: ultra-léger et modulaire
+## Les avantages concrets
 
-### 1. Extrêmement compact
-Un soft prompt pèse quelques Ko. Stockez 10 000 tâches sans problème.
+### 1. Compacité extrême
+Un soft prompt pèse quelques Ko. Vous pouvez stocker **10 000 tâches différentes** sur un disque ordinaire sans problème. Impossible avec LoRA (quelques Mo par tâche) ou le fine-tuning complet (Go par copie).
 
-### 2. Pas de modification architecturale
-Le modèle reste intact. Vous concaténez juste les soft prompts à l'entrée.
+### 2. Zéro modification architecturale
+Le modèle reste strictement intact. Vous concaténez les soft prompts à l'entrée, et c'est parti. Pas de couches ajoutées, pas de hooks, pas de modifications du forward pass.
 
-### 3. Mélange facile
-Combinez des soft prompts pour différentes tâches. Mélangez-les, pondérez-les.
+### 3. Mélange et composition
+Vous pouvez combiner plusieurs soft prompts : concaténer celui de "résumé" avec celui de "style formel" pour obtenir un résumé formel. Ou faire la moyenne pondérée de plusieurs prompts pour la robustesse.
 
-### 4. Robuste aux changements de distribution
-Puisque les poids du modèle ne changent pas, il généralise mieux quand les données changent.
+### 4. Robustesse aux changements de distribution
+Puisque les poids du modèle ne bougent pas du tout, le modèle conserve mieux ses capacités générales. Il y a moins de risque d'oubli catastrophique qu'avec le fine-tuning.
 
 ## Limitations
 
-### Ne fonctionne que sur gros modèles
-< 1B paramètres? Prompt tuning est loin derrière LoRA. Vous avez besoin d'au moins 3-7B.
+### Inefficace sur les petits modèles
+En dessous de 1 milliard de paramètres, le prompt tuning est nettement inférieur à LoRA. Les petits modèles n'ont pas des représentations assez riches pour qu'un simple conditionnement par soft prompts suffise. En pratique, visez au minimum 3-7B pour que le prompt tuning soit compétitif.
 
-### Budget de contexte limité
-Trop de soft tokens = moins de contexte disponible.
+### Budget de contexte consommé
+20 soft tokens, ça paraît peu. Mais sur un modèle avec 2 048 tokens de contexte, c'est 1% perdu. Sur un modèle moderne avec 128K de contexte, c'est négligeable. Ce problème s'atténue avec les nouvelles architectures.
 
 <Callout type="warning" title="Zéro interprétabilité">
-Les soft prompts ne correspondent à aucun mot. Vous ne pouvez pas "lire" ce qu'ils encodent. Si ça bug, difficult de debugger.
+Les soft prompts ne correspondent à aucun mot du vocabulaire. On ne peut pas "lire" ce qu'ils encodent. Si votre modèle se comporte bizarrement, il est quasi impossible de diagnostiquer si le problème vient du soft prompt ou d'ailleurs. C'est une boîte noire dans la boîte noire.
 </Callout>
 
 ## Cas d'usage pratiques
 
-### Classification à grande échelle
-100 tâches de classification, un modèle. Chaque tâche = son soft prompt.
+### Classification massive multi-tâches
+Vous avez 100 tâches de classification à servir avec un seul modèle. Chaque tâche a son propre soft prompt de quelques Ko. Le modèle en mémoire est partagé. C'est le scénario rêvé.
 
-### Personnalisation utilisateur
-Chaque utilisateur a son soft prompt appris sur ses interactions. Ultra efficace en stockage.
+### Personnalisation par utilisateur
+Chaque utilisateur peut avoir son soft prompt appris sur ses interactions passées, encodant ses préférences de style, de ton et de format. Le stockage est négligeable : 82K paramètres par utilisateur.
 
 ### Ensemble de prompts
-Entraînez 5 soft prompts pour la même tâche. Mélangez-les pour la robustesse.
+Entraînez 5 soft prompts indépendants pour la même tâche, puis combinez leurs prédictions (ou faites la moyenne des soft prompts) pour une meilleure robustesse. C'est de l'ensembling quasi gratuit en mémoire.
 
 ## Place dans l'écosystème moderne
 
-Éclipsé par LoRA pour la plupart des cas. Mais conceptuellement riche: montre que l'adaptation peut se faire dans l'espace d'entrée plutôt que dans l'espace des poids. Influencent encore la recherche sur le contrôle des LLM.
+Le prompt tuning a été largement éclipsé par LoRA pour la plupart des cas pratiques. Mais son apport conceptuel est immense : il démontre que l'adaptation d'un LLM peut se faire **entièrement dans l'espace d'entrée**, sans toucher aux poids. Cette idée influence encore la recherche sur le contrôle et le steering des LLM modernes.
 
 ---
 
-**TL;DR**: Prompt tuning = ultra-minimaliste, ultra-compacte, marche incroyablement bien sur gros modèles. Si vous avez un 70B model, essayez prompt tuning avant LoRA.
+**TL;DR** : Le prompt tuning est la méthode PEFT la plus minimaliste : quelques vecteurs à l'entrée, rien d'autre. Sur les gros modèles (10B+), elle rivalise avec le fine-tuning complet. Si vous avez un modèle 70B et mille tâches à servir, essayez le prompt tuning avant de sortir l'artillerie lourde.

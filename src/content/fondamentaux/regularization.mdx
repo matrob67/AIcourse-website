@@ -5,55 +5,55 @@ description: "L1, L2, dropout, early stopping, data augmentation. Les techniques
 
 ## Introduction : Garder la discipline
 
-Sans contraintes, un réseau assez gros peut **mémoriser** toutes tes données : chaque photo, chaque email, chaque prix. Même les erreurs d'étiquetage et le bruit pur. C'est useless.
+Voici le piège classique du deep learning : tu entraînes un modèle, ta loss d'entraînement descend à 0.001, tu es content... et puis en production, les performances sont catastrophiques. Que s'est-il passé ? Le modèle a **mémorisé** les données d'entraînement au lieu d'en extraire les patterns généraux. Il a appris que l'image numéro 4 327 est un chat, mais il n'a pas appris à reconnaître *un chat en général*. Un réseau assez gros peut mémoriser n'importe quoi : chaque photo, chaque email, chaque prix — y compris le bruit et les erreurs d'étiquetage.
 
-La **régularisation** ajoute des "freins" : des pénalités qui forcent le modèle à trouver des solutions **simples et vraies**, pas juste de la mémorisation.
+La **régularisation** ajoute des "freins" au modèle : des contraintes, des pénalités et des perturbations qui le forcent à trouver des solutions **simples et généralisables**, pas juste de la mémorisation brute.
 
-C'est l'application pratique du **rasoir d'Occam** : entre deux modèles qui marchent aussi bien, préfère le plus simple.
-
-
-
-
+C'est l'application pratique du **rasoir d'Occam** : entre deux modèles qui performent aussi bien sur les données d'entraînement, préfère le plus simple — c'est celui qui a le plus de chances de fonctionner sur des données nouvelles.
 
 ## L2 : pousser les poids vers zéro
 
-La régularisation **L2** (aussi appelée **Ridge** ou **weight decay**) ajoute une pénalité : le carré de chaque poids.
+La régularisation **L2** (aussi appelée **Ridge** ou **weight decay**) ajoute un terme de pénalité à la fonction de perte : la somme des carrés de tous les poids du modèle.
 
-```
-Erreur totale = Erreur vraie + lambda * somme(poids²)
-```
+$$\mathcal{L}_{\text{totale}} = \mathcal{L}_{\text{erreur}} + \lambda \sum_{i} w_i^2$$
 
-Où lambda contrôle la force de la pénalité.
+Le paramètre $\lambda$ (lambda) contrôle la force de la pénalité. Plus lambda est grand, plus le modèle est forcé de garder ses poids petits.
 
-**Effet** : L2 pousse tous les poids vers zéro, mais jamais complètement. Tu obtiens des poids petits et distribuées plutôt que quelques poids énormes et le reste zéro.
+**L'intuition** : pourquoi des petits poids réduisent le surapprentissage ? Pense à une fonction qui passe par des données bruitées. Avec des poids énormes, la fonction fait des zigzags violents pour passer par chaque point — elle mémorise le bruit. Avec des poids petits, la fonction est forcée d'être "lisse" : elle capture la tendance générale sans coller au bruit. Petits poids = décisions lisses et stables.
 
-Petits poids = décisions "lisses" au lieu d'erratiques. Moins de surapprentissage.
-
-En SGD, c'est équivalent à multiplier chaque poids par (1 - petit_nombre) à chaque étape. D'où le nom "weight decay".
+En pratique avec l'optimiseur SGD, L2 revient à multiplier chaque poids par $(1 - \lambda \cdot \text{lr})$ à chaque étape d'entraînement, avant d'appliquer le gradient. Les poids "fondent" doucement vers zéro — d'où le nom **weight decay** (décroissance des poids). Avec Adam, la correspondance entre L2 et weight decay n'est plus exacte, d'où l'existence d'AdamW qui implémente le vrai weight decay découplé.
 
 <Callout type="tip" title="L2 est l'outil de base">
-L2 est utilisé quasi partout en deep learning. Lambda entre 0.0001 et 0.1 est typique. C'est ton première ligne de défense contre l'overfitting.
+L2 / weight decay est utilisé quasi partout en deep learning. Un lambda entre 0.0001 et 0.1 est typique (0.01 est un bon point de départ). C'est ta première ligne de défense contre l'overfitting — simple, efficace, et sans coût computationnel additionnel.
 </Callout>
 
-## L1 : forcer les poids à zéro
+## L1 : forcer les poids à exactement zéro
 
-La régularisation **L1** (aussi appelée **Lasso**) pénalise la **valeur absolue** des poids (pas le carré) :
+La régularisation **L1** (aussi appelée **Lasso**) pénalise la **valeur absolue** des poids au lieu du carré :
 
-```
-Erreur totale = Erreur + lambda * somme(|poids|)
-```
+$$\mathcal{L}_{\text{totale}} = \mathcal{L}_{\text{erreur}} + \lambda \sum_{i} |w_i|$$
 
-**Pourquoi L1 crée de la sparsité, et pas L2 ?** C'est une question de géométrie de la pénalité. Avec L2, la pénalité sur un poids w est proportionnelle à w² : elle est forte quand w est grand, faible quand w est petit. Résultat, le gradient de la pénalité devient quasi nul quand le poids approche de zéro, donc le poids ne sera jamais poussé jusqu'à exactement 0.
+**La grande question : pourquoi L1 crée de la sparsité (des poids exactement à zéro), et pas L2 ?** La réponse tient dans la forme du gradient de la pénalité.
 
-Avec L1, la pénalité est |w| : le gradient est constant (±lambda), quelle que soit la valeur du poids. Même un poids très proche de zéro reçoit encore une poussée vers zéro. C'est cette poussée constante qui franchit le seuil et élimine le poids complètement.
+Avec L2, la pénalité est $w^2$ : son gradient est $2w$, qui devient quasi nul quand le poids approche de zéro. C'est comme une force de rappel qui faiblit à mesure qu'on se rapproche du centre. Résultat : le poids s'approche de zéro mais n'y arrive jamais vraiment.
 
-Résultat : L1 produit des modèles **parcimonieux** (sparse) où seuls quelques poids sont non nuls. C'est utile pour la sélection de variables — L1 te dit implicitement "ces features comptent, les autres non".
+Avec L1, la pénalité est $|w|$ : son gradient est $\pm\lambda$, **constant quelle que soit la valeur du poids**. Même un poids à 0.0001 reçoit la même poussée vers zéro qu'un poids à 10. C'est cette poussée constante, comme un vent qui souffle toujours aussi fort, qui franchit le seuil et élimine le poids complètement.
+
+Résultat pratique : L1 produit des modèles **parcimonieux** (sparse) où seuls quelques poids sont non nuls. C'est extrêmement utile pour la **sélection de variables** — L1 te dit implicitement "ces features comptent, les autres non". En deep learning, L1 est moins courant que L2, mais il reste important en ML classique et pour les modèles linéaires.
 
 Utilise L1 quand tu soupçonnes que seule une fraction de tes features est vraiment importante et que tu veux que le modèle le découvre lui-même.
 
 ## Dropout : désactiver des neurones
 
 Le dropout est simple dans son principe : pendant l'entraînement, à chaque passe avant, tu **désactives aléatoirement** 10 à 50% des neurones. Leurs sorties deviennent zéro pour cette étape.
+
+<ImageWithSource
+  src="/images/admin/img-1774008796634.png"
+  alt="Comparaison réseau neuronal avec et sans dropout"
+  source="https://vitalitylearning.medium.com/understanding-dropout-a-key-to-preventing-overfitting-in-neural-networks-21b28dd7c9b1"
+  caption="L'image illustre le principe du dropout dans un réseau de neurones. À gauche, le réseau complet est actif, tandis qu'à droite, certains neurones sont désactivés aléatoirement pendant l'entraînement pour éviter le surapprentissage."
+  size="large"
+/>
 
 ### Pourquoi ça marche
 
@@ -73,20 +73,24 @@ Couches cachées : 0.3-0.5 courant
 Transformers modernes : souvent juste 0.1
 </Callout>
 
+## Early Stopping : arrête avant que ça dérape
 
+Ridiculement simple mais terriblement efficace. C'est probablement la technique de régularisation avec le meilleur ratio effort/résultat.
 
+<ImageWithSource
+  src="/images/admin/img-1774008861616.png"
+  alt="Courbes d'erreur entraînement et validation"
+  caption="Ce graphique illustre l'erreur d'un modèle d'apprentissage automatique en fonction du nombre d'itérations, montrant l'intérêt de l'arrêt précoce pour éviter le surapprentissage. La courbe de validation remonte après un minimum, indiquant le moment optimal pour stopper l'entraînement."
+  size="medium"
+/>
 
-## Early Stopping : arrête avant de te tromper
+Le principe : surveille l'erreur de validation à chaque epoch pendant l'entraînement. Dès qu'elle arrête de diminuer (ou commence à remonter), arrête tout.
 
-Ridiculement simple mais terriblement efficace.
+L'implémentation clé : **sauvegarde toujours les meilleurs poids** (le "checkpoint" au meilleur score de validation). Quand tu décides d'arrêter, tu reprends ces poids-là, pas les derniers. C'est le modèle d'avant le surapprentissage.
 
-Surveille l'erreur de validation pendant l'entraînement. Dès qu'elle arrête de diminuer (ou commence à remonter), arrête.
+**Patience** : en pratique, tu ne t'arrêtes pas à la première epoch sans amélioration — la validation peut fluctuer. Tu tolères 5 à 20 epochs sans amélioration avant de couper. Ce paramètre de patience est à ajuster selon la tâche.
 
-Toujours sauvegarde les meilleurs poids (avant le surapprentissage) et réutilise-les.
-
-**Patience** : tolère 5-20 epochs sans amélioration avant d'arrêter. À toi d'ajuster.
-
-**Pourquoi ça marche** : au début, train et validation s'améliorent tous les deux (apprentissage vrai). À la fin, train continue à baisser mais validation monte (mémorization). Early stopping te capture au moment optimal.
+**Pourquoi ça marche** : l'entraînement passe par deux phases distinctes. Phase 1 : les erreurs train et validation diminuent ensemble — le modèle apprend des patterns vrais et généraux. Phase 2 : l'erreur train continue à baisser mais l'erreur de validation stagne ou remonte — le modèle commence à mémoriser le bruit spécifique aux données d'entraînement. Early stopping te capture pile au point de transition entre ces deux phases.
 
 ## Data Augmentation : invente des variantes
 
@@ -94,7 +98,21 @@ Tu ne crées pas vraiment de données, tu en crées des variantes qui restent va
 
 **Images** : rotation, flip horizontal, zoom aléatoire, recadrage, bruit gaussien, changements de contraste/luminosité. Techniques avancées : mixup (interpole deux images), cutout (masque régions aléatoires), RandAugment/AutoAugment (choisit automatiquement).
 
+<ImageWithSource
+  src="/images/admin/img-1774008919094.png"
+  alt="Exemples d'augmentation d'images pour l'IA"
+  caption="Cette image illustre différentes techniques d'augmentation de données pour l'entraînement des modèles d'intelligence artificielle. Elle montre l'image originale et ses variantes modifiées par des transformations courantes comme la rotation, le retournement, le recadrage, l'ajout de bruit ou de flou."
+  size="large"
+/>
+
 **Texte** : paraphrase (reformule sans changer le sens), substitution de mots, traduction puis retraduction inverse pour garder naturel.
+
+<ImageWithSource
+  src="/images/admin/img-1774009007422.png"
+  alt="Exemples de méthodes de régularisation de texte"
+  caption="L'image illustre quatre techniques de régularisation pour améliorer la robustesse des modèles de traitement automatique du langage : swapping (échange de mots), deletion (suppression de mots), insertion (ajout de mots) et substitution (remplacement de mots). Ces méthodes permettent de générer des données augmentées pour entraîner des modèles plus performants."
+  size="medium"
+/>
 
 **Tableaux** : ajoute petit bruit gaussien, utilise SMOTE pour surreprésenter les classes rares.
 
@@ -102,13 +120,13 @@ Tu ne crées pas vraiment de données, tu en crées des variantes qui restent va
 Data augmentation est souvent **la** technique de régularisation la plus puissante en vision. Utilise-la.
 </Callout>
 
-## Label Smoothing : probabilités moins confiantes
+## Label Smoothing : être honnête sur l'incertitude
 
-Au lieu de dire "c'est la classe 3" avec probabilité 100% (one-hot : [0,0,1,0]), dis "c'est probablement la classe 3" (lissé : [0.025, 0.025, 0.925, 0.025]).
+Au lieu de dire au modèle "c'est la classe 3 avec une certitude de 100%" (one-hot : [0, 0, 1, 0]), on lui dit "c'est probablement la classe 3, mais il y a une petite chance que ce soit autre chose" (lissé : [0.025, 0.025, 0.925, 0.025]). On distribue un petit epsilon ($\varepsilon$ = 0.1 typiquement) de probabilité uniformément sur toutes les classes.
 
-Empêche le modèle d'être trop confiant. Les logits ne deviennent pas énormes. Les probabilités prédites sont mieux calibrées (la confiance reflète la vraie probabilité).
+L'effet est subtil mais important : le modèle n'a plus besoin de pousser ses logits vers l'infini pour produire une probabilité de 100%. Les logits restent raisonnables, ce qui rend les probabilités prédites mieux **calibrées** (quand le modèle dit "80% de confiance", c'est vraiment correct dans ~80% des cas). Un modèle bien calibré est bien plus utile en production qu'un modèle qui dit toujours "99% sûr" même quand il se trompe.
 
-Standard dans l'entraînement des Transformers.
+Le label smoothing est devenu standard dans l'entraînement des Transformers (c'était déjà utilisé dans "Attention Is All You Need").
 
 ## Les techniques combinées
 
@@ -124,16 +142,24 @@ En pratique tu les mélange toutes :
 
 ## Les architectures modernes régularisent implicitement
 
-Les skip connections (ResNets), BatchNorm, LayerNorm, attention multi-tête ont tous des effets régularisants implicites.
+Un point fascinant : de nombreux composants des architectures modernes ont des **effets régularisants implicites**, même si ce n'est pas leur objectif principal.
 
-Dans les très gros modèles entraînés une seule époque, le dropout disparaît car il n'y a pas assez de temps pour mémoriser. L'architecture elle-même prévient le surapprentissage.
+Les **skip connections** (présentes dans les ResNets et les Transformers) lissent la surface de la loss, ce qui rend l'optimisation plus stable et moins sujette au surapprentissage. La **LayerNorm** et la **BatchNorm** normalisent les activations, ce qui empêche les poids de diverger. L'**attention multi-tête** distribue l'information sur plusieurs sous-espaces, créant une forme de redondance. Et le **dropout dans l'attention** (attention dropout) est standard dans les Transformers.
+
+Fait marquant : dans les très gros modèles de langage entraînés une seule epoch sur des trillions de tokens, le dropout classique disparaît souvent. Pourquoi ? Parce que chaque exemple n'est vu qu'une seule fois — il n'y a littéralement pas assez de temps pour mémoriser. L'architecture et la taille massive du dataset préviennent le surapprentissage par eux-mêmes.
 
 ## Résumé pratique
 
-Commence par **weight decay L2** (lambda = 0.01 à 0.1). Ajoute dropout (0.1-0.5) si tu as des couches denses. Utilise early stopping (c'est gratuit). Si tu as peu de données, data augmentation est ta meilleure arme.
+Voici la recette de base, applicable dans 90% des situations :
 
-La régularisation n'est pas une science exacte. C'est un ensemble d'outils et l'expérience te dit lequel appliquer à ta situation spécifique. Apprends à les combiner et tu maîtrise l'overfitting.
+1. Commence par **weight decay L2** (lambda = 0.01). C'est gratuit en compute et ça aide toujours
+2. Ajoute **dropout** (0.1-0.5) sur tes couches denses, surtout si le modèle est petit par rapport aux données
+3. Mets en place **early stopping** avec patience de 10 epochs. C'est gratuit et ça évite les surprises
+4. Si tu as peu de données, **data augmentation** est ta meilleure arme — souvent plus efficace que toutes les autres techniques combinées
+5. Pour les Transformers, ajoute le **label smoothing** ($\varepsilon$ = 0.1)
+
+La régularisation n'est pas une science exacte. C'est un ensemble d'outils complémentaires, et l'expérience te dit lequel est le plus critique pour ta situation spécifique. Apprends à les combiner intelligemment et tu maîtriseras l'overfitting.
 
 ## Pourquoi c'est important
 
-L'overfitting c'est la mort silencieuse du ML. Ton modèle paraît excellent en labo mais échoue en production. La régularisation te l'empêche. C'est une compétence fondamentale.
+L'overfitting, c'est la mort silencieuse du ML. Ton modèle affiche un score parfait en labo, tout le monde applaudit, et puis en production il s'effondre lamentablement. La régularisation te protège de ce scénario. C'est une compétence fondamentale — et la marque d'un praticien qui sait ce qu'il fait.

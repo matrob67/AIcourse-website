@@ -7,81 +7,85 @@ description: "Les world models apprennent un modèle interne du monde pour perme
 
 ## Imagination artificielle : le robot qui pense avant d'agir
 
-Quand vous imaginez attraper un verre d'eau, votre cerveau simule mentalement le mouvement, anticipe le poids, prédit résultat. **World models** robots : « simulateur interne » permettant raisonner sur conséquences actions sans les exécuter physiquement.
+Quand vous imaginez attraper un verre d'eau, votre cerveau simule mentalement le mouvement, anticipe le poids du verre, prédit ce qui se passera si vous le saisissez trop fort ou pas assez. Vous ne faites pas le geste pour voir ce qui se passe : vous le simulez dans votre tête d'abord. Les **world models** donnent cette même capacité aux robots : un « simulateur interne » appris qui permet de raisonner sur les conséquences des actions sans les exécuter physiquement.
+
+C'est un changement de paradigme profond. Au lieu de réagir au monde en temps réel (observer, agir, espérer), le robot peut planifier en simulant mentalement plusieurs scénarios et en choisissant le meilleur.
 
 <Callout type="info" title="L'analogie humaine">
-Votre cerveau simule mentalement les conséquences avant agir. World models donnent robots capacité similaire : planifier en simulant dans modèle appris plutôt que monde réel.
+Votre cerveau simule constamment les conséquences de vos actions avant de les exécuter. Vous n'avez pas besoin de renverser un verre pour savoir que le pousser le ferait tomber. Les world models donnent aux robots une capacité similaire : planifier en simulant dans un modèle appris du monde, plutôt que par essai-erreur dans le monde réel.
 </Callout>
 
 ## Fondements : Model-Based vs Model-Free RL
 
-**Model-Free** (PPO, SAC) : agent apprend politique (état → action) directement sans modèle environnement. Simple, nécessite énormément données.
+Pour comprendre les world models, il faut distinguer deux familles de reinforcement learning :
 
-**Model-Based** : agent apprend modèle dynamique environnement, puis l'utilise planifier. Plus sample-efficient, mais modèle peut être inexact.
+**Model-Free** (PPO, SAC) : l'agent apprend directement une politique (état -> action) sans construire de modèle de l'environnement. C'est simple et efficace, mais ça nécessite énormément de données. Le robot apprend par essai-erreur pur, sans jamais se demander « que se passerait-il si... ? ».
 
-World models = forme sophistiquée model-based RL où modèle = réseau neuronal profond prédisant observations complexes.
+**Model-Based** : l'agent apprend d'abord un modèle de la dynamique de l'environnement (si je fais l'action A dans l'état S, j'arrive dans l'état S'), puis utilise ce modèle pour planifier ses actions. C'est beaucoup plus efficace en termes de données (sample-efficient), mais le modèle appris peut être inexact, et les erreurs s'accumulent.
 
-### Cadre général
+Les **world models** sont une forme sophistiquée de model-based RL où le modèle du monde est un réseau de neurones profond capable de prédire des observations complexes (images, sons) et pas seulement des états abstraits.
 
-World model apprend trois fonctions :
-1. **Modèle transition** : prédit état suivant étant donné état actuel et action
-2. **Modèle observation** : génère observations (images) à partir état latent
-3. **Modèle récompense** : prédit récompense associée transition
+### Le cadre général
+
+Un world model apprend trois fonctions complémentaires :
+1. **Modèle de transition** : prédit l'état suivant étant donné l'état actuel et l'action choisie. C'est la physique apprise du monde
+2. **Modèle d'observation** : génère les observations (images) que le robot verrait à partir de l'état latent. C'est le décodeur qui traduit l'imagination en vision
+3. **Modèle de récompense** : prédit la récompense associée à chaque transition. C'est l'évaluation qui dit si le scénario imaginé est bon ou mauvais
 
 ## Architectures clés
 
-**World Models** (Ha & Schmidhuber, 2018, fondateur) :
-- **V (Vision)** : VAE comprimant images en vecteurs latents
-- **M (Memory)** : RNN (MDN-RNN) prédisant évolution vecteurs latents
-- **C (Controller)** : réseau linéaire choisissant actions
+**World Models** (Ha & Schmidhuber, 2018) : le travail fondateur qui a donné son nom au domaine. L'architecture se compose de trois modules :
+- **V (Vision)** : un VAE (Variational Autoencoder) qui comprime les images en vecteurs latents compacts
+- **M (Memory)** : un RNN (MDN-RNN) qui prédit l'évolution des vecteurs latents au fil du temps. C'est la mémoire qui capture la dynamique du monde
+- **C (Controller)** : un réseau linéaire simple qui choisit les actions à partir de l'état latent
 
-Agent peut être entraîné entièrement « dans son rêve » — interagissant avec world model plutôt qu'environnement réel.
+L'insight fondamental : l'agent peut être entraîné entièrement « dans son rêve », en interagissant avec le world model plutôt qu'avec l'environnement réel. C'est de l'imagination pure : le robot apprend en rêvant.
 
-**Dreamer** (Danijar Hafner) : famille world models la plus aboutie :
-- **V1** (2020) : apprend politique par backprop à travers world model
-- **V2** (2021) : atteint performances surhumaines Atari sans model-free RL
-- **V3** (2023) : fonctionne large gamme domaines sans tuning hyperparamètres
+**Dreamer** (Danijar Hafner) : la famille de world models la plus aboutie actuellement :
+- **DreamerV1** (2020) : apprend une politique par backpropagation à travers le world model, exploitant les gradients du modèle appris
+- **DreamerV2** (2021) : atteint des performances surhumaines sur les jeux Atari sans jamais utiliser de model-free RL
+- **DreamerV3** (2023) : fonctionne sur une large gamme de domaines sans aucun tuning d'hyperparamètres
 
-<Callout type="tip" title="DreamerV3 la généralisation">
-DreamerV3 utilise espace latent discret (symlog predictions), objectif valeur robuste, exploration intrinsèque. Fonctionne Minecraft à locomotion robotique sans changer hyperparamètres — prouesse généralisation algorithmique.
+<Callout type="tip" title="DreamerV3 : la généralisation algorithmique">
+DreamerV3 utilise un espace latent discret, des prédictions symlog, et un objectif de valeur robuste. Résultat remarquable : il fonctionne de Minecraft à la locomotion robotique en passant par les jeux Atari, sans changer un seul hyperparamètre. C'est une prouesse de généralisation algorithmique qui contraste avec le RL classique où chaque tâche nécessite des heures de tuning.
 </Callout>
 
-**TD-MPC2** (Temporal Difference Model Predictive Control) : combine world models et contrôle prédictif :
-- Apprend modèle latent dynamique
-- MPC pour planifier temps réel
-- Fonctionne 80+ tâches contrôle continu, single ensemble hyperparamètres
-- Adapté tâches robotiques requérant planification précise
+**TD-MPC2** (Temporal Difference Model Predictive Control) : combine les world models avec le contrôle prédictif classique :
+- Apprend un modèle de la dynamique dans un espace latent compact
+- Utilise le MPC (Model Predictive Control) pour planifier les actions en temps réel, en simulant plusieurs pas dans le futur et en choisissant la meilleure séquence
+- Fonctionne sur plus de 80 tâches de contrôle continu avec un seul ensemble d'hyperparamètres
+- Particulièrement adapté aux tâches robotiques nécessitant une planification précise (insertion, assemblage)
 
-## Applications robotique
+## Applications en robotique
 
-**Planification manipulation** : robot simule mentalement différentes stratégies saisie avant choisir meilleure. Prédiction trajectoire objet quand poussé. Anticipation collisions. Évaluation stabilité prise.
+**Planification de manipulation** : le robot simule mentalement différentes stratégies de saisie avant de choisir la meilleure. Il prédit la trajectoire d'un objet quand il le pousse, anticipe les collisions potentielles, et évalue la stabilité de sa prise. Tout ça avant de bouger un seul moteur.
 
-**Navigation** : prédire conséquences déplacements. Évitement obstacles anticipé. Planification chemin environnements dynamiques. Adaptation terrain.
+**Navigation** : prédire les conséquences des déplacements permet un évitement d'obstacles anticipé (au lieu de réactif), une planification de chemin dans des environnements dynamiques (avec des humains qui bougent), et une adaptation au terrain.
 
-**World Models vidéo** : génération vidéo (Sora, Runway) = world models implicites. Ces modèles apprennent implicitement lois physique pour générer vidéos réalistes. Plusieurs groupes explorent utiliser générateurs vidéo comme world models robotique.
+**World Models vidéo** : les modèles de génération vidéo (Sora, Runway) sont, de manière implicite, des world models. Pour générer une vidéo réaliste d'une balle qui rebondit, le modèle doit avoir appris les lois de la physique. Plusieurs groupes de recherche explorent l'utilisation de ces générateurs vidéo comme world models pour la robotique : le modèle imagine ce qui se passerait si le robot faisait telle ou telle action, et choisit l'action dont le résultat imaginé est le meilleur.
 
 <Callout type="paper" title="UniSim : le simulateur universel appris">
-UniSim (Google DeepMind) : simulateur universel appris. Modèle génératif vidéo qui simule conséquences n'importe quelle action dans n'importe quel environnement. Vision ultime world models : simulateur général appris données, remplaçant simulateurs physiques classiques.
+UniSim (Google DeepMind) est un modèle génératif vidéo qui simule les conséquences de n'importe quelle action dans n'importe quel environnement. C'est la vision ultime des world models : un simulateur universel appris à partir de données, qui pourrait à terme remplacer les simulateurs physiques classiques comme MuJoCo ou Isaac Sim.
 </Callout>
 
-## Avantages
+## Avantages des world models
 
-- **Sample efficiency** : apprendre modèle puis planifier plus efficace que model-free RL
-- **Sécurité** : tester actions dans modèle avant exécuter monde réel
-- **Transfert** : bon world model réutilisable pour nouvelles tâches
-- **Interprétabilité** : visualiser ce que robot « imagine »
+- **Sample efficiency** : apprendre un modèle du monde puis planifier dedans est beaucoup plus efficace en données que le RL model-free pur. Le robot apprend plus vite avec moins d'interactions réelles
+- **Sécurité** : tester des actions dans le modèle mental avant de les exécuter dans le monde réel permet d'éviter les actions dangereuses. Le robot ne fait pas de mouvements irréfléchis
+- **Transfert** : un bon world model est réutilisable pour de nouvelles tâches sans ré-apprentissage complet. La physique du monde ne change pas entre les tâches
+- **Interprétabilité** : on peut visualiser ce que le robot « imagine », ce qui aide à comprendre et débuguer son comportement
 
 ## Limitations
 
-- **Erreurs modèle** : prédictions divergent réalité horizons longs (erreurs compounding)
-- **Complexité** : environnements riches dynamiques difficiles modéliser
-- **Coût computationnel** : planification dans modèle ajoute latence
-- **Objets nouveaux** : modèle ne peut prédire comportement objets jamais vus
+- **Erreurs du modèle (compounding error)** : les prédictions divergent de la réalité sur les horizons longs. 1% d'erreur par pas de temps signifie environ 50% d'erreur après 50 pas. Le rêve devient cauchemar
+- **Complexité environnementale** : les environnements riches et dynamiques (une cuisine pleine d'objets avec des humains) sont difficiles à modéliser fidèlement
+- **Coût computationnel** : planifier dans le modèle ajoute de la latence, ce qui peut être problématique pour le contrôle en temps réel
+- **Objets nouveaux** : le modèle ne peut pas prédire le comportement d'objets qu'il n'a jamais vus (un matériau inconnu, un mécanisme nouveau)
 
-<Callout type="warning" title="Le problème compounding error">
-Erreurs prédiction world model s'accumulent. 1% erreur par pas = 50% erreur après 50 pas. World models souvent utilisés planification court terme plutôt que trajectoires longues.
+<Callout type="warning" title="Le problème du compounding error">
+Les erreurs de prédiction du world model s'accumulent de manière exponentielle. 1% d'erreur par pas de temps donne environ 40% d'erreur cumulée après 50 pas. C'est pourquoi les world models sont souvent utilisés pour la planification à court terme (quelques pas) plutôt que pour des trajectoires longues. Combinés avec un feedback régulier du monde réel, ce problème est atténué.
 </Callout>
 
 ## Perspectives
 
-Convergence entre world models et modèles génératifs (diffusion, flow matching) = direction prometteuse. Foundation models vidéo apprennent représentations riches physique monde pouvant servir base world models robotiques universels.
+La convergence entre world models et modèles génératifs (diffusion, flow matching) est la direction la plus prometteuse. Les foundation models vidéo apprennent des représentations extraordinairement riches de la physique du monde (gravité, collisions, fluides, déformations). Ces représentations pourraient servir de base à des world models robotiques universels, capables de prédire les conséquences de n'importe quelle action dans n'importe quel environnement. C'est encore de la recherche, mais la direction est claire et excitante.

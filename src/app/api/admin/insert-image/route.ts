@@ -29,7 +29,8 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Split content by double newlines
+  // Normalize line endings and split content by double newlines
+  content = content.replace(/\r\n/g, "\n");
   const rawBlocks = content.split(/\n{2,}/);
   const nonEmptyIndices: number[] = [];
   rawBlocks.forEach((b, i) => {

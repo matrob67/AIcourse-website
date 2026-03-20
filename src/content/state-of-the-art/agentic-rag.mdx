@@ -5,23 +5,29 @@ description: "L'Agentic RAG donne au LLM le contrôle du pipeline de retrieval :
 
 ## Le problème : le pipeline RAG classique est trop rigide
 
-Vous posez une question. Boom : une recherche vectorielle, puis la génération. C'est mécanique, prévisible... et pas toujours optimal.
+Avec un RAG classique, le flux est toujours le même. Vous posez une question. Boom : une recherche vectorielle, puis le LLM génère une réponse. C'est mécanique, prévisible... et pas toujours optimal.
 
-Parfois vous besoin de :
-- Chercher en plusieurs étapes (question complexe)
-- Essayer plusieurs sources (doc interne + web + base de données)
-- Reformuler si les résultats sont mauvais
+Imaginez que vous posez la question : "Quels sont les concurrents de Mistral qui ont levé des fonds en 2024, et comment se comparent leurs modèles ?". Un RAG classique fait UNE recherche, récupère quelques passages, et tente de répondre avec ce qu'il a. Mais cette question nécessite en réalité :
+- D'abord identifier les concurrents de Mistral
+- Puis chercher les levées de fonds pour chacun
+- Puis comparer les modèles techniques
+- Enfin synthétiser le tout
 
-**Agentic RAG** donne au LLM le contrôle. Il devient un chef d'orchestre qui décide dynamiquement : chercher où ? Combien de fois ? Quand s'arrêter ?
+Un pipeline rigide "une question = une recherche" est incapable de gérer cette complexité.
 
-<Callout type="info" title="L'analogie : du jukebox à un DJ">
-RAG classique = jukebox : vous appuyez sur un bouton, il joue la chanson. Agentic RAG = DJ : il écoute la salle, change de chanson, mélange des titres en fonction de l'ambiance.
+**Agentic RAG** résout ça en donnant au LLM le **contrôle** du pipeline. Il devient un chef d'orchestre qui décide dynamiquement : chercher où ? Combien de fois ? Avec quelle requête ? Quand s'arrêter ? Quand reformuler ?
+
+<Callout type="info" title="L'analogie : du jukebox au DJ">
+RAG classique = jukebox : vous appuyez sur un bouton, il joue toujours la même chanson de la même manière. Agentic RAG = DJ : il écoute la salle, adapte sa sélection, mélange des titres, et ajuste en temps réel en fonction de la réaction du public. Le résultat est infiniment plus adapté au contexte.
 </Callout>
+
 
 
 ## Patterns courants
 
-### 1. Router RAG : un LLM qui route les questions
+### 1. Router RAG : un LLM qui choisit la bonne source
+
+Toutes les questions ne se valent pas. "Quel est le capital de la France ?" peut être répondu directement. "Quel est le chiffre d'affaires de notre client X ?" nécessite la base SQL interne. "Quelles sont les dernières nouvelles sur GPT-5 ?" demande une recherche web.
 
 ```python
 def route_query(question):
@@ -35,35 +41,46 @@ def route_query(question):
     return sources[decision].search(question)
 ```
 
-Le même LLM choisit la meilleure source pour chaque question.
+Le LLM analyse la question et route vers la source la plus appropriée. Ça évite de chercher dans une base documentaire quand la réponse est triviale, ou de faire du web search quand l'info est dans vos docs internes.
 
-### 2. Multi-Step RAG : décomposer et chercher plusieurs fois
+### 2. Multi-Step RAG : décomposer et chercher en plusieurs étapes
 
-Question : « Quels concurrents de Mistral ont levé des fonds en 2024 ? »
+C'est le pattern le plus puissant de l'Agentic RAG. Pour les questions complexes, l'agent décompose la question en sous-questions et les résout séquentiellement :
 
-Au lieu d'une seule recherche, l'agent :
-1. Cherche : « Concurrents de Mistral »
-2. Pour chaque concurrent trouvé, cherche : « Levées de fonds 2024 »
-3. Synthétise les résultats
+Question : "Quels concurrents de Mistral ont levé des fonds en 2024 ?"
 
-### 3. Adaptive Retrieval : décider combien chercher
+Au lieu d'une seule recherche (qui donnera des résultats médiocres), l'agent :
+1. Cherche : "Concurrents de Mistral IA" et identifie une liste
+2. Pour chaque concurrent trouvé, cherche : "[Nom] levée de fonds 2024"
+3. Synthétise les résultats en une réponse structurée avec les montants, dates, et investisseurs
 
-- Question simple → 3 docs suffisent
-- Question complexe → 10+ docs
-- Résultats contradictoires → chercher davantage pour arbitrer
+Chaque étape enrichit le contexte de la suivante. Le résultat final est incomparablement meilleur qu'une recherche unique.
 
-<Callout type="tip" title="Function calling c'est la clé">
-L'Agentic RAG utilise le **function calling** des LLMs. Le retrieval est un outil que le LLM appelle quand il le juge utile, avec les paramètres qu'il choisit.
+### 3. Adaptive Retrieval : s'adapter à la difficulté
+
+L'agent évalue la complexité de la question et adapte son effort :
+- Question simple ("Qu'est-ce que le pruning ?") : 3 docs suffisent, une seule recherche
+- Question complexe ("Compare les approches de pruning et distillation pour les LLM") : 10+ docs, multiples recherches
+- Résultats contradictoires trouvés : chercher davantage pour arbitrer et trouver un consensus
+
+C'est l'équivalent d'un humain qui, face à une question difficile, creuse plus profondément au lieu de se contenter de la première réponse trouvée.
+
+### 4. Self-Correcting RAG : reformuler si les résultats sont mauvais
+
+L'agent évalue la qualité des résultats récupérés. Si les passages ne répondent pas à la question (faible pertinence), il **reformule** sa requête et relance la recherche avec des termes différents. C'est comme un chercheur qui, ne trouvant rien avec "pruning neural networks", essaie "model compression weight removal".
+
+<Callout type="tip" title="Function calling : la clé technique">
+L'Agentic RAG repose sur le **function calling** des LLMs modernes. Le retrieval est défini comme un outil (fonction) que le LLM peut appeler quand il le juge utile, avec les paramètres qu'il choisit (query, source, nombre de résultats). Le LLM décide de manière autonome quand et comment utiliser cet outil, exactement comme un développeur qui appelle une API.
 </Callout>
 
-## Frameworks
+## Frameworks d'implémentation
 
-**LlamaIndex** : propose des Query Engines spécialisés
-- Router Engine : dirige vers le bon index
-- Sub-Question Engine : décompose les questions
-- Retry Engine : reformule si les résultats sont mauvais
+**LlamaIndex** : propose des Query Engines spécialisés prêts à l'emploi
+- **Router Engine** : dirige automatiquement vers le bon index selon la question
+- **Sub-Question Engine** : décompose les questions complexes en sous-questions
+- **Retry Engine** : reformule automatiquement si les résultats sont jugés insuffisants
 
-**LangGraph** : construisez des graphes de décision
+**LangGraph** : pour construire des graphes de décision personnalisés avec un contrôle fin
 
 ```python
 from langgraph.graph import StateGraph
@@ -72,6 +89,7 @@ graph = StateGraph(RAGState)
 graph.add_node("retrieve", retrieve_docs)
 graph.add_node("evaluate", check_if_relevant)
 graph.add_node("generate", write_answer)
+graph.add_node("reformulate", rewrite_query)
 
 # Conditionnels : si bon → générer, sinon → reformuler
 graph.add_conditional_edges("evaluate", {
@@ -80,29 +98,41 @@ graph.add_conditional_edges("evaluate", {
 })
 ```
 
+L'avantage de LangGraph : le flux est explicite, débogable, et vous pouvez ajouter des conditions complexes (nombre max de reformulations, fallback vers le web, etc.).
+
 ## Pattern d'escalade progressive
 
-1. Recherche locale (doc interne)
-2. Si insuffisant → Web
-3. Si insuffisant → Décomposer et multi-recherche
-4. Si suffisant → Avouer l'incapacité
+Un pattern robuste pour la production : l'escalade en cascade.
 
-<Callout type="warning" title="Coût vs latence">
-Chaque recherche supplémentaire = tokens supplémentaires = plus cher et plus lent. Une question basique peut passer de 1 recherche à 5. Définissez un budget max d'itérations.
+1. **Recherche locale** (base documentaire interne) : rapide, pas cher
+2. Si résultats insuffisants : **Recherche web** : plus large, un peu plus lent
+3. Si toujours insuffisant : **Décomposition multi-recherche** : puissant, plus coûteux
+4. Si toujours insuffisant : **Aveu d'incapacité** : "Je n'ai pas trouvé assez d'informations pour répondre de manière fiable"
+
+Chaque niveau est plus puissant mais aussi plus coûteux et plus lent. La majorité des questions se résolvent au niveau 1, ce qui garde les coûts moyens bas.
+
+<Callout type="warning" title="Coût et latence : attention à l'explosion">
+Chaque recherche supplémentaire = tokens supplémentaires = plus cher et plus lent. Une question basique peut passer de 1 recherche (0.02$, 300ms) à 5 recherches (0.10$, 3s). Sans garde-fous, un agent trop zélé peut faire 15 recherches pour une question simple. Définissez toujours un **budget maximum** d'itérations et de tokens par requête.
 </Callout>
 
-## Métriques à surveiller
+## Métriques essentielles à surveiller
 
-- **Nombre d'étapes** : combien de recherches avant réponse ?
-- **Qualité du routing** : le bon outil est-il sélectionné ?
-- **Latence totale** : tout inclus
-- **Taux d'escalade** : à quelle fréquence passer au plan B ?
+- **Nombre moyen d'étapes** : combien de recherches avant la réponse ? Si c'est toujours 1, votre agent n'apporte rien par rapport au RAG classique. Si c'est toujours 10, il est probablement trop agressif.
+- **Qualité du routing** : le bon outil/source est-il sélectionné ? Mesurez le taux de "bon choix" sur un dataset de test.
+- **Latence totale** : temps de bout en bout, toutes recherches incluses. Définissez un SLA.
+- **Taux d'escalade** : à quelle fréquence passe-t-on au plan B ou C ? Un taux élevé peut indiquer que le niveau 1 est mal configuré.
 
-## Quand l'utiliser
+## Quand l'utiliser (et quand s'abstenir)
 
-- **Sources multiples** : doc + web + base de données
-- **Questions complexes** : nécessitant décomposition
-- **Qualité critique** : une mauvaise réponse est pire que pas de réponse
-- **Utilisateurs imprévisibles** : qui posent toutes sortes de questions
+**Agentic RAG brille pour :**
+- **Sources multiples** : doc interne + web + base SQL + API externes
+- **Questions complexes** : nécessitant décomposition et raisonnement multi-étapes
+- **Qualité critique** : quand une mauvaise réponse est pire que pas de réponse du tout
+- **Utilisateurs imprévisibles** : qui posent des questions très variées nécessitant des stratégies différentes
 
-Pour du simple (FAQ, corpus unique) : un RAG classique reste plus rapide et fiable.
+**Restez au RAG classique pour :**
+- FAQ simple, corpus unique et homogène
+- Volume très élevé avec budget serré (l'agentic coûte plus cher en moyenne)
+- Latence ultra-critique (< 500ms)
+
+Pour du simple, un RAG classique bien configuré reste plus rapide, plus fiable, et moins cher. L'Agentic RAG prend tout son sens quand la simplicité du RAG classique ne suffit plus.

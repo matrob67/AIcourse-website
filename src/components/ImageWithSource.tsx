@@ -6,8 +6,8 @@ type ImageSize = "small" | "medium" | "large" | "full";
 
 interface ImageWithSourceProps {
   src: string;
-  alt?: string;
-  source?: string;
+  alt: string;
+  source: string;
   sourceUrl?: string;
   caption?: string;
   size?: ImageSize;
@@ -35,23 +35,17 @@ export default function ImageWithSource({ src, alt, source, sourceUrl, caption, 
         className="rounded-lg border border-card-border w-full"
         onError={() => setImgError(true)}
       />
-      {(caption || source) && (
-        <figcaption className="mt-2 text-xs text-muted text-center">
-          {caption && <span className="block text-sm mb-0.5">{caption}</span>}
-          {source && (
-            <>
-              Source :{" "}
-              {sourceUrl ? (
-                <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-                  {source}
-                </a>
-              ) : (
-                source
-              )}
-            </>
-          )}
-        </figcaption>
-      )}
+      <figcaption className="mt-2 text-xs text-muted text-center">
+        {caption && <span className="block text-sm mb-0.5">{caption}</span>}
+        Source :{" "}
+        {sourceUrl ? (
+          <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+            {source}
+          </a>
+        ) : (
+          source
+        )}
+      </figcaption>
     </figure>
   );
 }

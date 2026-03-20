@@ -5,53 +5,57 @@ description: "Graph RAG combine le RAG traditionnel avec des graphes de connaiss
 
 ## Le problème : certaines questions exigent de connecter les points
 
-Imaginez qu'on vous pose : « Quels sont les fournisseurs des entreprises qui ont eu des problèmes légaux en 2024 ? »
+Imaginez qu'on vous pose : "Quels sont les fournisseurs des entreprises qui ont eu des problèmes légaux en 2024 ?"
 
-Avec un RAG classique, vous cherchez des passages similaires à cette question. Mais le problème, c'est qu'il faut **combiner** des infos de plusieurs documents qui ne se ressemblent pas forcément :
-- Un doc parle de l'entreprise X et de ses problèmes légaux
-- Un autre doc parle des fournisseurs de l'entreprise X
-- Aucun doc ne dit directement « fournisseurs de l'entreprise X avec problèmes légaux »
+Avec un RAG classique, vous cherchez des passages similaires à cette question dans votre base vectorielle. Mais le problème, c'est que la réponse n'existe dans **aucun document unique**. Il faut **combiner** des informations éparpillées :
+- Un document parle de l'entreprise X et de ses problèmes légaux
+- Un autre document liste les fournisseurs de l'entreprise X
+- Aucun document ne dit directement "voici les fournisseurs de l'entreprise X qui a eu des problèmes légaux"
 
-**Graph RAG** résout ça en construisant une structure qui capture les **relations** entre entités.
+Le RAG vectoriel cherche des passages qui **ressemblent** à la question. Mais ici, il faut **naviguer entre des entités connectées**. C'est exactement ce que fait **Graph RAG** : il construit un graphe de connaissances qui capture les **relations** entre entités, puis utilise ce graphe pour répondre.
 
 <Callout type="info" title="L'idée simple">
-Au lieu de juste chercher des passages, créez un graphe : des boîtes (entreprises, gens, concepts) reliées par des flèches (« fournit à », « travaille pour », « a eu un problème »). Le retrieval combine alors une recherche intelligente dans ce graphe.
+Au lieu de juste chercher des passages, créez un graphe : des noeuds (entreprises, personnes, concepts) reliés par des arêtes ("fournit à", "travaille pour", "a eu un problème"). Le retrieval devient une navigation intelligente dans ce réseau de relations.
 </Callout>
 
 ## Comment ça marche
 
 ### Étape 1 : Construire le graphe depuis les documents
 
-1. Passez chaque doc au LLM : « Trouve-moi toutes les entités (personnes, entreprises, lieux) »
-2. Même chose pour les relations : « Quels liens existent entre ces entités ? »
-3. Créez des nœuds et arêtes : une entreprise devient un nœud, « est fournisseur de » devient une arête
+C'est la phase la plus coûteuse. Pour chaque document :
+1. Un LLM extrait les **entités** : personnes, entreprises, lieux, concepts, dates
+2. Le même LLM identifie les **relations** entre ces entités : "X fournit Y", "Z travaille chez W"
+3. On crée les noeuds et arêtes dans un graphe (typiquement Neo4j ou NetworkX)
 
-```
-Entreprise A ──fournit à──> Entreprise B ──problème légal──> Incident 2024
-```
+**Entreprise A** &rarr; *fournit a* &rarr; **Entreprise B** &rarr; *probleme legal* &rarr; **Incident 2024**
+
+Le résultat : une structure navigable qui encode explicitement les connexions que le RAG vectoriel devrait deviner.
 
 ### Étape 2 : Chercher intelligemment
 
-Quand quelqu'un demande « fournisseurs d'X avec problèmes ? »
-1. Trouvez le nœud X
-2. Remontez les arêtes « fournit à X »
-3. Allez chercher les problèmes légaux
-4. Retournez le contexte complet au LLM
+Quand quelqu'un demande "fournisseurs d'entreprises avec des problèmes légaux" :
+1. Identifiez les entités mentionnées dans la question
+2. Trouvez les noeuds correspondants dans le graphe
+3. Traversez les arêtes pertinentes (fournisseur → entreprise → problème légal)
+4. Collectez les informations le long du chemin
+5. Retournez ce contexte enrichi au LLM pour générer la réponse
+
+C'est du **raisonnement multi-hop** : on saute d'entité en entité en suivant les relations. Quelque chose que la similarité cosinus ne sait pas faire.
 
 
 
-## Microsoft's approach : hiérarchie et communautés
+## L'approche Microsoft : hiérarchie et communautés
 
-Microsoft a sortie une implémentation qui fait deux choses malignes :
+Microsoft a publié une implémentation de Graph RAG qui ajoute deux idées malignes :
 
-**Community Detection** : Le graphe est énorme. Ils le divisent en **communautés** (clusters de nœuds bien connectés). Chaque communauté reçoit un résumé généré par IA.
+**Community Detection** : les graphes réels sont souvent immenses. L'algorithme de Leiden détecte des **communautés** — des clusters de noeuds fortement interconnectés. Chaque communauté reçoit un résumé généré par un LLM. C'est comme créer automatiquement des "chapitres" dans votre base de connaissances.
 
-Résultat : deux modes de recherche
-- **Local Search** : pour les questions ciblées (« Quoi sur l'entreprise X ? »)
-- **Global Search** : pour les questions larges (« Quels sont les thèmes majeurs ? ») — agrège les résumés des communautés
+Deux modes de recherche en découlent :
+- **Local Search** : pour les questions ciblées ("Que sait-on sur l'entreprise X ?") — on explore le voisinage direct du noeud
+- **Global Search** : pour les questions de synthèse ("Quels sont les thèmes majeurs de ce corpus ?") — on agrège les résumés des communautés
 
 <Callout type="paper" title="Global Search excelle à la synthèse">
-Le RAG vectoriel classique regarde les 5 passages les plus proches. Graph RAG avec Global Search voit la big picture en synthétisant des thèmes entiers. C'est comme la différence entre lire 5 pages du hasard vs un chapitre entier.
+Le RAG vectoriel classique examine les 5-10 passages les plus proches de la question. Graph RAG avec Global Search voit la big picture en synthétisant des thèmes entiers à partir des résumés de communautés. C'est la différence entre lire 5 pages prises au hasard dans un livre et lire la table des matières avec les résumés de chaque chapitre.
 </Callout>
 
 ## Code simple avec LangChain + Neo4j
@@ -74,9 +78,11 @@ result = chain.invoke(
 )
 ```
 
-## Le vrai coût : ça coûte cher à construire
+Ce qui se passe sous le capot : le LLM traduit la question en requête Cypher (le SQL des graphes), Neo4j exécute la requête, et le LLM formule la réponse à partir des résultats.
 
-Pour extraire entités et relations, chaque doc doit être traité par le LLM. Un corpus de 10 000 docs ? Potentiellement 500 dollars en appels API.
+## Le vrai coût : construction et maintenance
+
+L'extraction d'entités et de relations nécessite de passer **chaque document** au LLM. C'est le prix d'entrée, et il n'est pas négligeable :
 
 | Taille | Docs | Coût (GPT-4) | Temps |
 |---|---|---|---|
@@ -84,24 +90,26 @@ Pour extraire entités et relations, chaque doc doit être traité par le LLM. U
 | Moyen | 1 000 | ~50$ | 5h |
 | Grand | 10 000 | ~500$ | 50h |
 
-<Callout type="warning" title="Maintenance aussi">
-Quand les docs changent, le graphe doit être mis à jour. C'est pas juste un coût initial, c'est un coût continu.
+Et ce n'est pas un coût unique : quand les documents changent, le graphe doit être mis à jour. Nouveaux noeuds, nouvelles arêtes, résumés de communautés à recalculer. C'est un investissement continu.
+
+<Callout type="warning" title="Maintenance continue">
+Le graphe de connaissances n'est pas un "build once, use forever". Les documents évoluent, les relations changent, de nouvelles entités apparaissent. Prévoyez un pipeline de mise à jour automatique, ou le graphe deviendra rapidement obsolète.
 </Callout>
 
 ## Quand l'utiliser
 
-**Utiliser Graph RAG si :**
-- Questions multi-hop (traverser plusieurs relations)
-- Besoin de synthèse globale
-- Compliance / audit (tracer les connexions)
+**Graph RAG est justifié si :**
+- Vos questions sont **multi-hop** (traverser plusieurs relations pour répondre)
+- Vous avez besoin de **synthèse globale** sur un large corpus
+- Le domaine est relationnel par nature : compliance, audit, supply chain, organigrammes
 
-**Un RAG vectoriel suffit si :**
-- Questions simples et factuelles
-- Corpus sans relations complexes
-- Budget serré
+**Un RAG vectoriel classique suffit si :**
+- Les questions sont factuelles et directes ("Quelle est la politique de remboursement ?")
+- Le corpus n'a pas de relations complexes entre entités
+- Le budget est serré (le RAG vectoriel coûte une fraction du Graph RAG)
 
 <Callout type="tip" title="Approche hybride souvent meilleure">
-Un routeur décide : question directe → RAG vectoriel. Question relationnelle → Graph RAG. Best of both worlds.
+En pratique, un routeur intelligent décide au cas par cas : question directe et factuelle → RAG vectoriel (rapide et peu coûteux). Question relationnelle ou de synthèse → Graph RAG (plus lent mais plus complet). C'est le meilleur des deux mondes.
 </Callout>
 
-Graph RAG c'est l'évolution naturelle du RAG. Le coût est plus élevé, mais pour les questions qui exigent de naviguer entre entités connectées, le gain est énorme.
+Graph RAG est l'évolution naturelle du RAG pour les cas d'usage complexes. Le coût d'entrée est réel, mais pour les questions qui exigent de naviguer entre entités connectées, aucune autre approche n'offre la même qualité de réponse.

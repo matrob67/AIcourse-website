@@ -7,95 +7,103 @@ description: "Stratégies pour réduire l'empreinte mémoire GPU des LLM : offlo
 
 ## Le mur : la mémoire GPU manque toujours
 
-Un modèle 70B en FP16 c'est 140 Go. Votre GPU ? 80 Go max. Vous pouvez pas faire rentrer un éléphant dans une Smart. Mais vous pouvez l'offloader en crédit.
+Un modèle de 70B paramètres en FP16, c'est 140 Go de poids. Ton GPU le plus costaud ? 80 Go de VRAM. Tu ne peux pas faire rentrer un éléphant dans une Smart. Mais avec les bonnes techniques, tu peux découper l'éléphant en morceaux et le faire voyager entre la Smart et un camion garé à côté.
+
+C'est exactement l'idée derrière l'optimisation mémoire : jouer sur plusieurs leviers pour faire tenir des modèles trop gros dans des GPU trop petits, ou pour libérer de la mémoire pour augmenter le batch size ou la longueur de contexte.
 
 <Callout type="info" title="La recette de la consommation mémoire">
-Durant l'inférence : poids (fixe) + KV cache (grandit avec la séquence) + activations temporaires (pic pendant le forward).
-Pendant l'entraînement : + gradients + états optimizer (2-3× les poids pour Adam).
+**A l'inférence** : poids du modèle (fixe) + KV cache (grandit linéairement avec la séquence) + activations temporaires (pic pendant le forward pass).
+**A l'entraînement** : tout ça + gradients (même taille que les poids) + états de l'optimiseur (2-3x les poids pour Adam : momentum + variance + poids maîtres en FP32).
 </Callout>
 
-## Offloading CPU : stocker ailleurs
+## Offloading CPU : stocker ailleurs, calculer sur le GPU
 
-Au lieu de tout laisser sur le GPU, vous mettez les couches inutilisées en RAM CPU. Quand la couche suivante en a besoin, vous la rapatriez. C'est lent mais ça marche.
+Le principe est simple : au lieu de garder tous les poids du modèle sur le GPU, tu stockes les couches inutilisées en RAM CPU. Quand une couche est nécessaire pour le calcul, tu la rapatries sur le GPU. Quand elle n'est plus nécessaire, tu la renvoies en RAM.
 
 ```python
 from transformers import AutoModelForCausalLM
 
 model = AutoModelForCausalLM.from_pretrained(
     "meta-llama/Llama-2-70b-hf",
-    device_map="auto",  # Répartition auto GPU/CPU
+    device_map="auto",  # Répartition automatique GPU/CPU
 )
 ```
 
-**Impact** : un modèle 70B qui tient dans 80 Go GPU soudainement fonctionne sur 32 Go GPU + 48 Go CPU. Mais la vitesse souffre :
+Le `device_map="auto"` fait le travail automatiquement : il remplit d'abord le GPU, puis déborde sur le CPU, et en dernier recours sur le disque.
 
-- Tout GPU : 1× (référence)
-- 50% GPU, 50% CPU : 0.3-0.5× (3× plus lent)
-- Tout CPU : 0.05× (20× plus lent)
+**Impact concret** : un modèle 70B qui nécessite normalement 140 Go de VRAM peut tourner avec 32 Go GPU + 108 Go RAM CPU. Mais la vitesse en souffre significativement :
 
-Le PCIe 4.0 c'est 32 Go/sec. Charger une couche (4 Go) prend 130 ms. C'est le goulot.
+- **100% GPU** : 1x (référence)
+- **50% GPU, 50% CPU** : 0.3-0.5x (2-3x plus lent)
+- **100% CPU** : 0.05x (20x plus lent)
 
-<Callout type="warning" title="Évaluer si c'est worth">
-3× plus lent mais 80% plus de mémoire, c'est un choix selon votre cas : streaming vidéo ? Inférence batch ? Offline ? Latency-critical ?
+Le goulot d'étranglement, c'est le bus PCIe 4.0 à 32 Go/s. Charger une couche de 4 Go depuis la RAM CPU prend environ 130 ms. Pendant ce transfert, le GPU attend. C'est le prix de l'offloading.
+
+<Callout type="warning" title="Est-ce que ça vaut le coup ?">
+Ca dépend entièrement de ton cas d'usage. Pour de l'inférence batch offline (pas de contrainte de latence), perdre un facteur 3 en vitesse pour gagner un facteur 4 en taille de modèle est souvent acceptable. Pour du streaming temps réel, c'est rédhibitoire. Pour du prototypage et de l'expérimentation, c'est parfait.
 </Callout>
 
-## Gradient Checkpointing : oublier pour recommencer
+## Gradient Checkpointing : oublier pour mieux recommencer
 
-Pendant le fine-tuning, le backward pass (calcul des gradients) a besoin des activations du forward pass. Elles prennent **beaucoup** de RAM.
+Pendant le fine-tuning, le backward pass (calcul des gradients) a besoin des activations calculées pendant le forward pass. Normalement, on les garde toutes en mémoire. Pour un modèle de 70B avec un batch de 4 séquences de 4096 tokens, ces activations peuvent occuper **des dizaines de Go** de VRAM.
 
-Trick : oubliez les activations du forward. Pendant le backward, recalculez-les. Vous perdirez du temps (33% plus lent) mais gagnerez 60% de mémoire.
+L'astuce du gradient checkpointing : ne garde pas les activations en mémoire. Pendant le backward pass, **recalcule-les** à partir des checkpoints sauvegardés. Tu échanges du temps de calcul contre de la mémoire.
 
 ```python
 model.gradient_checkpointing_enable()
 ```
 
-C'est quasi toujours une bonne idée pour le fine-tuning : ça vous permet des batch sizes plus grands, qui compensent le surcoût.
+Le surcoût en temps est d'environ 33% (tu refais le forward pass une deuxième fois), mais le gain en mémoire est d'environ 60%. C'est presque toujours un bon deal pour le fine-tuning : la mémoire libérée te permet d'utiliser un batch size plus grand, ce qui accélère la convergence et peut compenser (voire dépasser) le surcoût de calcul.
 
-## DeepSpeed ZeRO : partager l'entraînement
+## DeepSpeed ZeRO : partager au lieu de dupliquer
 
-Pour l'entraînement distribué (plusieurs GPUs), Microsoft a ZeRO. L'idée : au lieu de dupliquer les gradients et états optimizer sur chaque GPU, vous les **partagez** entre tous.
+Pour l'entraînement distribué sur plusieurs GPU, le Data Parallelism classique a un défaut majeur : chaque GPU stocke une copie complète des poids, des gradients, ET des états de l'optimiseur. Avec un modèle 70B et Adam, ça fait environ 840 Go de mémoire totale par GPU (poids + gradients + 2 états optimizer + poids maîtres FP32).
 
-- **Stage 1** : états optimizer partagés → 4× mémoire en moins
-- **Stage 2** : + gradients partagés → 8×
-- **Stage 3** : + paramètres partagés → 16× (ou plus avec N GPUs)
+ZeRO (Zero Redundancy Optimizer) de Microsoft élimine cette redondance en **partageant** les données entre GPU au lieu de les dupliquer :
 
-Stage 3 c'est puissant mais complexe. Stage 2 c'est le spot doux.
+- **Stage 1** : partage les états de l'optimiseur entre GPU. Chaque GPU ne stocke que 1/N des états. Economie : ~4x en mémoire
+- **Stage 2** : + partage des gradients. Economie totale : ~8x
+- **Stage 3** : + partage des paramètres eux-mêmes. Economie totale : ~16x (proportionnel au nombre de GPU)
+
+Stage 2 est le "sweet spot" pour la plupart des cas : bon gain mémoire, complexité de communication raisonnable. Stage 3 est plus puissant mais ajoute de la latence (les paramètres doivent être rassemblés avant chaque forward/backward).
 
 <Callout type="tip" title="FSDP : l'alternative PyTorch native">
-PyTorch a **FSDP** (Fully Sharded Data Parallel) qui fait pareil que ZeRO Stage 3, c'est plus simple et vaut du préférer si vous avez le choix.
+PyTorch propose **FSDP** (Fully Sharded Data Parallel), qui fait essentiellement la même chose que ZeRO Stage 3 mais avec une intégration native dans l'écosystème PyTorch. Si tu utilises PyTorch, FSDP est généralement plus simple à configurer et à débugger que DeepSpeed.
 </Callout>
 
-## KV Cache Quantification
+## KV Cache : quantifier et compresser
 
-Le KV cache grandit avec la longueur de la séquence. Quantifier en INT8 au lieu de FP16 = 2× plus petit, quasi aucune perte.
+A l'inférence, le KV cache grandit linéairement avec la longueur de la séquence. Pour un modèle 70B avec 128K tokens de contexte, le KV cache en FP16 peut dépasser 100 Go. Deux leviers pour le compresser :
+
+**Quantification du KV cache** : stocker les clés et valeurs en INT8 ou FP8 au lieu de FP16. Ca divise la taille par 2 avec une perte de qualité quasi imperceptible.
 
 ```python
 llm = LLM(model="mistral-7b", kv_cache_dtype="fp8")
 ```
 
-Combiné avec GQA (Grouped-Query Attention, où les têtes d'attention partagent K et V), vous gagnez 8-16× sur le KV cache.
+**Grouped-Query Attention (GQA)** : au lieu que chaque tête d'attention ait ses propres K et V (comme dans le Multi-Head Attention classique), les têtes partagent des K/V en groupes. LLaMA 3 et Mistral utilisent GQA, ce qui réduit leur KV cache de 4-8x par rapport aux anciens modèles MHA.
 
-Mistral et LLaMA 3 utilisent GQA. Leur cache est 4-8× plus petit que les anciens modèles.
+Combinés, GQA + quantification FP8 peuvent réduire le KV cache de 8-16x. C'est ce qui rend possible les contextes de 128K+ tokens sur du hardware accessible.
 
-## Accumulation des techniques
+## L'accumulation des techniques : l'art de l'empilement
 
-Un modèle 70B rendu exécutable sur 1 GPU 80 Go :
+Aucune de ces techniques n'est suffisante seule. La vraie puissance vient de leur **combinaison**. Voici comment rendre un modèle 70B exécutable sur un seul GPU de 80 Go :
 
-1. Quantification 4-bit : 4× réduction
-2. GQA : 4-8× KV cache
-3. KV cache FP8 : 2× réduction KV
-4. Offloading GPU→CPU : débouche mémoire RAM
+1. **Quantification 4-bit** des poids : 140 Go de poids deviennent ~35 Go
+2. **GQA** : KV cache réduit de 4-8x par rapport au MHA classique
+3. **KV cache en FP8** : encore 2x de réduction sur le cache
+4. **Offloading GPU vers CPU** : déborde le surplus en RAM si nécessaire
 
-Résultat : quelque chose qu'on croyait impossible il y a 2 ans marche maintenant.
+Résultat : quelque chose qu'on pensait impossible il y a deux ans fonctionne maintenant sur une seule carte.
 
-## Tableau des recommandations
+## Tableau des recommandations par scénario
 
-| Scénario | Techniques |
+| Scénario | Techniques recommandées |
 |---|---|
-| Inférence GPU limité | Quantification + offloading partiel |
-| Fine-tuning GPU limité | QLoRA + gradient checkpointing |
-| Entraînement multi-GPU | FSDP ou DeepSpeed ZeRO 2 |
-| Inférence long contexte | GQA + KV cache quantifié |
-| Hardware très limité | GGUF + offloading CPU |
+| Inférence, GPU limité | Quantification 4-bit + offloading partiel |
+| Fine-tuning, GPU limité | QLoRA + gradient checkpointing |
+| Entraînement multi-GPU | FSDP ou DeepSpeed ZeRO Stage 2 |
+| Inférence long contexte | GQA + KV cache quantifié (FP8) |
+| Hardware très limité | GGUF + offloading CPU complet |
 
-Le message : vous **ne pouvez pas** faire rentrer un 70B dans 16 Go. Mais combiné plusieurs petits tricks, vous pouvez aller surprenant loin. L'optimisation mémoire c'est pas un seul lever, c'est empiler pleins de petites améliorations.
+Le message fondamental : il n'y a pas **un seul** levier magique pour l'optimisation mémoire. C'est l'empilement de multiples petites améliorations qui produit des résultats spectaculaires. Chaque technique grignote un facteur 2x à 4x, et leur combinaison te fait gagner 10x à 30x. C'est ce qui rend les LLM modernes utilisables sur du matériel qui semblait trop modeste il y a à peine deux ans.

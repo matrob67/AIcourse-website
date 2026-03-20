@@ -5,9 +5,9 @@ description: "Obtenir des sorties structurées des LLM : JSON mode, function cal
 
 ## Le besoin de structure
 
-Les LLM génèrent du texte libre par nature. C'est parfait pour la conversation, mais problématique quand on veut intégrer leurs réponses dans un programme. Si vous demandez à un LLM d'extraire des données d'un texte, il pourrait répondre de mille façons différentes — et votre code ne saurait pas quoi en faire.
+Les LLM génèrent du texte libre par nature. C'est parfait pour la conversation, mais ça devient un cauchemar quand on veut intégrer leurs réponses dans un programme. Imagine que tu demandes à un LLM d'extraire le sentiment et les entités d'un avis client. Il pourrait répondre "Le sentiment est positif et les entités mentionnées sont Paris et la Tour Eiffel", ou bien "Positif. Entités: Paris, Tour Eiffel.", ou encore avec un paragraphe d'explication. Ton code `JSON.parse()` ne sait pas quoi faire de tout ça.
 
-Le **structured output** regroupe les techniques qui contraignent la sortie d'un LLM à un format prédéfini et parseable : JSON, XML, appels de fonction, ou tout autre format structuré. C'est une brique essentielle pour construire des applications fiables autour des LLM.
+Le **structured output** regroupe les techniques qui contraignent la sortie d'un LLM à un format prédéfini et parseable : JSON, XML, appels de fonction, ou tout autre schéma structuré. C'est une brique absolument essentielle pour construire des applications fiables autour des LLM. Sans ça, tu construis sur du sable — chaque appel au modèle peut casser ton pipeline parce que le format de la réponse a changé.
 
 
 
@@ -28,14 +28,14 @@ Le **JSON mode** est la forme la plus courante de structured output. Le modèle 
 
 ### Implémentation côté API
 
-Les principaux fournisseurs de LLM proposent un JSON mode natif :
+Les principaux fournisseurs de LLM proposent un JSON mode natif. C'est fondamentalement différent de "demander en JSON dans le prompt" — le modèle est contraint au niveau de la génération elle-même :
 
-- **OpenAI** : paramètre `response_format: { type: "json_object" }` ou `response_format: { type: "json_schema", json_schema: {...} }`
-- **Anthropic** : via des instructions dans le system prompt et le préfixage de la réponse
-- **Open source** : bibliothèques comme `outlines`, `guidance`, `lm-format-enforcer`
+- **OpenAI** : paramètre `response_format: { type: "json_object" }` pour du JSON libre, ou `response_format: { type: "json_schema", json_schema: {...} }` pour du JSON conforme à un schéma
+- **Anthropic** : via des instructions dans le system prompt, le préfixage de la réponse avec `{`, et des outils de function calling
+- **Open source** : bibliothèques comme `outlines`, `guidance`, `lm-format-enforcer` qui contraignent la génération au niveau des logits
 
 <Callout type="info" title="JSON schema vs JSON libre">
-Le JSON mode basique garantit un JSON valide mais pas sa structure. Le JSON schema mode (disponible chez OpenAI et d'autres) garantit en plus que le JSON respecte un schéma précis : les bons champs, les bons types, les valeurs parmi un ensemble autorisé. C'est bien plus fiable pour les applications en production.
+Le JSON mode basique garantit que la sortie est un JSON syntaxiquement valide, mais pas sa structure interne. Le modèle pourrait retourner `{"foo": 42}` alors que tu attends `{"sentiment": "positif"}`. Le JSON schema mode va plus loin : il garantit que le JSON respecte un schéma précis — les bons noms de champs, les bons types (string, number, boolean), les valeurs parmi un ensemble autorisé (enum). C'est la différence entre "un JSON quelconque" et "exactement le JSON que mon code attend". En production, c'est indispensable.
 </Callout>
 
 ### Les pièges du JSON par prompting
@@ -54,9 +54,9 @@ Le JSON mode natif élimine la plupart de ces problèmes en contraignant la gén
 
 ### Le concept
 
-Le **function calling** (ou tool use) permet au LLM de "appeler" des fonctions définies par le développeur. Au lieu de générer du texte, le modèle génère un appel de fonction structuré avec les bons arguments.
+Le **function calling** (ou tool use) est peut-être l'avancée la plus importante pour les applications LLM en production. Le principe : au lieu de simplement générer du texte, le modèle peut décider d'**appeler une fonction** définie par le développeur, en générant un appel structuré avec les bons arguments.
 
-Le développeur définit un ensemble de fonctions avec leur signature :
+C'est ce qui permet à un LLM de faire des choses concrètes dans le monde réel : chercher sur le web, interroger une base de données, envoyer un email, déclencher une action. Le développeur définit un ensemble de fonctions avec leur signature :
 
 ```json
 {
@@ -105,15 +105,17 @@ Les modèles récents supportent :
 
 ### Le problème fondamental
 
-Un LLM génère des tokens un par un, en échantillonnant à chaque étape dans la distribution de probabilité sur le vocabulaire. Pour garantir une sortie structurée, il faut **contraindre** cet échantillonnage : à chaque étape, seuls les tokens qui maintiennent la validité de la structure sont autorisés.
+Rappel : un LLM génère des tokens un par un, en échantillonnant à chaque étape dans la distribution de probabilité sur l'ensemble du vocabulaire (~32 000 à 128 000 tokens possibles). Pour garantir une sortie structurée, il faut **contraindre** cet échantillonnage : à chaque étape, on calcule quels tokens sont "légaux" (c'est-à-dire compatibles avec le format attendu), et on met la probabilité de tous les autres tokens à zéro. C'est du **constrained decoding** — on modifie les logits avant le sampling.
+
+Par exemple, si le JSON en cours de génération est `{"sentiment": "posi`, les seuls tokens légaux sont ceux qui pourraient continuer une chaîne de caractères JSON. Le token `}` serait bloqué (la chaîne n'est pas fermée), mais `tif"` serait autorisé.
 
 ### Les grammaires formelles
 
-La technique la plus puissante est l'utilisation de **grammaires formelles** (typiquement des grammaires context-free en notation EBNF ou des regular expressions) pour contraindre la génération.
+La technique la plus élégante et la plus puissante pour implémenter le constrained decoding est l'utilisation de **grammaires formelles** (typiquement des grammaires context-free en notation EBNF ou des expressions régulières) pour définir les formats de sortie autorisés.
 
 Par exemple, pour garantir un JSON valide :
 
-```
+```bnf
 root   ::= object
 object ::= "{" pair ("," pair)* "}"
 pair   ::= string ":" value
@@ -150,7 +152,7 @@ Le JSON schema peut être compilé en une grammaire formelle. C'est ce que font 
 
 ### La qualité du contenu vs la structure
 
-Contraindre la structure ne garantit pas la qualité du contenu. Un JSON parfaitement valide peut contenir des valeurs incorrectes, hallucionnées ou incohérentes. La structure est nécessaire mais pas suffisante pour la fiabilité.
+Point crucial que les débutants oublient souvent : contraindre la structure ne garantit **absolument pas** la qualité du contenu. Un JSON parfaitement valide, conforme au schéma, avec les bons types partout, peut contenir des valeurs complètement fausses, hallucinées ou incohérentes. La structure est nécessaire mais pas suffisante pour la fiabilité. C'est comme avoir un formulaire bien rempli avec des informations fausses.
 
 <Callout type="warning" title="Structure valide ≠ contenu correct">
 Un modèle contraint de répondre en JSON avec un champ "sentiment" de type enum ["positif", "négatif", "neutre"] produira toujours une de ces trois valeurs. Mais la valeur choisie peut être incorrecte. La génération contrainte résout le problème de la forme, pas celui du fond.
@@ -168,19 +170,19 @@ La génération contrainte par grammaire ajoute un surcoût computationnel à ch
 
 ### Extraction d'information
 
-Extraire des données structurées de texte libre (emails, rapports, articles) en définissant un schema JSON précis.
+C'est le cas d'usage le plus répandu : extraire des données structurées de texte libre (emails, rapports, articles, avis clients) en définissant un schéma JSON précis. Par exemple, extraire automatiquement le nom, l'adresse et le montant de chaque facture reçue par email.
 
 ### Agents et outils
 
-Le function calling est la base des **agents IA** : des systèmes qui utilisent un LLM pour décider quelles actions effectuer (chercher sur le web, interroger une base de données, envoyer un email).
+Le function calling est la fondation des **agents IA** : des systèmes autonomes qui utilisent un LLM pour décider quelles actions effectuer. Le LLM reçoit une requête utilisateur, décide s'il doit chercher sur le web, interroger une base de données, ou envoyer un email, puis génère l'appel de fonction approprié. Sans structured output fiable, les agents seraient impossibles — chaque appel de fonction mal formé casserait la chaîne.
 
 ### Pipelines de données
 
-Intégrer les LLM dans des pipelines de traitement de données où chaque étape attend un format spécifique en entrée et en sortie.
+Les LLM peuvent s'intégrer dans des pipelines de traitement de données où chaque étape attend un format spécifique en entrée et produit un format spécifique en sortie. Le structured output garantit que la sortie du LLM est compatible avec l'étape suivante du pipeline, que ce soit une base de données, une API, ou un autre modèle.
 
 ### Validation et robustesse
 
-En production, la génération contrainte permet de **garantir** que la sortie est toujours parseable, éliminant une catégorie entière de bugs. Combinée avec une validation sémantique (vérification des valeurs), elle constitue la base d'applications LLM fiables.
+En production, la génération contrainte permet de **garantir** que la sortie est toujours parseable, éliminant une catégorie entière de bugs (les fameux "JSON parse errors" à 3h du matin). Combinée avec une validation sémantique (vérification que les valeurs ont du sens), elle constitue la base d'applications LLM fiables et déployables.
 
 <Callout type="tip" title="La règle d'or en production">
 En production, ne faites jamais confiance à la sortie libre d'un LLM. Utilisez toujours une forme de structured output (JSON schema, function calling, grammaire) et validez le résultat programmatiquement avant de l'utiliser. C'est la différence entre une démo et un produit fiable.

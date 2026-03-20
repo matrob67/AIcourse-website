@@ -3,139 +3,139 @@ title: "Pipelines de données : Spark, Dask et Ray Data"
 description: "Traiter des milliards d'exemples sans crash : Apache Spark, Dask, Ray Data. Choisissez le bon outil pour votre échelle."
 ---
 
-## Le défi : des données partout, pas assez de RAM
+## Le défi : des données qui ne tiennent nulle part
 
-LLaMA entraîné sur 15 **trillions** de tokens. LAION-5B : 5 milliards d'images. Votre RAM ne peut pas contenir ça. Faut distribuer sur plusieurs machines.
+LLaMA a été entraîné sur 15 **trillions** de tokens. LAION-5B contient 5 milliards d'images. Même un "petit" dataset de fine-tuning peut peser des dizaines de Go. Votre RAM, aussi généreuse soit-elle, ne peut pas contenir tout ça. Il faut distribuer le traitement sur plusieurs machines.
 
-Un pipeline ML typique : ingestion → nettoyage → filtrage → transformations → tokenization → batches d'entraînement. Chaque étape doit scaler sur des centaines de GB ou TB de données.
+Un pipeline de données ML typique ressemble à ça : ingestion des données brutes, nettoyage, filtrage qualité, transformations (normalisation, augmentation), tokenization, et enfin création des batches d'entraînement. Chaque étape doit pouvoir traiter des centaines de Go, voire des To de données, sans planter.
 
-<Callout type="info" title="Le coût temps/compute">
-Preprocessing d'un LLM peut prendre des semaines de calcul. Optimiser le pipeline = directement plus vite au départ de l'entraînement. Ça compte sérieusement.
+<Callout type="info" title="Le temps de preprocessing, c'est du temps perdu avant l'entraînement">
+Le preprocessing d'un dataset LLM peut prendre des jours, voire des semaines de calcul. Chaque jour gagné sur le pipeline = un jour de plus pour itérer sur l'entraînement. Optimiser le pipeline de données n'est pas un luxe, c'est un investissement direct en vélocité de recherche.
 </Callout>
 
+## Apache Spark : le géant éprouvé du big data
 
+**Apache Spark** existe depuis 2009 et reste le standard incontesté pour le traitement de données massives. Databricks (la version commerciale), utilisé par les plus grandes entreprises du monde, est construit dessus.
 
-## Apache Spark : le géant du big data
+### Architecture : lazy evaluation et optimisation automatique
 
-**Spark** depuis 2009, c'est le standard pour traiter des volumes massifs. Redis, Databricks (commerciale Spark), utilisé par les plus grosses boîtes.
+Spark partitionne vos données sur les noeuds du cluster. Quand vous enchaînez des transformations (filtrage, jointures, agrégations), Spark ne les exécute pas immédiatement. Il construit un plan d'exécution logique. C'est seulement quand vous demandez le résultat (écriture, collecte) que l'optimizer **Catalyst** analyse le plan complet, le réordonne, fusionne les étapes, et l'exécute de la manière la plus efficace possible.
 
-### Architecture
+C'est comme un chef cuisinier qui lit toute la recette avant de commencer, plutôt que de faire chaque étape une par une.
 
-Données partitionnées sur les nœuds. Les **transformations sont lazy** (exécutées que quand vous demandez le résultat). Spark optimise automatiquement via l'optimizer **Catalyst**.
-
-### Pour le ML
+### Spark pour le ML en pratique
 
 ```python
-# Lecture massive
+# Lecture depuis le cloud, automatiquement distribuée
 data = spark.read.parquet("s3://bucket/huge-dataset/")
 
-# Transformations
+# Chaîne de transformations (lazy, pas encore exécuté)
 data = data.filter(...).repartition(...).groupBy(...).agg(...)
 
-# Export
+# L'exécution se déclenche ici
 data.write.parquet("output/")
 ```
 
-PySpark supporte : Parquet, CSV, JSON, depuis S3/GCS/HDFS. Déduplication, tokenization, feature engineering, tout.
+PySpark lit nativement Parquet, CSV, JSON, ORC depuis S3, GCS, Azure Blob ou HDFS. Déduplication, tokenization, feature engineering, jointures massives : tout se fait avec l'API DataFrame familière.
 
-<Callout type="tip" title="Spark pour LLM data">
-RedPajama, autres datasets ouverts majeurs : tous utilisent Spark. Parce que c'est le seul outil qui scale vraiment de 100GB à 5TB sans peiner.
+<Callout type="tip" title="Spark, le choix des grands datasets LLM">
+RedPajama, FineWeb, et la plupart des grands datasets ouverts pour LLM ont été préparés avec Spark. C'est le seul outil qui scale confortablement de 100 Go à 5 To et au-delà sans configuration exotique. Quand vous traitez des trillions de tokens, Spark est votre allié.
 </Callout>
 
-### MLlib : ML sur Spark
+### MLlib : le ML intégré à Spark
 
-**MLlib** intégré propose des algos classiques (régression, clustering) directement sur les DataFrames distribuées. Mais pour le deep learning, vous utilisez Spark pour le preprocessing et PyTorch pour l'entraînement.
+**MLlib** propose des algorithmes classiques (régression, clustering, classification, collaborative filtering) directement sur les DataFrames distribuées. C'est pratique pour le feature engineering et les modèles classiques. Mais pour le deep learning, le pattern habituel est : Spark pour le preprocessing massif, puis PyTorch/JAX pour l'entraînement sur GPU.
 
 ### Forces et limites
 
-**Bon pour** : massive batch processing, SQL analytics sur data lakes
+**Bon pour** : traitement batch massif (To à Po), analytics SQL sur data lakes, écosystème mature avec des centaines de connecteurs
 
-**Pas bon pour** : streaming en temps réel, pas de GPU natif, overhead JVM
+**Pas bon pour** : streaming temps réel (Spark Streaming existe mais n'est pas son point fort), pas d'accélération GPU native, overhead de la JVM pour les petits jobs
 
-## Dask : la façon Python distribuée
+## Dask : le distribué Python-native
 
-**Dask** = Python distribué sur un cluster. API compatible Pandas/NumPy pour tout le monde.
+**Dask** offre du calcul distribué avec une API qui mime Pandas et NumPy. Si vous connaissez Pandas, vous connaissez Dask.
 
-### L'idée simple
+### L'idée : distribuer ce que vous savez déjà faire
 
-Si pandas peut charger 100 Go en mémoire, Dask le peut sur 100 machines × 1Go chacun. Les APIs sont identiques.
+Si votre DataFrame Pandas fait 100 Go et ne tient pas en mémoire, Dask le découpe en partitions qui tiennent chacune en mémoire, les répartit sur les workers d'un cluster, et exécute vos opérations Pandas partition par partition. Votre code reste quasi-identique.
 
-### Collections Dask
+### Les collections Dask
 
-- **DataFrame** : API Pandas distributed
-- **Array** : API NumPy distributed
-- **Bag** : données non-structurées (texts, JSON)
-- **ML** : wrappers pour scikit-learn distribué
+- **DataFrame** : API Pandas distribuée, la plus utilisée
+- **Array** : API NumPy distribuée, pour les tableaux numériques massifs
+- **Bag** : pour les données non-structurées (textes bruts, JSON imbriqués)
+- **ML** : wrappers pour scikit-learn distribué (GridSearchCV sur cluster, par exemple)
 
-Vous écrivez du code Pandas normal, et ça scale sur un cluster.
-
-<Callout type="paper" title="Dask vs Spark : quand utiliser quoi">
-Dask : si vos données tiennent en mémoire d'une grosse machine (jusqu'à ~1 To), Dask suffit et c'est simpler. Spark : si vous passez en Multi-To et que vous avez besoin d'optimisation SQL avancée.
+<Callout type="paper" title="Dask vs Spark : le choix de l'échelle">
+Dask excelle quand vos données tiennent sur une grosse machine ou un petit cluster (jusqu'à ~1 To). L'API est plus pythonique, le déploiement plus simple, l'overhead plus faible. Au-delà de 1 To, ou si vous avez besoin de SQL avancé et de l'optimizer Catalyst, Spark prend l'avantage.
 </Callout>
 
 ### Forces et limites
 
-**Bon pour** : data scientists Python, datasets moyens (100GB-1TB)
+**Bon pour** : data scientists familiers de Pandas/NumPy, datasets moyens (100 Go - 1 To), prototypage rapide avant passage à Spark
 
-**Pas bon pour** : SQL complexe, PB-scale, pas de GPU support
+**Pas bon pour** : requêtes SQL complexes, datasets au-delà du pétaoctet, pas de support GPU natif
 
-## Ray Data : le streaming pour l'IA
+## Ray Data : le streaming pour les pipelines ML
 
-**Ray Data** = module de traitement de données du framework Ray. Optimisé pour les **pipelines d'entraînement ML**.
+**Ray Data** est le module de traitement de données du framework Ray. Contrairement à Spark et Dask qui matérialisent les données intermédiaires, Ray Data est conçu pour le **streaming** vers l'entraînement.
 
-### Streaming : la différence clé
+### Le streaming : la différence fondamentale
 
-Au lieu de matérialiser 5TB de données tokenisées en disque avant d'entraîner, Ray Data fait du streaming :
-1. Lit un bloc de données
-2. Le transforme
+Avec un pipeline classique (Spark), vous prétraitez la totalité de vos 5 To de données, les écrivez en Parquet sur disque, puis les lisez pour l'entraînement. Deux passes complètes sur les données, et des To de stockage intermédiaire.
+
+Avec Ray Data, le streaming fonctionne autrement :
+1. Lit un bloc de données brutes
+2. Le transforme (nettoyage, tokenization)
 3. L'envoie directement aux GPU d'entraînement
-4. Revient au bloc suivant
+4. Passe au bloc suivant, en parallèle
 
-Zéro matérialisation, pure streaming.
+Zéro matérialisation intermédiaire. Le preprocessing et l'entraînement tournent simultanément. C'est comme une chaîne de montage continue plutôt qu'un processus en deux étapes séparées.
 
-<Callout type="tip" title="Streaming pour les gros LLM">
-Ray Data c'est parfait pour les LLM parce que ça stream directement vers l'entraînement. Pas besoin de créer des trillions de tokens en parquet d'abord. ça coûte moins cher en infra et c'est plus rapide.
+<Callout type="tip" title="Le streaming, idéal pour les gros LLM">
+Pour un entraînement LLM sur des trillions de tokens, matérialiser tout le dataset tokenisé en Parquet d'abord peut coûter des To de stockage et des jours de preprocessing. Ray Data élimine cette étape en streamant directement vers l'entraînement. Moins d'infra, plus rapide.
 </Callout>
 
-### Fonctionnalités
+### Fonctionnalités spécifiquement ML
 
-- **GPU preprocessing** : augmentation d'images, tokenization sur GPU
-- **Intégration entraînement** : data consommées directement par Ray Train
-- **Hétérogène** : CPU workers pour preprocessing, GPU workers pour entraînement dans le même cluster
+- **Preprocessing GPU** : augmentation d'images et tokenization directement sur GPU, pas seulement CPU
+- **Intégration entraînement** : les données sont consommées directement par Ray Train, sans étape intermédiaire
+- **Workers hétérogènes** : CPU workers pour le preprocessing, GPU workers pour l'entraînement, dans le même cluster Ray
 
 ### Forces et limites
 
-**Bon pour** : LLM data pipelines, preprocessing GPU, streaming
+**Bon pour** : pipelines de données LLM, preprocessing GPU, streaming vers l'entraînement, intégration avec l'écosystème Ray
 
-**Pas bon pour** : SQL analytique (Spark est meilleur), communauté plus petite
+**Pas bon pour** : analytics SQL (Spark fait ça bien mieux), communauté et documentation moins matures que Spark
 
-## Comparaison
+## Comparaison synthétique
 
 | Critère | Spark | Dask | Ray Data |
 |---|---|---|---|
-| **Maturité** | Très mature | Élevée | Moyenne |
-| **Langage** | Scala/Python/Java | Python | Python |
-| **GPU** | Limité | Limité | Natif |
-| **Streaming** | Spark Streaming | Dask Streams | Natif |
+| **Maturité** | Très mature (15+ ans) | Élevée | Moyenne |
+| **Langage** | Scala/Python/Java | Python natif | Python natif |
+| **GPU** | Limité (RAPIDS) | Limité | Natif |
+| **Streaming** | Spark Streaming | Dask Streams | Natif, streaming-first |
 | **Scale max** | PB+ | TB+ | TB+ |
-| **SQL** | Excellent | Bon | Non |
-| **LLM focus** | Preprocessing batch | Moyen | Excellent |
+| **SQL** | Excellent (Catalyst) | Basique | Non supporté |
+| **LLM focus** | Preprocessing batch | Usage général | Excellent (streaming) |
 
-<Callout type="warning" title="Pas d'over-engineering">
-Si vos données tiennent en RAM d'une machine (< 100 GB), Pandas/Polars suffit. Vous coûtez moins en infra, moins en complexité. Distribué seulement si vraiment nécessaire.
+<Callout type="warning" title="N'over-engineerez pas">
+Si vos données tiennent en mémoire d'une seule machine (< 100 Go), Pandas ou Polars suffit amplement. Vous économisez en complexité d'infrastructure, en temps de debugging distribué, et en coûts de cluster. Le distribué n'est justifié que quand c'est vraiment nécessaire.
 </Callout>
 
-## Mention honête : Polars
+## Mention spéciale : Polars
 
-**Polars** mérite un coup d'œil. Écrit en Rust, 5-10x plus rapide que Pandas sur une machine. Supporte le lazy evaluation et le streaming.
+**Polars** mérite d'être mentionné. Écrit en Rust, il est 5-10x plus rapide que Pandas sur une seule machine. Il supporte le lazy evaluation (comme Spark) et le streaming (traitement par chunks).
 
-Pour les datasets qui tiennent sur un serveur (jusqu'à ~1 To sur les machines modernes), Polars c'est souvent suffisant et bien plus simple qu'un framework distribué. Pas besoin de gérer un cluster si une grosse machine fait le job.
+Pour les datasets qui tiennent sur un serveur costaud (jusqu'à ~1 To avec les machines modernes), Polars est souvent la meilleure option : performances quasi-distribuées sans la complexité d'un cluster.
 
-**L'ordre des outils** :
-1. **< 10 GB** : Pandas
-2. **10-100 GB** : Polars
-3. **100 GB - 1 TB** : Dask ou Polars
-4. **1-100 TB** : Spark
-5. **100 TB+** : Spark + custom
+**L'échelle de décision pour choisir votre outil** :
+1. **< 10 Go** : Pandas, l'outil que tout le monde connaît
+2. **10-100 Go** : Polars, la vitesse sans la complexité
+3. **100 Go - 1 To** : Dask ou Polars selon le cas
+4. **1-100 To** : Spark, le standard éprouvé
+5. **100 To+** : Spark avec optimisations custom
 
-Le bon outil c'est celui qui fonctionne pour votre échelle sans complexité inutile.
+Le bon outil, c'est celui qui résout votre problème à votre échelle, sans ajouter de complexité inutile.

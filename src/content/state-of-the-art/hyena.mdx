@@ -5,11 +5,11 @@ description: "Exploration de Hyena et de ses convolutions longues implicites com
 
 ## Le problème de l'ADN
 
-L'équipe Hazy Research de Stanford s'est posé une question précise : peut-on analyser des séquences génomiques entières avec des modèles de langage ?
+L'équipe Hazy Research de Stanford s'est posé une question très concrète : peut-on analyser des séquences génomiques entières avec des modèles de langage ?
 
-Un gène humain moyen fait ~27 000 bases. Un chromosome complet en fait plusieurs centaines de millions. L'attention à complexité O(L²) est complètement hors de question à cette échelle. Même les SSM et convolutions standards ont du mal.
+Un gène humain moyen fait ~27 000 bases. Un chromosome complet en fait plusieurs centaines de millions. L'attention standard à complexité O(L²) est complètement hors de question à cette échelle — pour un chromosome de 100 millions de bases, il faudrait calculer 10^16 paires d'interactions. Même les SSM et les convolutions standards peinent à cette taille.
 
-Leur réponse : **Hyena**, un mécanisme basé sur des convolutions qui couvrent toute la séquence — pas juste quelques tokens voisins — tout en restant sous-quadratique.
+Leur réponse : **Hyena**, un mécanisme basé sur des convolutions qui couvrent toute la séquence — pas juste quelques tokens voisins comme les convolutions classiques — tout en restant sous-quadratique en complexité.
 
 <ArxivLink id="2302.10866" title="Hyena Hierarchy: Towards Larger Convolutional Language Models" />
 
@@ -19,68 +19,68 @@ Leur réponse : **Hyena**, un mécanisme basé sur des convolutions qui couvrent
 
 ### Convolutions courtes vs convolutions longues
 
-En NLP, les convolutions classiques utilisent des **noyaux courts** : un filtre qui regarde 3, 5, peut-être 7 tokens à la fois. Très efficace, mais incapable de capturer une dépendance entre deux mots séparés de 1 000 tokens.
+En NLP, les convolutions classiques utilisent des **noyaux courts** : un filtre qui regarde 3, 5, peut-être 7 tokens à la fois. C'est comme regarder le monde à travers une fente étroite — très efficace pour les patterns locaux (n-grams, motifs syntaxiques), mais incapable de capturer une relation entre deux mots séparés de 1 000 tokens.
 
-L'**attention** résout ce problème en comparant directement chaque token à tous les autres. Puissant, mais O(L²).
+L'**attention** résout ce problème en comparant directement chaque token à tous les autres — une vision panoramique complète. Puissant, mais O(L²) en coût.
 
-Hyena propose une voie intermédiaire : des convolutions dont le **noyau couvre toute la séquence**. Techniquement, un noyau de taille L peut encoder une dépendance entre n'importe quels deux tokens. Et une telle convolution se calcule en **O(L log L)** via la FFT — bien mieux que l'attention.
+Hyena propose une troisième voie : des convolutions dont le **noyau couvre toute la séquence**. Un noyau de taille L peut théoriquement encoder une dépendance entre n'importe quels deux tokens, aussi éloignés soient-ils. Et grâce à la FFT, une telle convolution se calcule en **O(L log L)** — beaucoup moins que l'attention quadratique.
 
-<Callout type="info" title="La FFT : un outil mathématique puissant">
-La Transformée de Fourier Rapide (FFT) est un algorithme qui calcule la convolution entre deux séquences de longueur L en O(L log L) au lieu de O(L²). Pour L = 1 000, c'est 100 fois moins d'opérations. Pour L = 1 000 000 (un chromosome), c'est 50 000 fois moins. C'est la raison pour laquelle toutes les architectures qui visent les très longues séquences utilisent la FFT à un moment ou un autre.
+<Callout type="info" title="La FFT : le couteau suisse du calcul séquentiel">
+La Transformée de Fourier Rapide (FFT) est un algorithme qui calcule la convolution entre deux séquences de longueur L en O(L log L) au lieu de O(L²). Pour L = 1 000, c'est 100 fois moins d'opérations. Pour L = 1 000 000 (un chromosome), c'est 50 000 fois moins. C'est la raison pour laquelle toute architecture visant les très longues séquences utilise la FFT à un moment ou un autre — c'est l'outil mathématique qui rend le passage à l'échelle possible.
 </Callout>
 
 ## L'opérateur Hyena : convolutions + gating hiérarchique
 
 ### La structure de base
 
-L'opérateur Hyena d'ordre N combine N convolutions longues avec des **gates multiplicatifs** intercalés :
+L'opérateur Hyena d'ordre N combine N convolutions longues avec des **gates multiplicatifs** intercalés. C'est une alternance systématique : convoluer (propager l'information le long de la séquence), puis gater (filtrer ce qui est pertinent), puis reconvoluer, puis re-gater.
 
-```
-y = x_1 ⊙ (h_1 * (x_2 ⊙ (h_2 * ... (x_N ⊙ (h_N * v)) ...)))
-```
+$$
+y = x_1 \odot \bigl(h_1 * \bigl(x_2 \odot \bigl(h_2 * \cdots \bigl(x_N \odot (h_N * v)\bigr) \cdots\bigr)\bigr)\bigr)
+$$
 
 Où :
-- `v, x_1, ..., x_N` : projections linéaires de l'entrée
+- `v, x_1, ..., x_N` : projections linéaires de l'entrée (différentes "vues" de la séquence)
 - `h_1, ..., h_N` : filtres convolutifs longs de taille L
-- `⊙` : produit élément par élément (le "gating")
+- `⊙` : produit élément par élément (le "gating" — filtrage sélectif)
 - `*` : convolution via FFT
 
-Pour comprendre la structure, lisez de l'intérieur vers l'extérieur : d'abord `h_N * v` (une convolution qui propage l'information), puis `x_N ⊙` (un gating qui filtre cette information), puis une nouvelle convolution, un nouveau gating, etc.
+Pour lire la formule, partez de l'intérieur : `h_N * v` propage l'information le long de la séquence, `x_N ⊙` filtre sélectivement cette information, puis `h_(N-1) *` propage à nouveau, `x_(N-1) ⊙` filtre à nouveau, et ainsi de suite. Chaque couche de cette hiérarchie raffine et enrichit la représentation.
 
 ### Pourquoi le gating est crucial
 
-Sans gating, empiler des convolutions ne sert à rien. Les convolutions linéaires sont composables : `h1 * (h2 * x) = (h1 * h2) * x`. Ce serait équivalent à une seule convolution plus grande.
+Sans gating, empiler des convolutions serait inutile. La raison est mathématique : les convolutions linéaires sont composables. `h1 * (h2 * x)` est strictement équivalent à `(h1 * h2) * x` — une seule convolution plus grande. Empiler 10 convolutions linéaires sans rien entre elles revient à en avoir une seule.
 
-Le gating multiplicatif `x ⊙ y` brise la linéarité et introduit des **interactions non-linéaires** entre les positions de la séquence. C'est ce qui donne à Hyena une expressivité proche de l'attention.
+Le gating multiplicatif `x ⊙ y` brise cette linéarité et introduit des **interactions non-linéaires** entre les positions de la séquence. C'est ce qui donne à Hyena une expressivité potentiellement proche de l'attention — la capacité de combiner l'information de manière contextuellement adaptée.
 
 <Callout type="tip" title="Analogie avec l'attention">
-Un Hyena d'ordre 2 peut être vu comme une attention approximée : la projection `x_2 ⊙ v` combine des valeurs selon un contexte local, la convolution `h *` propage cette information le long de la séquence (analogue aux scores d'attention), et `x_1 ⊙` applique un gating final. Sans les trois, on ne capture pas les interactions complexes.
+Un Hyena d'ordre 2 peut être interprété comme une forme d'attention approximée : la projection `v` joue le rôle des values, la convolution `h *` propage l'information contextuellement (analogue aux scores d'attention), et le gating `x ⊙` joue le rôle du filtrage par les queries. Sans ces trois composants ensemble, on ne capture pas les interactions complexes entre positions — c'est leur combinaison qui crée l'expressivité.
 </Callout>
 
 ## Convolutions implicites : un filtre sans stocker ses poids
 
-Stocker explicitement un filtre convolutif de taille L en mémoire serait coûteux — et peu flexible si L change. Hyena utilise des **convolutions implicites** : les filtres sont **générés à la demande** par un petit réseau de neurones.
+Un filtre convolutif de taille L qui couvre toute la séquence aurait L paramètres — potentiellement des millions. Stocker tout ça en mémoire serait coûteux et peu flexible si L change entre l'entraînement et l'inférence. Hyena utilise une solution élégante : des **convolutions implicites** où les filtres sont **générés à la demande** par un petit réseau de neurones.
 
-```
-h(t) = Window(t) * MLP_phi(t)
-```
+$$
+h(t) = \text{Window}(t) \cdot \text{MLP}_\phi(t)
+$$
 
-Un petit MLP (2-3 couches) prend la position `t` en entrée et produit la valeur du filtre à cette position. La fonction `Window(t)` (typiquement une décroissance exponentielle) assure que le filtre s'atténue avec la distance.
+Un petit MLP (2-3 couches cachées) prend la position `t` en entrée et produit la valeur du filtre à cette position. La fonction `Window(t)` — typiquement une décroissance exponentielle — assure que le filtre s'atténue naturellement avec la distance, encodant le biais inductif que les interactions proches comptent plus que les lointaines.
 
 <Callout type="paper" title="Avantages des filtres implicites">
-Les filtres implicites génèrent des noyaux de **longueur arbitraire** avec un nombre fixe de paramètres — le MLP a la même taille que la séquence soit de 1 000 ou 100 000 tokens. De plus, la régularité naturelle d'un MLP "lisse" le filtre, ce qui aide la généralisation. C'est une technique élégante qui évite le surapprentissage de filtres trop bruités.
+Les filtres implicites ont une propriété remarquable : ils génèrent des noyaux de **longueur arbitraire** avec un nombre fixe de paramètres. Le MLP a exactement la même taille que la séquence soit de 1 000 ou de 100 000 tokens — seule l'entrée change, pas le réseau. De plus, la régularité naturelle d'un MLP "lisse" le filtre, évitant le surapprentissage de patterns bruités. C'est élégant et économe.
 </Callout>
 
 ## Implémentation via FFT
 
-Chaque convolution longue suit le protocole FFT standard :
+Chaque convolution longue suit le protocole FFT standard en quatre étapes :
 
-```
-1. h_FFT = FFT(h)      # transformer le filtre en fréquentiel
-2. x_FFT = FFT(x)      # transformer l'entrée en fréquentiel
-3. y_FFT = h_FFT ⊙ x_FFT  # multiplication point-à-point
-4. y = IFFT(y_FFT)     # retour en temporel
-```
+1. $\hat{h} = \text{FFT}(h)$ -- transformer le filtre en domaine fréquentiel
+2. $\hat{x} = \text{FFT}(x)$ -- transformer l'entrée en domaine fréquentiel
+3. $\hat{y} = \hat{h} \odot \hat{x}$ -- multiplication point-à-point (convolution dans le domaine fréquentiel)
+4. $y = \text{IFFT}(\hat{y})$ -- retour en domaine temporel
+
+L'idée profonde : la convolution est coûteuse en temporel (O(L²)), mais se transforme en simple multiplication en fréquentiel. La FFT fait l'aller-retour en O(L log L).
 
 Complexité totale pour un opérateur Hyena d'ordre N :
 
@@ -91,32 +91,32 @@ Complexité totale pour un opérateur Hyena d'ordre N :
 | Gating | O(N * L * d) |
 | Total | O(L * d² + N * L * log(L) * d) |
 
-Comparé à l'attention standard O(L² * d), Hyena est avantageux quand la séquence est bien plus longue que la dimension cachée — typiquement pour la génomique ou l'audio longue durée.
+Comparé à l'attention standard O(L² * d), Hyena est avantageux quand la séquence est bien plus longue que la dimension cachée — typiquement pour la génomique (L = 100K+) ou l'audio longue durée (L = 500K+).
 
 ## Résultats et limites
 
 ### Où Hyena excelle
 
-Sur les benchmarks de modélisation du langage standard (~1B paramètres), Hyena est compétitif avec les Transformers de même taille. L'écart est faible sur les tâches courantes.
+Sur les benchmarks de modélisation du langage standard (~1B paramètres), Hyena est compétitif avec les Transformers de même taille. L'écart de perplexité est faible sur les tâches courantes — preuve que les convolutions longues avec gating sont une alternative viable.
 
-Sur les **très longues séquences** (génomique, audio longue durée), Hyena excelle. Sa complexité sous-quadratique permet de traiter des séquences de centaines de milliers de tokens que les Transformers ne peuvent tout simplement pas atteindre.
+Sur les **très longues séquences** (génomique, audio longue durée, analyse de documents entiers), Hyena brille vraiment. Sa complexité sous-quadratique permet de traiter des séquences de centaines de milliers de tokens que les Transformers ne peuvent tout simplement pas atteindre sans approximations drastiques.
 
 <Callout type="warning" title="Limitations pratiques de Hyena">
-Malgré ses avantages théoriques, Hyena a des limites concrètes. Les FFT ne sont pas aussi bien optimisées que les matmul sur les GPU modernes — l'écart théorique de complexité ne se traduit pas toujours en gain réel sur des séquences de taille courante. De plus, Hyena n'a pas été validé au-delà de ~1B paramètres pour des tâches de langage générales. Mamba et les SSM sélectifs ont depuis capté davantage d'attention dans la communauté.
+Malgré ses avantages théoriques, Hyena a des limites concrètes en pratique. Les FFT ne sont pas aussi bien optimisées sur les GPU modernes que les multiplications matricielles (matmul) — les tensor cores des GPU NVIDIA sont conçus pour les matmul, pas pour les FFT. L'écart de complexité théorique ne se traduit donc pas toujours en gain de vitesse réel sur des séquences de taille courante (< 10K tokens). De plus, Hyena n'a pas été validé au-delà de ~1B paramètres pour le langage. Mamba et les SSM sélectifs ont depuis capté davantage d'attention dans la communauté, notamment grâce à de meilleures implémentations hardware.
 </Callout>
 
 ## Variantes et extensions
 
-**H3 (Hungry Hungry Hippos)** : le prédécesseur direct de Hyena. Combine deux couches SSM (au lieu de convolutions générales) avec un gate multiplicatif. H3 a établi que le gating entre opérateurs séquentiels augmente significativement l'expressivité.
+**H3 (Hungry Hungry Hippos)** : le prédécesseur direct de Hyena. Combine deux couches SSM avec un gate multiplicatif entre elles. H3 a établi le principe fondamental : le gating entre opérateurs séquentiels augmente drastiquement l'expressivité, transformant des composants faibles individuellement en un ensemble puissant.
 
-**StripedHyena** (Together AI) : un modèle hybride alternant des couches Hyena et des couches d'attention standard. Compétitif à 7B paramètres, montrant que le principe hybride fonctionne avec des convolutions longues, pas seulement avec les SSM.
+**StripedHyena** (Together AI) : un modèle hybride alternant des couches Hyena et des couches d'attention standard. Compétitif à 7B paramètres, StripedHyena démontre que le principe hybride (couches efficaces + quelques couches d'attention) fonctionne aussi bien avec des convolutions longues qu'avec des SSM.
 
-**Hyena pour la vision** : l'architecture a été adaptée pour les Vision Transformers, où des convolutions longues 2D peuvent remplacer l'attention self-attention sur des images haute résolution.
+**Hyena pour la vision** : l'architecture a été adaptée pour les Vision Transformers, où des convolutions longues 2D peuvent remplacer la self-attention sur des images haute résolution — permettant de traiter des images beaucoup plus grandes sans le coût quadratique.
 
 ## La place de Hyena dans l'écosystème
 
-Hyena a joué un rôle important d'exploration. Il a démontré que les convolutions longues avec gating hiérarchique sont une approche viable — pas juste un curiosité théorique. Les idées de filtres implicites et de gating hiérarchique continuent d'influencer les architectures modernes.
+Hyena a joué un rôle d'éclaireur important dans l'exploration des alternatives à l'attention. Il a prouvé que les convolutions longues avec gating hiérarchique sont une approche viable et performante — pas juste une curiosité théorique. Les idées de filtres implicites (générer le noyau à la volée avec un petit MLP) et de gating hiérarchique (alterner convolutions et gates pour l'expressivité) continuent d'influencer les architectures modernes.
 
-<Callout type="info" title="Positionnement dans la famille sub-quadratique">
-Hyena appartient à la famille des modèles basés sur les convolutions longues, aux côtés de S4 (qui produit des convolutions via les équations d'état) et de RWKV (basé sur l'attention linéaire récurrente). Ces trois approches partagent l'objectif du traitement sous-quadratique mais diffèrent dans leurs mécanismes : Hyena utilise des convolutions explicites via FFT, S4 des convolutions implicites via les équations d'état, RWKV une récurrence à décroissance exponentielle.
+<Callout type="info" title="Positionnement dans la famille sous-quadratique">
+Hyena appartient à la famille des modèles basés sur les convolutions longues, aux côtés de S4 (qui produit ses convolutions via les équations d'état) et de RWKV (basé sur l'attention linéaire récurrente). Les trois partagent l'objectif du traitement sous-quadratique mais y arrivent par des chemins différents : Hyena utilise des convolutions explicites via FFT, S4 des convolutions implicites dérivées des équations d'état, et RWKV une récurrence à décroissance exponentielle. Cette diversité d'approches a nourri un riche programme de recherche qui a culminé avec Mamba et les architectures hybrides.
 </Callout>

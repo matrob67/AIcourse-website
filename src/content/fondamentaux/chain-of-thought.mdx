@@ -5,9 +5,9 @@ description: "Le raisonnement étape par étape dans les LLM : chain-of-thought,
 
 ## Faire raisonner un LLM
 
-Les LLM sont entraînés à prédire le prochain token. Cette mécanique fonctionne bien pour la génération de texte fluide, mais elle pose un problème pour le **raisonnement** : le modèle doit produire sa réponse en un seul "passage", sans étape intermédiaire de réflexion. C'est comme demander à quelqu'un de résoudre un problème de mathématiques de tête, sans papier brouillon.
+Les LLM sont entraînés à prédire le prochain token. Cette mécanique fonctionne remarquablement bien pour la génération de texte fluide, mais elle a un talon d'Achille : le **raisonnement**. Sans technique spéciale, le modèle doit produire sa réponse directement, en un seul "saut" mental, sans étape intermédiaire de réflexion. C'est comme demander à quelqu'un de résoudre $347 \times 28$ de tête, sans papier brouillon — même quelqu'un d'intelligent va se tromper.
 
-Le **chain-of-thought** (CoT) prompting résout ce problème en donnant au modèle un "papier brouillon" : on lui demande de montrer son raisonnement étape par étape avant de donner sa réponse finale.
+Le **chain-of-thought** (CoT) prompting résout ce problème de manière élégante en donnant au modèle un "papier brouillon" : on lui demande (ou on lui montre par l'exemple) qu'il doit expliciter son raisonnement étape par étape avant de donner sa réponse finale. C'est l'une des techniques de prompt engineering les plus puissantes et les mieux étudiées.
 
 <ArxivLink id="2201.11903" title="Chain-of-Thought Prompting Elicits Reasoning in Large Language Models (Wei et al., 2022)" />
 
@@ -15,24 +15,19 @@ Le **chain-of-thought** (CoT) prompting résout ce problème en donnant au modè
 
 ## Le paper fondateur
 
-En janvier 2022, Wei et al. de Google Brain publient un article simple mais aux implications profondes. Leur découverte : en ajoutant quelques exemples de raisonnement étape par étape dans le prompt (few-shot CoT), les performances des LLM sur les tâches de raisonnement augmentent de façon spectaculaire.
+En janvier 2022, Wei et al. de Google Brain publient un article dont le concept est d'une simplicité déconcertante, mais dont les implications sont profondes. Leur découverte : en ajoutant quelques exemples de raisonnement étape par étape dans le prompt (few-shot CoT), les performances des LLM sur les tâches de raisonnement augmentent de façon spectaculaire — parfois de 2 à 3 fois sur certains benchmarks.
 
 ### L'exemple classique
 
 **Sans chain-of-thought :**
-```
-Q : Roger a 5 balles de tennis. Il achète 2 boîtes de 3 balles.
-Combien a-t-il de balles maintenant ?
-R : La réponse est 11.
-```
+
+> **Q** : Roger a 5 balles de tennis. Il achète 2 boites de 3 balles. Combien a-t-il de balles maintenant ?
+> **R** : La réponse est 11.
 
 **Avec chain-of-thought :**
-```
-Q : Roger a 5 balles de tennis. Il achète 2 boîtes de 3 balles.
-Combien a-t-il de balles maintenant ?
-R : Roger commence avec 5 balles. 2 boîtes de 3 balles font 2 × 3 = 6 balles.
-5 + 6 = 11. La réponse est 11.
-```
+
+> **Q** : Roger a 5 balles de tennis. Il achète 2 boites de 3 balles. Combien a-t-il de balles maintenant ?
+> **R** : Roger commence avec 5 balles. 2 boites de 3 balles font $2 \times 3 = 6$ balles. $5 + 6 = 11$. La réponse est 11.
 
 En fournissant des exemples avec le raisonnement détaillé, le modèle apprend à produire ses propres chaînes de raisonnement pour les nouvelles questions.
 
@@ -43,31 +38,30 @@ Sur le benchmark GSM8K (problèmes de mathématiques de niveau primaire), le CoT
 
 ## Pourquoi ça fonctionne
 
+L'efficacité du CoT s'explique par trois mécanismes complémentaires :
+
 ### Plus de compute à l'inférence
 
-Chaque token généré correspond à un passage à travers toutes les couches du Transformer — c'est du **compute**. En générant une chaîne de raisonnement de 50 tokens avant la réponse, le modèle effectue 50× plus de calcul qu'en donnant directement la réponse. Le CoT convertit du **temps d'inférence** en **qualité de raisonnement**.
+C'est l'explication la plus fondamentale. Chaque token généré nécessite un passage complet à travers toutes les couches du Transformer — c'est du **compute**. En générant une chaîne de raisonnement de 50 tokens avant la réponse, le modèle effectue 50 fois plus de calcul qu'en donnant directement la réponse en 1 token. Le CoT convertit du **temps d'inférence** (plus de tokens = plus de temps) en **qualité de raisonnement**. C'est un trade-off explicite : on paye en latence et en coût de tokens, on gagne en justesse.
 
 ### Décomposition en sous-problèmes
 
-Les étapes intermédiaires décomposent un problème complexe en sous-problèmes plus simples. Chaque étape ne nécessite qu'un raisonnement élémentaire que le modèle maîtrise.
+Les étapes intermédiaires décomposent un problème complexe en sous-problèmes plus simples. Pour résoudre "Marie a 3 fois plus de billes que Pierre, et Pierre en a 5 de plus que Luc qui en a 8", le modèle n'a pas besoin de tout calculer d'un coup. Il peut procéder étape par étape : "Luc a 8 billes, Pierre a 8+5=13, Marie a 13x3=39." Chaque étape ne nécessite qu'un raisonnement élémentaire que le modèle maîtrise parfaitement.
 
-### Réduction des erreurs d'accumulation
+### Externalisation de la mémoire de travail
 
-Sans CoT, le modèle doit effectuer tous les calculs "en interne" dans un seul forward pass. Les résultats intermédiaires sont stockés dans les activations, où ils peuvent se dégrader. Avec le CoT, les résultats intermédiaires sont **externalisés** dans le texte et relus par le modèle à l'étape suivante.
+Sans CoT, le modèle doit effectuer tous les calculs "en interne" dans un seul forward pass. Les résultats intermédiaires sont stockés dans les vecteurs d'activation, où ils peuvent se dégrader ou interférer les uns avec les autres. Avec le CoT, les résultats intermédiaires sont **externalisés dans le texte** : le modèle écrit "Luc a 8 billes", et quand il doit calculer la quantité de Pierre, il peut *relire* ce résultat dans son contexte. C'est comme utiliser un brouillon au lieu de tout retenir de tête.
 
 <Callout type="info" title="La mémoire de travail du Transformer">
-Un Transformer a une "mémoire de travail" limitée : les informations doivent être représentées dans les vecteurs d'activation et propagées à travers les couches. Le CoT utilise le texte généré comme une **mémoire externe** : le modèle écrit ses résultats intermédiaires, puis les relit pour continuer le raisonnement.
+Un Transformer a une "mémoire de travail" limitée : les informations doivent être encodées dans les vecteurs d'activation (dimension typique : 4 096 à 8 192) et propagées à travers les couches. C'est un goulot d'étranglement pour le raisonnement complexe. Le CoT contourne cette limite en utilisant le texte généré comme une **mémoire externe** illimitée (limitée seulement par la fenêtre de contexte).
 </Callout>
 
 ## Zero-shot chain-of-thought
 
 Peu après le paper de Wei et al., Kojima et al. (2022) font une découverte surprenante : il suffit d'ajouter la phrase **"Let's think step by step"** (ou sa traduction) à la fin du prompt pour déclencher le raisonnement en chaîne, sans aucun exemple.
 
-```
-Q : Un magasin vend des pommes à 2€ la pièce et des oranges à 3€.
-Marie achète 4 pommes et 3 oranges. Combien dépense-t-elle ?
-Réfléchissons étape par étape.
-```
+> **Q** : Un magasin vend des pommes à 2€ la pièce et des oranges à 3€. Marie achète 4 pommes et 3 oranges. Combien dépense-t-elle ?
+> Réfléchissons étape par étape.
 
 Le modèle génère alors spontanément un raisonnement détaillé. Cette approche **zero-shot CoT** est remarquable car elle ne nécessite aucun exemple — une simple instruction suffit.
 
@@ -75,17 +69,17 @@ Le modèle génère alors spontanément un raisonnement détaillé. Cette approc
 Plusieurs formulations fonctionnent : "Réfléchissons étape par étape", "Raisonnons de manière méthodique", "Détaillons le raisonnement", "Avant de répondre, analysons le problème". L'important est de signaler au modèle qu'il doit expliciter sa réflexion. L'efficacité varie selon les modèles et les langues.
 </Callout>
 
-## Self-consistency
+## Self-consistency : la sagesse des foules
 
-Le **self-consistency** (Wang et al., 2022) améliore encore le CoT en exploitant la diversité des chemins de raisonnement. Le principe :
+Le **self-consistency** (Wang et al., 2022) améliore encore le CoT en exploitant une idée simple mais puissante : la diversité des chemins de raisonnement. Le principe :
 
-1. Générer **N chaînes de raisonnement** différentes pour le même problème (en utilisant un sampling avec température > 0)
+1. Générer **N chaînes de raisonnement** différentes pour le même problème (en utilisant un sampling avec température > 0, pour que chaque tentative explore un chemin différent)
 2. Extraire la réponse finale de chaque chaîne
 3. Prendre la réponse **majoritaire** (vote à la majorité)
 
-L'intuition est simple : si plusieurs chemins de raisonnement indépendants arrivent à la même réponse, cette réponse est probablement correcte. Les erreurs de raisonnement, étant typiquement différentes d'une chaîne à l'autre, sont "noyées" par le vote.
+L'intuition est la même que celle du "jury" : si 8 chemins de raisonnement sur 10 arrivent à la réponse "39", et que les 2 autres arrivent à "42" et "37", la réponse "39" est probablement correcte. Les erreurs de raisonnement, étant aléatoires et différentes d'une chaîne à l'autre, sont noyées par le vote majoritaire.
 
-Le self-consistency apporte des améliorations significatives par rapport au CoT simple, mais au prix d'un coût d'inférence multiplié par N (typiquement N = 5 à 40).
+Le self-consistency apporte des améliorations significatives par rapport au CoT simple (souvent +5 à 15 points sur les benchmarks de raisonnement), mais au prix d'un coût d'inférence multiplié par N (typiquement N = 5 à 40). C'est un trade-off compute/qualité explicite.
 
 ## Les limites du chain-of-thought
 
@@ -115,16 +109,16 @@ Certaines tâches ne se prêtent pas naturellement à un raisonnement séquentie
 
 Le **Tree-of-Thought** (Yao et al., 2023) généralise le CoT en explorant plusieurs branches de raisonnement simultanément, avec la possibilité de revenir en arrière (backtrack) quand une branche s'avère non productive. Le Graph-of-Thought va encore plus loin en permettant des connexions entre différentes branches.
 
-### Le test-time compute
+### Le test-time compute : le CoT intégré au modèle
 
-Les modèles comme o1 (OpenAI) et les approches de "thinking" intègrent le raisonnement en chaîne directement dans le processus d'inférence du modèle, plutôt que comme une technique de prompting. Le modèle alloue automatiquement plus de tokens de réflexion pour les problèmes plus difficiles, sans instruction explicite.
+Les modèles comme o1 et o3 (OpenAI), et les modes "thinking" de Claude (Anthropic) représentent l'évolution naturelle du CoT : le raisonnement en chaîne est intégré directement dans le processus d'inférence du modèle, plutôt que d'être une technique de prompting externe. Le modèle a été entraîné (via RLHF ou des techniques similaires) à allouer automatiquement plus de tokens de "réflexion interne" pour les problèmes difficiles, sans instruction explicite de l'utilisateur. C'est le concept de **test-time compute** : investir plus de calcul au moment de l'inférence pour obtenir de meilleures réponses.
 
-### Process reward models
+### Process reward models : évaluer chaque étape
 
-Au lieu de juger uniquement la réponse finale, les **process reward models** évaluent chaque étape du raisonnement individuellement. Cela permet d'identifier et de corriger les erreurs à l'étape où elles se produisent, plutôt que de compter sur le self-consistency pour les filtrer.
+Au lieu de juger uniquement la réponse finale (outcome reward), les **process reward models** (PRM) évaluent chaque étape du raisonnement individuellement. L'idée : si l'étape 3 d'un raisonnement en 7 étapes contient une erreur, un PRM peut la détecter immédiatement, plutôt que d'attendre la fin et de constater que la réponse est fausse. Combiné avec des stratégies de recherche (beam search sur les chaînes de raisonnement), cela permet de corriger les erreurs à l'endroit exact où elles se produisent.
 
 ## Le CoT dans la pratique quotidienne
 
-Pour un praticien, le chain-of-thought est l'un des outils les plus puissants du prompt engineering. Ses applications incluent la résolution de problèmes mathématiques, l'analyse logique, le débogage de code, la prise de décision structurée, et toute tâche nécessitant un raisonnement multi-étapes.
+Pour un praticien, le chain-of-thought est probablement l'outil de prompt engineering le plus universellement utile. Ses applications sont vastes : résolution de problèmes mathématiques, analyse logique, débogage de code, prise de décision structurée, rédaction de plans, analyse de documents complexes — toute tâche qui nécessite un raisonnement en plusieurs étapes.
 
-La recommandation est simple : pour toute tâche impliquant du raisonnement, demandez au modèle de montrer ses étapes. Le coût en tokens supplémentaires est largement compensé par l'amélioration de la qualité et de la fiabilité des réponses.
+La recommandation est simple et pragmatique : **pour toute tâche impliquant du raisonnement, demande au modèle de montrer ses étapes**. Un simple "Réfléchis étape par étape avant de répondre" suffit souvent. Le surcoût en tokens (et donc en argent) est largement compensé par l'amélioration de la qualité et de la fiabilité des réponses. C'est le meilleur investissement en prompt engineering que tu puisses faire.

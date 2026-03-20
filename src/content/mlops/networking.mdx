@@ -3,21 +3,21 @@ title: "Réseau pour l'entraînement distribué : InfiniBand, NVLink, NVSwitch"
 description: "Les technologies réseau critiques pour l'entraînement distribué de modèles d'IA : InfiniBand, NVLink, NVSwitch, RoCE et leur impact sur les performances."
 ---
 
-## L'histoire du goulot d'étranglement : quand la route devient plus importante que les voitures
+## Le goulot d'étranglement : quand la route compte plus que les voitures
 
-Imaginez une usine immense où 1 000 ouvriers (les GPU) travaillent en parallèle. Chacun reçoit des instructions, fait son travail, puis doit envoyer ses résultats aux autres ouvriers. Si la porte de l'usine n'est large que pour 10 personnes à la fois, les 990 autres vont attendre dehors. Même si chaque ouvrier est ultra-rapide, toute l'usine ralentit parce que **la communication devient le goulot d'étranglement**.
+Imaginez une usine immense où 1 000 ouvriers (les GPU) travaillent en parallèle. Chacun reçoit des instructions, fait son travail, puis doit envoyer ses résultats aux autres ouvriers pour que le travail avance. Si la porte de l'usine n'est large que pour 10 personnes à la fois, les 990 autres attendent dehors. Même si chaque ouvrier est ultra-rapide, toute l'usine ralentit parce que **la communication devient le goulot d'étranglement**.
 
-C'est exactement ce qui se passe quand on entraîne un modèle IA sur 1 000 GPU. Si le réseau ne peut pas transférer assez vite les gradients (les petits ajustements) d'un GPU à l'autre, les GPU puissants passent leur temps à **attendre au lieu de calculer**. C'est du gaspillage pur. Réduire ce "overhead de communication" de 10% sur un entraînement de quelques mois ? Ça économise **des millions de dollars**.
+C'est exactement ce qui se passe quand on entraîne un modèle IA sur 1 000 GPU. Si le réseau ne peut pas transférer assez vite les gradients (les ajustements calculés par chaque GPU) vers les autres GPU, les processeurs puissants passent leur temps à **attendre au lieu de calculer**. C'est du gaspillage pur. Réduire cet overhead de communication de 10% sur un entraînement de plusieurs mois ? Ça économise **des millions de dollars**.
 
 <Callout type="info" title="L'échelle devient folle rapidement">
-Sur un modèle de 70 milliards de paramètres entraîné avec 1 000 GPU : chaque GPU doit envoyer et recevoir 140 gigaoctets de gradients à chaque itération. Multipliez par 1 000 GPU. Multipliez par 10 itérations par seconde. Ça fait **1 400 pétaoctets par heure**. Pour donner une idée : c'est comme si tous les données de Netflix passaient par votre réseau en 1 seconde.
+Sur un modèle de 70 milliards de paramètres entraîné avec 1 000 GPU : chaque GPU doit envoyer et recevoir 140 gigaoctets de gradients à chaque itération. Multipliez par 1 000 GPU. Multipliez par 10 itérations par seconde. Ça fait **1 400 pétaoctets par heure**. Pour donner une idée : c'est comme si toutes les données de Netflix passaient par votre réseau chaque seconde.
 </Callout>
 
-## NVLink : la autoroute intra-serveur
+## NVLink : l'autoroute intra-serveur
 
 ### L'idée simple : ne pas passer par la route principale
 
-Si vous avez 8 GPU dans le même serveur, vous pourriez les connecter tous à travers le CPU (comme des voitures passant par une petite route de village). Mais c'est **super lent**. NVIDIA a eu l'idée d'une **autoroute directe** entre GPU : NVLink. Les GPU se parlent directement, sans passer par le CPU. C'est comme avoir une autoroute à 16 voies au lieu d'une petite route.
+Si vous avez 8 GPU dans le même serveur, vous pourriez les faire communiquer via le CPU et le bus PCIe (comme des voitures obligées de passer par une petite route de village). Mais c'est **beaucoup trop lent**. NVIDIA a eu l'idée d'une **autoroute directe** entre GPU : NVLink. Les GPU se parlent directement, sans passer par le CPU. C'est comme avoir une autoroute à 16 voies au lieu d'une route de campagne.
 
 ### Les générations : de plus en plus rapides
 
@@ -33,10 +33,10 @@ Si vous avez 8 GPU dans le même serveur, vous pourriez les connecter tous à tr
 
 ### Comment ça marche en pratique
 
-NVLink n'est pas juste une route plus rapide. C'est une technologie plus intelligente :
-- **Les GPU se parlent directement**, sans passer par le CPU (la route côté à côté)
-- **Pas de copie inutile** : les données vont directement d'un GPU à l'autre
-- **Les GPU peuvent demander des choses à la mémoire d'un autre GPU**, comme des appels de fonction à distance
+NVLink n'est pas juste un tuyau plus gros. C'est une technologie fondamentalement plus intelligente :
+- **Communication directe GPU-GPU**, sans passer par le CPU ni la mémoire système
+- **Pas de copie inutile** : les données vont directement de la mémoire d'un GPU à celle d'un autre
+- **Accès mémoire distant** : un GPU peut lire directement dans la mémoire d'un autre GPU, comme si c'était la sienne
 
 <Callout type="tip" title="Pourquoi c'est crucial pour le parallélisme en tenseurs">
 Quand vous divisez un layer du réseau de neurones entre 8 GPU (c'est le tensor parallelism), chaque GPU doit constamment demander aux autres leurs résultats. Avec NVLink à 900 Go/s, c'est rapide comme l'éclair. Avec PCIe (64 Go/s), c'est un embouteillage. C'est la différence entre une équipe qui se passe le ballon fluidement et une équipe où il faut attendre 10 secondes entre chaque passe.
@@ -74,13 +74,13 @@ Cette technique s'appelle SHARP (Scalable Hierarchical Aggregation and Reduction
 
 ### Le défi : relier les serveurs entre eux (inter-nœuds)
 
-NVLink et NVSwitch fonctionnent bien pour un serveur avec 8 GPU. Mais que se passe-t-il quand vous en avez 1 000 GPU dans 100 serveurs différents ? Ces serveurs doivent **parler entre eux**. Le réseau Ethernet normal est trop lent (il a trop de délai). **InfiniBand** est une technologie spécialisée juste pour ça : c'est l'Internet privé des datacenters.
+NVLink et NVSwitch fonctionnent parfaitement pour un serveur avec 8 GPU. Mais que se passe-t-il quand vous avez 1 000 GPU répartis dans 100 serveurs différents ? Ces serveurs doivent **communiquer entre eux**. Le réseau Ethernet classique est trop lent et a trop de latence pour ça. **InfiniBand** est une technologie réseau spécialisée pour les échanges massifs et ultra-rapides entre serveurs : c'est l'autoroute privée des datacenters IA.
 
 ### Les super-pouvoirs d'InfiniBand
 
-- **RDMA** (Remote Direct Memory Access) : une GPU d'un serveur peut **directement lire la mémoire d'une GPU d'un autre serveur**, sans demander au CPU de jouer intermédiaire. Comme la livraison directe de colis, sans passer par la mairie.
-- **Temps de réponse ultra-rapide** : moins d'une microseconde. Pour comparaison : un battement de paupière dure environ 100 000 microsecondes.
-- **Énorme bande passante** : jusqu'à 800 gigabits par seconde (XDR)
+- **RDMA** (Remote Direct Memory Access) : un GPU d'un serveur peut **directement lire la mémoire d'un GPU d'un autre serveur**, sans demander au CPU de jouer les intermédiaires. C'est comme une livraison de colis en direct, sans passer par le bureau de poste.
+- **Latence ultra-faible** : moins d'une microseconde. Pour comparaison : un battement de paupière dure environ 100 000 microsecondes. On est dans un tout autre monde.
+- **Bande passante massive** : jusqu'à 800 gigabits par seconde (version XDR)
 
 ### Les générations : InfiniBand s'accélère
 
@@ -92,7 +92,7 @@ NVLink et NVSwitch fonctionnent bien pour un serveur avec 8 GPU. Mais que se pas
 
 ### GPUDirect RDMA : le raccourci magique
 
-Normally, pour envoyer des données entre deux GPU sur des serveurs différents, le chemin fait des détours :
+Normalement, pour envoyer des données entre deux GPU sur des serveurs différents, le chemin fait plein de détours :
 
 GPU -> PCIe -> CPU -> Mémoire -> Carte réseau -> Internet -> Carte réseau -> Mémoire -> CPU -> PCIe -> GPU
 

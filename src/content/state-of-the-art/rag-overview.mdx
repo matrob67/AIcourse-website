@@ -5,16 +5,14 @@ description: "Le RAG combine la recherche d'information avec la génération de 
 
 ## Le problème : un LLM hallucine
 
-Un LLM dit des choses convaincantes qui sont totalement fausses. Pourquoi ? Ses connaissances **figent** à la date de sa dernière donne d'entraînement. GPT-4 s'arrête en avril 2024. Vous demandez les nouvelles d'aujourd'hui ? Hallucination.
+Un LLM dit des choses convaincantes qui sont parfois totalement fausses. Pourquoi ? Ses connaissances sont **figées** à la date de sa dernière donnée d'entraînement. Vous lui demandez les résultats financiers du dernier trimestre ? Hallucination. Vous lui demandez de répondre sur vos documents internes qu'il n'a jamais vus ? Hallucination encore. Le modèle ne sait pas dire "je ne sais pas" — il invente avec aplomb.
 
-Ou vous demandez des infos sur vos documents privés ? Le modèle n'en a jamais vu. Hallucination.
-
-Le RAG (Retrieval-Augmented Generation) résout ça : vous **retrouvez** les documents pertinents et vous les donnez au LLM comme contexte. Fini : "je sais pas, invente quelque chose". À la place : "voici le contexte, réponds en t'appuyant dessus".
+Le **RAG** (Retrieval-Augmented Generation) résout ce problème avec une idée simple mais puissante : au lieu de demander au LLM de répondre de mémoire, on lui **fournit les documents pertinents** comme contexte. C'est la différence entre un examen à livre fermé (le LLM seul) et un examen à livre ouvert (le LLM avec RAG).
 
 <ArxivLink id="2005.11401" title="Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (Lewis et al., 2020)" />
 
 <Callout type="info" title="L'idée simple du RAG">
-Au lieu de s'appuyer uniquement sur ses poids, le LLM reçoit les documents pertinents dans le prompt. Il peut **citer ses sources**, utiliser des **données à jour**, et répondre sur vos **documents privés**. Simple mais révolutionnaire.
+Au lieu de s'appuyer uniquement sur ses poids (sa mémoire interne), le LLM reçoit les documents pertinents directement dans le prompt. Il peut **citer ses sources**, utiliser des **données à jour**, et répondre sur vos **documents privés**. Simple mais révolutionnaire.
 </Callout>
 
 
@@ -22,79 +20,80 @@ Au lieu de s'appuyer uniquement sur ses poids, le LLM reçoit les documents pert
 ## Pipeline RAG : 3 étapes
 
 ### 1. Indexation (offline, une seule fois)
-- Découpez les documents en chunks (200-500 mots chacun)
-- Générez des embeddings vectoriels pour chaque chunk
-- Stockez les embeddings dans une base vectorielle
+C'est la phase de préparation, exécutée à l'avance :
+- Découpez vos documents en **chunks** (morceaux de 200-500 mots chacun)
+- Générez un **embedding vectoriel** pour chaque chunk via un modèle d'embedding
+- Stockez les embeddings dans une **base vectorielle** (Chroma, Qdrant, Pinecone...)
 
-### 2. Retrieval (online, quand l'utilisateur demande)
-- L'utilisateur pose une question
-- Convertissez la question en embedding
-- Retrouvez les K chunks les plus similaires (5-10 typiquement)
+### 2. Retrieval (online, à chaque question)
+Quand l'utilisateur pose une question :
+- Convertissez la question en embedding (même modèle que pour les documents)
+- Retrouvez les **K chunks les plus similaires** dans la base vectorielle (5-10 typiquement)
+- Ces chunks deviennent le "contexte" de la réponse
 
 ### 3. Generation (online)
-- Construisez un prompt : contexte (les chunks) + question
-- Le LLM génère une réponse basée sur le contexte
+Le LLM entre en jeu :
+- Construisez un prompt qui combine le contexte (les chunks retrouvés) et la question
+- Le LLM génère une réponse **ancrée dans les documents fournis**
 
-```
-Contexte :
-[Document 1 : ...]
-[Document 2 : ...]
-
-Question : votre question
-
-Réponds en t'appuyant UNIQUEMENT sur le contexte.
-```
+> **Contexte :**
+> [Document 1 : ...]
+> [Document 2 : ...]
+>
+> **Question :** votre question
+>
+> Reponds en t'appuyant UNIQUEMENT sur le contexte.
 
 
 
 ## Pourquoi ça marche
 
-### Moins de hallucinations
-En fournissant les sources, le LLM n'a plus besoin de **deviner**. Il synthétise. Études : 30-50% moins d'hallucinations avec un bon RAG.
+### Moins d'hallucinations
+En fournissant les sources directement dans le prompt, le LLM n'a plus besoin de **deviner** — il synthétise l'information donnée. Les études montrent une réduction de 30-50% des hallucinations avec un RAG bien configuré. Le modèle passe du mode "je récite ce que j'ai mémorisé" au mode "je lis et je résume".
 
-### Données à jour
-La base vectorielle se met à jour en temps réel. Pas besoin de ré-entraîner le modèle. Les nouvelles infos sont disponibles immédiatement.
+### Données toujours à jour
+La base vectorielle peut se mettre à jour en temps réel. Un nouveau document est publié ? Indexez-le, et il est immédiatement disponible pour les réponses. Pas besoin de réentraîner le modèle, ce qui prendrait des semaines et des milliers de dollars.
 
-### Données propriétaires
-Vos documents internes (emails, rapports, code) **jamais** n'entraînent le modèle. Juste indexés et retrouvés. Confidentialité garantie.
+### Données propriétaires en toute sécurité
+Vos documents internes (emails, rapports, code source) ne sont **jamais** envoyés à un fournisseur pour entraîner un modèle. Ils restent dans votre base vectorielle, indexés et retrouvés localement. La confidentialité est préservée par design.
 
 <Callout type="tip" title="RAG vs fine-tuning ?">
-RAG : quand les données changent souvent ou vous avez besoin de traçabilité.
-Fine-tuning : quand vous voulez changer le comportement/style du modèle.
-Réalité : vous faites probablement les deux.
+**RAG** : quand les données changent souvent, quand vous avez besoin de traçabilité (citer les sources), ou pour les connaissances factuelles.
+**Fine-tuning** : quand vous voulez changer le comportement, le style ou le format des réponses du modèle.
+En pratique : vous ferez probablement les deux. Le RAG pour la connaissance, le fine-tuning pour le comportement.
 </Callout>
 
 ## Composants clés
 
 ### Embeddings
-Transformez le texte en vecteurs. La qualité des embeddings = la qualité du retrieval.
+Le modèle d'embedding transforme le texte en vecteurs. C'est le composant le plus critique — la qualité du retrieval en dépend directement.
 
-Choix : all-MiniLM (gratuit, rapide, 384 dims), BGE-M3 (multilingue, 1024 dims), ou OpenAI text-embedding-3 (payant, performant).
+Choix typiques : all-MiniLM (gratuit, rapide, 384 dims), BGE-M3 (multilingue, 1024 dims, excellent), ou OpenAI text-embedding-3 (payant, très performant).
 
 ### Base vectorielle
-Stocke les embeddings, cherche les plus proches par similarité cosinus.
+Stocke les embeddings et permet la recherche par similarité cosinus à grande échelle.
 
-Options : Chroma (en mémoire, prototypage), Qdrant (production, open-source), Pinecone (SaaS, zéro ops).
+Options : Chroma (prototypage), Qdrant (production open-source), Pinecone (SaaS zéro ops).
 
 ### Chunking
-Comment découper les documents. Trop petit : perte de contexte. Trop gros : bruit. Idéal : 256-512 tokens.
+Comment découper les documents est un art en soi. Trop petit (50 tokens) : chaque chunk perd son contexte et devient incompréhensible seul. Trop gros (2000 tokens) : le chunk contient trop de bruit et dilue l'information pertinente. L'idéal se situe généralement entre **256 et 512 tokens**, avec un chevauchement de 10-20% entre les chunks pour ne pas couper une idée en deux.
 
 ## Pièges du RAG naïf
 
 <Callout type="warning" title="Le RAG n'est pas magique">
-1. **Garbage in, garbage out** : si les bons documents ne sont pas retrouvés, le LLM ne peut pas bien répondre
-2. **Lost in the middle** : le LLM ignore souvent les infos au milieu d'un long contexte
-3. **Conflits** : quand les documents retrouvés se contredisent
-4. **Complex reasoning** : les questions multi-étapes réclament du retrieval itératif
+1. **Garbage in, garbage out** : si le retrieval ne retrouve pas les bons documents, le LLM ne peut pas produire une bonne réponse — peu importe sa puissance
+2. **Lost in the middle** : les LLM tendent à ignorer les informations au milieu d'un long contexte, ne retenant que le début et la fin
+3. **Conflits entre sources** : quand les documents retrouvés se contredisent, le LLM peut produire une réponse incohérente
+4. **Questions multi-étapes** : "Quel fournisseur a le meilleur prix parmi ceux qui livrent en Europe ?" demande de croiser plusieurs informations — un seul retrieval ne suffit pas
 
-Le RAG réduit les hallucinations mais ne les élimine pas. Validation humaine pour les cas critiques.
+Le RAG réduit les hallucinations mais ne les élimine pas. Prévoyez une validation humaine pour les cas critiques.
 </Callout>
 
 ## Évaluation
 
-Métriques clés :
-- **Recall@K** : % de documents pertinents retrouvés dans le top K
-- **Faithfulness** : la réponse suit-elle les documents ?
-- **Answer relevancy** : répond-elle à la question ?
+Trois métriques essentielles pour mesurer la qualité de votre RAG :
+- **Recall@K** : quel pourcentage des documents pertinents se retrouve dans les K résultats ? (mesure la qualité du retrieval)
+- **Faithfulness** : la réponse est-elle fidèle aux documents fournis, ou le LLM invente-t-il ? (mesure les hallucinations)
+- **Answer relevancy** : la réponse répond-elle effectivement à la question posée ? (mesure la pertinence)
 
 La suite de sections explore chaque composant en détail et les techniques avancées pour monter la qualité au-delà du RAG basique.

@@ -5,100 +5,108 @@ description: "Le prefix tuning prépend des vecteurs entraînables aux clés et 
 
 
 
-## L'idée folle: des prompts appris (et continus)
+## L'idée folle : des prompts appris dans l'espace continu
 
-Imaginez pouvoir écrire un prompt parfait pour votre tâche. Mais au lieu d'être limité aux mots du vocabulaire, vous pouvez utiliser des vecteurs **continues** arbitraires. Des vecteurs magiques qu'on apprend par gradient descent.
+Quand vous écrivez un prompt, vous êtes limité aux mots du vocabulaire. Vous tâtonnez avec "Résume ce texte de manière concise" vs "Fais un résumé court" vs "Donne-moi l'essentiel". Chaque formulation donne des résultats différents, et trouver le prompt optimal relève de l'alchimie.
 
-C'est le prefix tuning.
+Le prefix tuning propose une approche radicalement différente : et si on pouvait utiliser des vecteurs **continus** arbitraires comme "prompt" ? Des vecteurs qui n'existent pas dans le vocabulaire, qui flottent librement dans l'espace d'embedding, et qu'on optimise par gradient descent pour maximiser la performance sur votre tâche ?
+
+C'est exactement ça. Des vecteurs magiques que le modèle apprend à interpréter, injectés directement dans le mécanisme d'attention.
 
 <ArxivLink id="2101.00190" title="Prefix-Tuning: Optimizing Continuous Prompts for Generation (Li & Liang, 2021)" />
 
 <Callout type="info" title="L'intuition">
-Normal prompt tuning: vous tâtonnez avec du texte. Prefix tuning: vous dites au modèle "apprends quoi faire" via des vecteurs que vous concevez ensemble. C'est comme un prompt qui peut exister dans l'espace continu entre les mots.
+Le prompt engineering classique, c'est chercher la bonne clé dans un trousseau fini. Le prefix tuning, c'est fabriquer une clé sur mesure en la sculptant atome par atome. Le résultat n'est pas un mot lisible, c'est un vecteur mathématique qui "parle" au modèle mieux que n'importe quel texte.
 </Callout>
 
-## Fonctionnement: ajouter des vecteurs à chaque couche
+## Fonctionnement : des vecteurs injectés à chaque couche
 
-Pour chaque couche d'attention du Transformer, vous prépendez des vecteurs appris:
+Voici ce qui distingue le prefix tuning du simple prompt tuning : au lieu d'ajouter des vecteurs uniquement à l'entrée du modèle, on en ajoute à **chaque couche d'attention** du Transformer.
 
-- `K' = [P_K ; K]` — le prefix de clés vient avant les vraies clés
-- `V' = [P_V ; V]` — le prefix de valeurs vient avant les vraies valeurs
+Pour chaque couche, on prépend des vecteurs appris aux clés et valeurs :
+- `K' = [P_K ; K]` -- le prefix de clés vient avant les vraies clés
+- `V' = [P_V ; V]` -- le prefix de valeurs vient avant les vraies valeurs
 
-P_K et P_V sont des matrices (l × d_head) pour chaque tête d'attention, où l = longueur du prefix.
+$P_K$ et $P_V$ sont des matrices de taille $(l \times d_{head})$ pour chaque tête d'attention, où $l$ est la longueur du prefix. Les vrais tokens du texte peuvent "attendre" au prefix et y trouver de l'information utile pour la tâche, comme un guide planté au début de chaque couche.
 
 ### Stabilisation par reparamétrisation
 
-Optimiser les vecteurs directement? Ça diverge. Solution: utilisez un petit MLP comme "filtre":
+Optimiser ces vecteurs directement par gradient descent s'avère instable : la loss oscille, diverge, refuse de converger. La solution est un petit trick d'ingénierie :
 
-1. Gardez une matrice P (l × d)
-2. Un MLP la transforme en vrais vecteurs: P' = MLP(P)
-3. Après entraînement, jetez le MLP, gardez P'
+1. Gardez une matrice P de taille $(l \times d)$
+2. Passez-la à travers un petit MLP : $P' = \text{MLP}(P)$
+3. Après l'entraînement, jetez le MLP et ne gardez que $P'$
 
-Le MLP agit comme régulariseur. Ça stabilise tout.
+Le MLP agit comme un régulariseur implicite qui contraint l'espace de recherche. C'est comme dessiner avec un guide plutôt qu'à main levée : le résultat est plus propre.
 
 ## Nombre de paramètres
 
-Pour L couches, H têtes, prefix de longueur l:
+Pour $L$ couches, $H$ têtes, et un prefix de longueur $l$ :
 
-- **Paramètres du prefix**: l × d × L × 2 (clés ET valeurs pour chaque couche)
+- **Paramètres du prefix** : $l \times d \times L \times 2$ (clés ET valeurs, à chaque couche)
 
-Pour GPT-2 Medium (d=1024, L=24, l=10):
-- Total: 10 × 1024 × 24 × 2 = **491 520 paramètres** (0,12% du modèle)
+Exemple concret pour GPT-2 Medium ($d=1024$, $L=24$, $l=10$) :
+- Total : $10 \times 1024 \times 24 \times 2$ = **491 520 paramètres** (0,12% du modèle)
 
-<Callout type="tip" title="Longueur du prefix: balancer">
-Trop court = pas assez de capacité. Trop long = vous bouffez votre budget de contexte. Typiquement 10-200 tokens virtuels. C'est un hyperparamètre critique.
+C'est remarquablement compact. Un demi-million de paramètres pour adapter un modèle entier.
+
+<Callout type="tip" title="Longueur du prefix : un compromis délicat">
+Un prefix trop court (5 tokens) n'a pas assez de capacité pour encoder la tâche. Un prefix trop long (500 tokens) consomme votre budget de contexte et risque l'overfitting. La plage typique est 10-200 tokens virtuels. C'est un hyperparamètre critique à tester.
 </Callout>
 
-## Différences avec prompt engineering classique
+## Prompt engineering vs Prefix tuning
 
-| Aspect | Normal prompting | Prefix tuning |
+| Aspect | Prompt classique | Prefix tuning |
 |---|---|---|
-| Espace | Tokens discrets | Vecteurs continus |
-| Optimisation | Manuelle | Gradient descent |
-| Couches affectées | Juste l'embedding d'entrée | TOUTES les couches |
-| Lisibilité | Vous lisez le prompt | Incompréhensible |
+| Espace | Tokens discrets (mots) | Vecteurs continus (réels) |
+| Optimisation | Manuelle, par essai-erreur | Automatique, gradient descent |
+| Couches affectées | Juste l'embedding d'entrée | **Toutes** les couches |
+| Lisibilité | Vous lisez le prompt | Totalement opaque |
+| Performance | Variable selon formulation | Optimale pour la tâche |
 
-## Résultats réels
+La différence clé, c'est que le prefix tuning agit à **toutes les couches** simultanément. Un prompt classique influence le modèle uniquement via l'entrée, et son influence se dilue au fil des couches. Le prefix tuning maintient son influence du début à la fin du réseau.
 
-Le paper teste sur génération conditionnelle:
-- **Table-to-text** (E2E, WebNLG): décrire des tables structurées
-- **Summarization** (XSUM): résumer des articles
+## Résultats empiriques
 
-Avec 0,1% de paramètres, prefix tuning atteint la performance du fine-tuning complet.
+Le papier original teste sur de la génération conditionnelle :
+- **Table-to-text** (E2E, WebNLG) : transformer des données structurées en texte
+- **Summarization** (XSUM) : résumer des articles de presse
 
-<Callout type="paper" title="Avantage en peu de données">
-Avec seulement 100-500 exemples, prefix tuning surpasse souvent le fine-tuning complet. Pourquoi? Peu de paramètres = régulariseur naturel contre l'overfitting.
+Avec seulement 0,1% de paramètres entraînables, le prefix tuning atteint des performances comparables au fine-tuning complet sur ces tâches.
+
+<Callout type="paper" title="Un avantage surprise en faible données">
+Avec 100 à 500 exemples d'entraînement seulement, le prefix tuning **surpasse** souvent le fine-tuning complet. L'explication est intuitive : peu de paramètres = régulariseur naturel contre l'overfitting. Quand vous avez peu de données, avoir moins de paramètres à optimiser est un avantage.
 </Callout>
 
-## Cas d'usage: multi-tâche massif
+## Cas d'usage idéal : multi-tâche massif
 
-Chaque tâche a son prefix (quelques Ko). Vous pouvez servir 1000 tâches avec un modèle en mémoire, juste en changeant le prefix.
+Imaginez un service qui doit gérer 1 000 tâches différentes (résumé juridique, traduction technique, génération de code, etc.). Avec le fine-tuning complet, il faudrait 1 000 copies du modèle. Avec le prefix tuning, vous gardez un seul modèle en mémoire et vous changez simplement le prefix (quelques Ko) selon la tâche. C'est l'un des scénarios où le prefix tuning brille le plus.
 
 ## Les limites
 
-### Réduit votre contexte
-Un prefix de 100 tokens sur 2048 contexte = 5% perdu.
+### Il réduit votre contexte disponible
+Un prefix de 100 tokens sur une fenêtre de 2 048 tokens, c'est 5% de votre budget de contexte perdu. Sur des tâches avec de longs documents, c'est gênant.
 
-### Expressivité limitée
-Le prefix ne modifie que via l'attention. Pour des adaptations profondes (nouvelle langue, domaine total), insuffisant.
+### Expressivité limitée aux mécanismes d'attention
+Le prefix ne modifie le modèle qu'à travers l'attention : il influence quels tokens reçoivent de l'attention et comment. Pour des adaptations profondes (nouvelle langue, changement radical de domaine), cette influence reste trop indirecte.
 
-<Callout type="warning" title="L'entraînement est délicat">
-Prefix tuning est sensible aux hyperparamètres. Learning rate trop élevé = diverge. C'est plus fragile que LoRA. Demande du tuning.
+<Callout type="warning" title="L'entraînement est plus délicat que LoRA">
+Le prefix tuning est notoirement sensible aux hyperparamètres. Un learning rate légèrement trop élevé fait diverger l'entraînement. C'est plus fragile que LoRA, qui bénéficie de la structure de ses matrices low-rank comme régulariseur naturel. Prévoyez du temps pour le tuning.
 </Callout>
 
-### Performance sur gros modèles
-Sur LLM 7B+, prefix tuning sous-performe LoRA. L'espace d'adaptation via attention seul est trop restreint pour les architectures profondes.
+### Performance sur les gros LLM modernes
+Sur des modèles 7B+, le prefix tuning sous-performe généralement LoRA. L'espace d'adaptation via l'attention seule est trop limité pour les architectures très profondes. Le prefix tuning a été conçu à l'ère GPT-2/T5, et le passage à l'échelle lui est moins favorable.
 
-## Place du prefix tuning
+## Place dans l'écosystème
 
-Conceptuellement important (a mené au prompt tuning). Pratiquement, rarement premier choix (LoRA préféré). Mais pertinent dans des scénarios spécifiques:
+Le prefix tuning est **conceptuellement important** : il a ouvert la voie au prompt tuning et a démontré qu'on pouvait adapter un modèle sans toucher à ses poids. En pratique, il est rarement le premier choix aujourd'hui (LoRA domine), mais il reste pertinent pour :
 
-- **Milliers de tâches** avec un modèle partagé
-- **Très peu de stockage** (prefix ultra compact)
-- **Génération conditionnelle** avec format fixe
+- **Des milliers de tâches** servies par un modèle unique
+- **Un stockage ultra-contraint** (le prefix est extraordinairement compact)
+- **De la génération conditionnelle** avec un format de sortie fixe
 
 Disponible dans PEFT de Hugging Face via `PrefixTuningConfig`.
 
 ---
 
-**Insight**: Le prefix tuning pose une question philosophique: adapter via prompts continus plutôt que via poids. Ça perd contre LoRA en pratique, mais gagne en élégance conceptuelle.
+**Insight** : Le prefix tuning pose une question fascinante : peut-on adapter un modèle entièrement via des "prompts continus" plutôt qu'en modifiant ses poids ? La réponse est oui, avec des limites. LoRA gagne en pratique, mais le prefix tuning gagne en élégance conceptuelle et en compacité extrême.

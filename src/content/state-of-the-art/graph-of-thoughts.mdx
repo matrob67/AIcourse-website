@@ -5,102 +5,108 @@ description: "Graph of Thoughts généralise le Tree of Thoughts en permettant d
 
 ## Au-delà de l'arbre : fusionner et raffiner
 
-Tree of Thoughts contraint le raisonnement en arbre : chaque thought a un parent. **Graph of Thoughts** lève cette restriction.
+Tree of Thoughts contraint le raisonnement en arbre : chaque thought a un seul parent et l'information coule uniquement du parent vers les enfants. C'est déjà bien mieux que le Chain of Thought linéaire, mais ça reste limité. Que faire si deux branches d'exploration ont chacune trouvé un bout de la solution et qu'il faut les **combiner** ? Impossible dans un arbre.
 
-Un thought peut :
-- **Combiner** plusieurs thoughts précédents (fusion)
-- **Être amélioré** itérativement (raffinement)
-- **Former des boucles** (revenir à une étape avec nouvelles infos)
+**Graph of Thoughts** (GoT) lève cette restriction fondamentale. Le raisonnement devient un **graphe dirigé** où les thoughts peuvent :
+- **Combiner** plusieurs thoughts précédents (fusion de branches)
+- **Être améliorés** itérativement (raffinement en boucle)
+- **Former des boucles** (revenir à une étape antérieure avec de nouvelles informations)
+
+L'analogie la plus parlante : Tree of Thoughts, c'est comme explorer un labyrinthe en prenant des chemins qui divergent mais ne se rejoignent jamais. Graph of Thoughts, c'est comme une équipe de chercheurs qui explorent différentes pistes, partagent leurs découvertes, et combinent leurs résultats pour arriver à une solution que personne n'aurait trouvée seul.
 
 <ArxivLink id="2308.09687" title="Graph of Thoughts: Solving Elaborate Problems with Large Language Models (Besta et al., 2023)" />
 
-<Callout type="info" title="Arbre → Graphe">
-Arbre : information coule parent → enfants. Graphe : on peut **fusionner** des branches, **raffiner** les idées, **boucler**. C'est plus riche, plus flexible.
+<Callout type="info" title="Arbre vers Graphe : le saut conceptuel">
+Dans un arbre, l'information coule strictement parent vers enfants — les branches sont isolées. Dans un graphe, on peut **fusionner** des branches divergentes, **raffiner** les idées par itération, et **boucler** pour corriger des erreurs. C'est une structure strictement plus riche et plus flexible, capable de modéliser des raisonnements que l'arbre ne peut tout simplement pas exprimer.
 </Callout>
 
 
 
-## Les quatre opérations
+## Les quatre opérations fondamentales
 
-**Generate (Branching)** : créer plusieurs thoughts candidats. Comme dans ToT.
+GoT définit quatre opérations atomiques qui, combinées, permettent de construire n'importe quel pattern de raisonnement :
 
-**Aggregate (Merging)** : combiner deux thoughts en un seul.
+**Generate (Branching)** : créer plusieurs thoughts candidats à partir d'un thought parent. C'est la même opération que dans ToT — explorer plusieurs directions.
 
-```
-Thought A: "Budget marketing = 50K€"
-Thought B: "ROI attendu = 3.2×"
-→ Agrégation: "Revenu attendu = 50K × 3.2 = 160K€"
-```
+**Aggregate (Merging)** : combiner deux ou plusieurs thoughts en un seul. C'est l'opération clé qui manquait dans ToT. Elle permet le **divide-and-conquer** : diviser un problème en sous-problèmes, résoudre chacun indépendamment, puis fusionner les solutions partielles.
 
-**Refine (Improving)** : améliorer un thought en le critiquant et corrigeant.
+> **Thought A :** Budget marketing = 50K&euro;
+> **Thought B :** ROI attendu = 3.2&times;
+> &rarr; **Agrégation :** Revenu attendu = $50\text{K} \times 3.2 = 160\text{K€}$
 
-```
-v1: "Tri fusion = O(n²)"
-→ Correction: "Tri fusion = O(n log n)"
-```
+**Refine (Improving)** : prendre un thought existant, le critiquer, et produire une version améliorée. C'est une boucle d'auto-correction qui permet d'itérer vers la qualité. Le LLM joue alternativement le rôle de rédacteur et de critique.
 
-**Score (Evaluation)** : évaluer la qualité. Comme ToT.
+> **v1 :** Tri fusion = $O(n^2)$
+> &rarr; **Critique :** Le tri fusion est un algorithme divide-and-conquer, pas quadratique.
+> &rarr; **v2 :** Tri fusion = $O(n \log n)$
 
-## Architecture GoT
+**Score (Evaluation)** : évaluer la qualité d'un thought pour guider les décisions. Comme ToT, mais appliqué à des nodes de n'importe quel type dans le graphe.
 
-```
-[Problème]
-    ├──→ [Thought 1a] → [2a] ──┐
-    ├──→ [Thought 1b] → [2b] ──┤──→ [Agrégation] → [Raffinement] → [Solution]
-    └──→ [Thought 1c] → [2c] ──┘
-```
+## Architecture GoT en pratique
 
-Contrairement à l'arbre, **les branches se recombinent**. C'est mimique du divide-and-conquer.
+Voici comment GoT résout un problème concrètement :
 
-## Le Controller
+1. **Problème** arrive et génère Thought 1a, 1b, 1c en parallèle (Generate)
+2. Chaque thought est développé : 1a produit 2a, 1b produit 2b, 1c produit 2c (Generate)
+3. **Agrégation** : les résultats 2a, 2b, 2c sont fusionnés en un thought synthétique (Aggregate)
+4. **Raffinement** : le thought fusionné est critiqué et amélioré (Refine)
+5. **Évaluation** et **Solution** finale (Score)
 
-Un **controller** orchestre les opérations :
+La différence fondamentale avec l'arbre : **les branches se recombinent**. C'est exactement le pattern du divide-and-conquer algorithmique — divisez le problème, résolvez les sous-parties, fusionnez les résultats. Le tri fusion en est l'exemple parfait : divisez la liste, triez les moitiés, fusionnez les listes triées.
 
-1. Analyse l'état du graphe actuel
-2. Décide quelle opération appliquer (generate, aggregate, refine, score)
-3. Sélectionne les thoughts à opérer
-4. Vérifie les conditions d'arrêt
+## Le Controller : cerveau de l'orchestration
 
-<Callout type="paper" title="Résultats sur le tri">
-Trier 128 nombres : CoT 12%, ToT 36%, GoT 62%. GoT excelle parce que le tri est naturellement décomposable (tri fusion). Les sous-listes sont triées indépendamment puis fusionnées.
+Un **controller** orchestre les opérations et décide dynamiquement du prochain pas :
+
+1. Analyse l'état actuel du graphe (quels thoughts existent, leurs scores, les connexions)
+2. Décide quelle opération appliquer : generate, aggregate, refine, ou score
+3. Sélectionne les thoughts cibles de l'opération
+4. Vérifie les conditions d'arrêt (solution trouvée, budget épuisé, convergence)
+
+Le controller peut être le LLM lui-même (coûteux en tokens mais flexible) ou un algorithme programmé (moins flexible mais prévisible et économique). En pratique, un controller hybride fonctionne le mieux : des règles programmées pour la structure globale, et le LLM pour les décisions fines.
+
+<Callout type="paper" title="Résultats sur le tri de nombres">
+Trier 128 nombres : CoT atteint 12% de réussite, ToT 36%, GoT **62%**. GoT excelle ici parce que le tri est **naturellement décomposable** en sous-problèmes indépendants (tri fusion). Les sous-listes sont triées indépendamment (branches parallèles), puis fusionnées (agrégation). C'est exactement le type de problème pour lequel GoT a été conçu.
 </Callout>
 
-## Cas d'usage
+## Cas d'usage concrets
 
-**Problèmes décomposables** : qui se divisent en sous-problèmes indépendants à recombiner.
-- Tri et fusion
-- Analyse multi-critères
-- Planification
+**Problèmes décomposables** : tout problème qui se divise naturellement en sous-problèmes indépendants à recombiner.
+- Tri et fusion de données
+- Analyse multi-critères (chaque critère évalué séparément, puis synthèse)
+- Planification de projets (sous-tâches parallèles, puis coordination)
 
-**Écriture collaborative** : chaque branche = paragraphe, agrégation = texte cohérent, raffinement = fluidité.
+**Écriture collaborative** : chaque branche génère un paragraphe ou une section. L'agrégation produit un texte cohérent. Le raffinement améliore la fluidité et corrige les incohérences entre sections. C'est comme un processus éditorial automatisé.
 
-**Debugging** : hypothèses parallèles, agrégation des résultats tests, diagnostic raffiné.
+**Debugging** : générer des hypothèses de bugs en parallèle (Generate), tester chacune (Score), combiner les diagnostics (Aggregate), affiner le diagnostic final (Refine). Le graphe capture naturellement le processus d'élimination et de synthèse.
 
-## Comparaison des paradigmes
+## Comparaison des paradigmes de raisonnement
 
 | Paradigme | Structure | Opérations | Coût relatif | Meilleur pour |
 |---|---|---|---|---|
-| CoT | Chaîne | Séquentiel | 1× | Simple, rapide |
-| Self-Consistency | Chaînes multiples | Vote | K× | Robustesse |
-| ToT | Arbre | Branch + Prune | 10-30× | Exploration |
-| GoT | Graphe | Branch + Merge + Refine | 20-50× | Composites |
+| CoT | Chaîne | Séquentiel | 1x | Simple, rapide |
+| Self-Consistency | Chaînes multiples | Vote majoritaire | Kx | Robustesse |
+| ToT | Arbre | Branch + Prune | 10-30x | Exploration |
+| GoT | Graphe | Branch + Merge + Refine | 20-50x | Problèmes composites |
 
-<Callout type="tip" title="La hiérarchie">
-Commencez par CoT. Si inconsistent, ajoutez self-consistency. Si exploration nécessaire, passez à ToT. GoT = seulement pour problèmes vraiment décomposables.
+<Callout type="tip" title="La hiérarchie pratique">
+Commencez toujours par CoT. Si les résultats sont inconsistants, ajoutez self-consistency (plusieurs chaînes + vote). Si l'exploration est nécessaire, passez à ToT. GoT n'est justifié que pour des problèmes **vraiment décomposables** où la fusion de sous-solutions apporte une valeur claire. Ne complexifiez que quand le simple échoue.
 </Callout>
 
 ## Limitations pratiques
 
-**Orchestration complexe** : quand brancher, agréger, raffiner ? Si c'est le LLM qui décide, le surcoût en tokens est énorme.
+**Orchestration complexe** : quand brancher ? Quand agréger ? Quand raffiner ? Si c'est le LLM qui prend toutes ces décisions, le surcoût en tokens pour la "méta-réflexion" est énorme — parfois plus cher que le raisonnement lui-même.
 
-**Coût prohibitif** : 5 branches × 3 niveaux × merges + refines = 50+ appels LLM pour un problème. Rarement justifiable pour tâches quotidiennes.
+**Coût prohibitif** : 5 branches x 3 niveaux x merges + refines = 50+ appels LLM pour un seul problème. À 0.01$ par appel, ça fait 0.50$ par question. Rarement justifiable pour des tâches quotidiennes quand un simple CoT à 0.01$ fait l'affaire 90% du temps.
 
-<Callout type="warning" title="Coût vs bénéfice">
-GoT théoriquement élégant, mais rarement utilisé en production. Les modèles de raisonnement modernes (o1, DeepSeek-R1) internalisent l'exploration en un seul forward pass. Meilleur rapport coût/bénéfice pour la plupart.
+**Latence** : même avec du parallélisme, un graphe profond implique des dépendances séquentielles (il faut les résultats des branches avant de fusionner). La latence totale peut atteindre 30-60 secondes pour un problème complexe.
+
+<Callout type="warning" title="Coût vs bénéfice : la réalité">
+GoT est théoriquement élégant, mais rarement utilisé en production. Les modèles de raisonnement modernes (o1, DeepSeek-R1) **internalisent** l'exploration et le raffinement en un seul forward pass, avec un meilleur rapport coût/bénéfice. Ils font "dans leur tête" ce que GoT fait explicitement avec des dizaines d'appels API. Pour la majorité des cas d'usage, les reasoning models sont une meilleure option.
 </Callout>
 
 ## Perspective
 
-GoT c'est l'aboutissement logique de CoT → ToT → GoT. Le raisonnement = problème de recherche dans un graphe. Même si GoT explicite est peu utilisé, ses idées (agrégation, raffinement) persistent dans les systèmes d'agents et de raisonnement modernes.
+GoT représente l'aboutissement logique de la progression CoT vers ToT vers GoT : le raisonnement comme problème de **recherche dans un graphe**. Même si GoT explicite est peu déployé en production, ses idées fondamentales — agrégation de solutions partielles, raffinement itératif, recombinaison de branches — persistent et influencent directement les systèmes d'agents modernes et les architectures de raisonnement.
 
-GoT montre ce qui est théoriquement possible. La pratique tend vers des approches plus légères qui atteignent les mêmes bénéfices.
+GoT montre ce qui est théoriquement possible. La pratique tend vers des approches plus légères (reasoning models, agents avec outils) qui atteignent les mêmes bénéfices avec moins de surcoût.

@@ -3,62 +3,75 @@ title: "Distillation de modèles"
 description: "La distillation de connaissances transfère le savoir d'un grand modèle teacher vers un petit modèle student, permettant des modèles compacts et rapides avec des performances préservées."
 ---
 
-## Le problème : un gros modèle c'est lent
+## Le problème : un gros modèle c'est lent et cher
 
-Imaginez un expert très compétent (mais lent) qui doit transmettre ses connaissances à un apprenti. L'expert ne peut pas faire un clone de lui-même en miniature — mais il peut **montrer son raisonnement** et laisser l'apprenti apprendre en l'imitant. C'est exactement la distillation.
+Imaginez un professeur d'université brillant mais qui facture 500 euros de l'heure. Vous ne pouvez pas le mettre devant chaque étudiant 24h/24. Mais si ce professeur passe du temps à **former un assistant**, cet assistant pourra répondre à 80% des questions pour une fraction du coût. C'est exactement le principe de la distillation.
 
-Vous avez un modèle GPT-4 merveilleux qui pense à 100%, mais il coûte cher et met 2 secondes par réponse. Le RAG avancé demande des réponses rapides. Solution : créer un **petit modèle** qui apprend du grand.
+Vous avez un modèle GPT-4 qui raisonne à haut niveau, mais il coûte cher en API et met 2 secondes par réponse. Votre pipeline RAG a besoin de réponses rapides et économiques. Solution : créer un **petit modèle student** qui apprend du grand modèle **teacher**.
 
 <ArxivLink id="1503.02531" title="Distilling the Knowledge in a Neural Network (Hinton et al., 2015)" />
 
 <Callout type="info" title="Les probabilités cachées du modèle">
-Un modèle ne produit pas juste un label : il donne des **probabilités pour chaque classe**. Un modèle qui classe une image de chat donne peut-être : chat 90%, tigre 7%, lion 2%. Ces petites probabilités contiennent de l'**or pédagogique** — elles disent "chat ressemble à tigre" — que les labels durs (juste "chat") ne capturent pas.
+Un modèle ne produit pas juste une réponse : il donne des **probabilités pour chaque token possible**. Quand il classe une image de chat, il dit peut-être : chat 90%, tigre 7%, lion 2%, chien 1%. Ces petites probabilités contiennent de l'**or pédagogique** — elles révèlent que "un chat ressemble un peu à un tigre" — une information que le label brut "chat" ne capture pas du tout. La distillation exploite cette richesse.
 </Callout>
 
 ## Comment ça marche : la température magique
 
-La distillation combine deux signaux :
+La loss de distillation combine deux signaux d'apprentissage :
 
-```
-Loss = alpha × Cross-entropy(vraie réponse, réponse student)
-     + (1 - alpha) × KL(distributions teacher et student)
-```
+$$\mathcal{L} = \alpha \cdot \text{CE}(\text{vraie réponse},\, \text{réponse student}) + (1 - \alpha) \cdot \text{KL}(\text{distribution teacher} \| \text{distribution student})$$
 
-Le **truc magique** : la **température T**. Avec T=1 (normal), le modèle sort cat: 0.90, tiger: 0.07. Avec T=4, il sortait cat: 0.73, tiger: 0.18. Les petites probabilités deviennent visibles — c'est comme passer des lunettes à infrarouge pour voir la chaleur cachée.
+Le premier terme est classique : le student apprend la bonne réponse. Le second est la magie de la distillation : le student apprend à **imiter la distribution complète** du teacher, pas juste sa réponse finale.
+
+Le **truc clé** : la **température T**. Normalement (T=1), le modèle produit des probabilités très concentrées : chat 0.90, tigre 0.07, lion 0.02. Avec T=4, les probabilités s'aplatissent : chat 0.45, tigre 0.25, lion 0.15. Les petites probabilités deviennent visibles et exploitables. C'est comme passer des lunettes à infrarouge pour voir la chaleur cachée — toute la structure de similarité entre les classes apparaît.
 
 <Callout type="tip" title="Température optimale en pratique">
-T=3 marche presque toujours. Trop bas (T=1) : pas de signal. Trop haut (T=10) : tout devient flou. Testez sur vos données.
+T=3 à T=5 marche bien dans la plupart des cas. Trop bas (T=1) : le signal de distillation est trop "dur", les nuances disparaissent. Trop haut (T=10) : tout devient uniformément flou et le signal perd sa valeur. Ajustez sur vos données.
 </Callout>
 
 
 
-
-## Pour les gros modèles de langage (LLM)
-
-Avec les LLM, deux approches cohabitent :
+## Pour les LLM : deux approches selon l'accès
 
 ### Approche 1 : Copier les réponses (black-box)
-Vous ne pouvez accéder au modèle propriétaire que via une API ? Pas grave. Posez-lui 100K questions, récupérez ses réponses, et fine-tunez le petit modèle dessus comme du supervised learning classique. **Alpaca** et **Vicuña** fonctionnent ainsi. Le gros modèle reste une boîte noire.
+Vous n'avez accès au modèle teacher que via une API (GPT-4, Claude) ? Pas de problème. La recette :
+1. Générez 100K+ questions représentatives de votre cas d'usage
+2. Envoyez-les au teacher, récupérez ses réponses
+3. Fine-tunez un petit modèle open-source sur ces paires (question, réponse)
+
+C'est ainsi que **Alpaca** et **Vicuna** ont été créés : des petits modèles entraînés sur les réponses de GPT-4. Le teacher reste une boîte noire, mais ses réponses transmettent une partie de son savoir.
 
 ### Approche 2 : Imiter les logits (white-box)
-Si vous avez accès au code source, vous pouvez faire mieux : comparez directement les distributions token par token. C'est plus efficace mais demande le code.
+Si vous avez accès aux poids du teacher (modèles open-source), vous pouvez aller plus loin : comparer directement les **distributions de probabilité** token par token entre teacher et student. C'est mathématiquement plus riche que de copier juste la réponse finale, car le student apprend aussi les "hésitations" du teacher.
 
-<Callout type="paper" title="Attention : perte d'intelligence">
-Des études montrent que copier les réponses copie le **style** mais pas la **profondeur du raisonnement**. Orca contourne ça en forçant le modèle enseignant à générer du chain-of-thought. Le petit modèle apprend le **processus**, pas juste la réponse.
+<Callout type="paper" title="Attention : perte de profondeur">
+Des études montrent que la distillation black-box copie le **style** du teacher mais pas nécessairement la **profondeur de son raisonnement**. Le projet Orca a contourné ce problème en demandant au teacher de générer du **chain-of-thought** (raisonnement étape par étape). Le student n'apprend pas juste "la réponse est 42" mais "voici comment j'arrive à 42". C'est bien plus efficace pour les tâches de raisonnement.
 </Callout>
 
-## En pratique
+## En pratique : ordres de grandeur
 
-Pour un 7B → 3B :
-- Taille du dataset de distillation : 100K-500K exemples
-- Temps d'entraînement : quelques heures
-- Perte de qualité : ~10-20% selon la complexité
-- Gain de vitesse : 2-3×
+Pour distiller un 7B vers un 3B :
+- **Dataset** : 100K-500K exemples de qualité
+- **Temps d'entraînement** : quelques heures sur 4-8 GPU
+- **Perte de qualité** : ~10-20% selon la complexité des tâches
+- **Gain de vitesse** : 2-3x en inférence
 
-Vous pouvez aussi combiner distillation + quantification pour compresser 8× : GPT-4 → Mistral-7B (distillé) → Mistral-4-bit = 8× plus léger, 70% de la qualité.
+Vous pouvez aussi **empiler** les compressions : GPT-4 → Mistral-7B (distillé) → Mistral-7B-4bit (quantifié) = un modèle **8x plus léger** qui conserve environ 70% de la qualité originale. Distillation et quantification sont complémentaires : la première réduit le nombre de paramètres, la seconde réduit la taille de chaque paramètre.
 
 <Callout type="warning" title="Avant de distiller depuis une API">
-OpenAI interdit contractuellement d'utiliser ses sorties pour entraîner des modèles concurrents. Vérifiez vos termes. Les modèles open-source type LLaMA : c'est OK.
+OpenAI et d'autres fournisseurs **interdisent contractuellement** d'utiliser leurs sorties pour entraîner des modèles concurrents. Lisez attentivement les conditions d'utilisation. En revanche, les modèles open-source comme LLaMA, Mistral ou Qwen : aucune restriction (vérifiez la licence spécifique quand même).
 </Callout>
 
-La distillation n'est pas une solution miracle mais un **compromis intelligent** : vous perdez 10-20% de qualité pour gagner 3× en vitesse. Pour le RAG, c'est souvent un bon deal.
+## Quand distiller ?
+
+La distillation est le bon choix quand :
+- Vous avez un excellent gros modèle mais votre budget d'inférence est limité
+- Votre cas d'usage est **spécialisé** (le student n'a pas besoin de tout savoir, juste votre domaine)
+- La latence compte (chatbot temps réel, pipeline RAG avec plusieurs appels)
+
+Elle n'est **pas** le bon choix quand :
+- Vous avez besoin de la pleine capacité de raisonnement du teacher (pas de raccourci possible)
+- Votre domaine est trop varié pour être couvert par un dataset de distillation raisonnable
+- Les conditions d'utilisation du teacher l'interdisent
+
+La distillation n'est pas une solution miracle mais un **compromis intelligent** : vous perdez 10-20% de qualité pour gagner 2-3x en vitesse et diviser les coûts par 5-10. Pour le RAG en production, c'est souvent un excellent deal.

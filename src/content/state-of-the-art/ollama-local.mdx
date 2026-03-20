@@ -7,15 +7,19 @@ description: "Ollama simplifie l'exécution de LLM en local avec une interface d
 
 ## Le rêve : un modèle IA sur votre laptop
 
-Fini les APIs payantes. Fini les données qui quittent votre machine. Fini la dépendance réseau. Vous téléchargez un modèle, il vit sur votre disque dur, il tourne **offline** sur votre GPU/CPU.
+Pendant longtemps, faire tourner un LLM sur sa propre machine relevait du parcours du combattant. Il fallait compiler des librairies C++, gérer des dépendances CUDA obscures, convertir des formats de poids manuellement, et prier pour que rien ne plante. En 2023, seuls les devs les plus motivés y arrivaient.
 
-C'était un cauchemar en 2023. Aujourd'hui, grâce à **Ollama**, c'est une commande.
+Aujourd'hui, c'est une seule commande.
 
-<Callout type="info" title="Pourquoi local c'est beau">
-Confidentialité : zéro données transmises. Coût : gratuit après l'investissement hardware. Latence : pas de réseau. Disponibilité : fonctionne sans internet. Parfait pour les devs, les entreprises soucieuses de sécurité, les experimenteurs.
+L'inférence locale, c'est l'idée de télécharger un modèle sur votre disque dur et de le faire tourner **offline**, directement sur votre GPU ou votre CPU. Pas d'API payante, pas de données qui quittent votre machine, pas de dépendance réseau. Le modèle vit chez vous, point final.
+
+<Callout type="info" title="Pourquoi l'inférence locale change la donne">
+**Confidentialité** : zéro données transmises à un serveur externe — crucial pour les entreprises avec des données sensibles. **Coût** : gratuit après l'investissement hardware, pas de facture par token. **Latence** : pas d'aller-retour réseau, la réponse est quasi-instantanée pour les petits modèles. **Disponibilité** : fonctionne sans internet, dans un avion, dans un bunker. Parfait pour les devs, les chercheurs, et les entreprises soucieuses de sécurité.
 </Callout>
 
-## Ollama en 2 minutes
+## Ollama : Docker pour les LLM
+
+**Ollama** est l'outil qui a démocratisé l'inférence locale. Son principe est simple : il fait pour les LLM ce que Docker fait pour les applications — il empaquette tout (modèle, configuration, dépendances) dans un format standard et le rend exécutable en une commande.
 
 ```bash
 # Installation (une commande)
@@ -31,29 +35,29 @@ curl http://localhost:11434/api/generate -d '{
 }'
 ```
 
-Voilà. Mistral 7B tourne sur votre machine. Aucune config.
+Voilà. Mistral 7B tourne sur votre machine. Aucune configuration, aucune dépendance à installer manuellement. Ollama gère le téléchargement, la quantification, et l'allocation mémoire automatiquement.
 
-## Modèles disponibles
+## Les modèles disponibles : il y en a pour tous les GPU
 
-Ollama vend une librairie de modèles **pré-quantifiés** en GGUF (un format léger) :
+Ollama propose une bibliothèque de modèles **pré-quantifiés** au format GGUF — un format optimisé pour l'inférence sur CPU et GPU grand public. Concrètement, les modèles sont compressés (souvent en 4 bits) pour tenir dans des quantités raisonnables de RAM :
 
-| Modèle | RAM | Vélocité |
-|---|---|---|
-| Phi-3 Mini (3.8B) | 3 Go | Super rapide |
-| Mistral (7B) | 5 Go | Rapide |
-| LLaMA 3 (8B) | 5 Go | Rapide |
-| Gemma 2 (9B) | 6 Go | Rapide |
-| LLaMA 3 (70B) | 40 Go | Lent mais faisable |
+| Modèle | RAM nécessaire | Vitesse approximative | Cas d'usage |
+|---|---|---|---|
+| Phi-3 Mini (3.8B) | 3 Go | Très rapide | Prototypage, tâches simples |
+| Mistral (7B) | 5 Go | Rapide | Bon généraliste |
+| LLaMA 3 (8B) | 5 Go | Rapide | Polyvalent, écosystème riche |
+| Gemma 2 (9B) | 6 Go | Rapide | Fort en raisonnement |
+| LLaMA 3 (70B) | 40 Go | Lent mais faisable | Qualité quasi-cloud |
 
-Votre MacBook M1 avec 16 Go de RAM ? LLaMA 3 8B tourne. Pas vite (15 tokens/sec) mais ça tourne.
+Un MacBook M1 avec 16 Go de RAM fait tourner LLaMA 3 8B confortablement. Pas aussi vite qu'une API cloud (comptez 10-15 tokens/seconde), mais suffisant pour du développement, du RAG local, ou des tests.
 
 <Callout type="tip" title="Importer vos modèles perso">
-Vous avez un modèle Hugging Face custom ? Convertissez-le en GGUF, créez un Modelfile qui le référence, et `ollama create mon-modele`. C'est chez vous maintenant.
+Vous avez fine-tuné un modèle sur Hugging Face ? Convertissez-le en GGUF avec `llama.cpp`, créez un Modelfile qui le référence, et lancez `ollama create mon-modele`. Le modèle est désormais accessible exactement comme les modèles officiels.
 </Callout>
 
-## Personnalisation via Modelfile
+## Personnaliser un modèle avec un Modelfile
 
-Vous pouvez tweaker chaque modèle :
+L'un des atouts d'Ollama, c'est la possibilité de créer des variantes personnalisées d'un modèle — un peu comme un Dockerfile crée une image custom à partir d'une image de base :
 
 ```dockerfile
 FROM mistral
@@ -62,58 +66,67 @@ PARAMETER temperature 0.7
 PARAMETER num_ctx 8192
 
 SYSTEM """
-Tu es un expert Python.
-Réponds toujours avec du code.
+Tu es un expert Python senior.
+Réponds toujours avec du code commenté.
+Privilégie la clarté à la concision.
 """
 ```
 
 ```bash
 ollama create python-expert -f Modelfile
-ollama run python-expert "comment faire un list comprehension ?"
+ollama run python-expert "comment faire un list comprehension avec filtre ?"
 ```
 
-## L'écosystème
+Vous pouvez ajuster la température, la taille du contexte, le prompt système, et même combiner plusieurs modèles. C'est un système de personnalisation puissant qui ne nécessite aucun fine-tuning.
 
-Ollama expose une API REST compatible :
-- **OpenAI** (endpoint `/v1/chat/completions`)
-- **LangChain** (`ChatOllama`)
-- **Continue.dev** (autocomplete VS Code)
-- **Open WebUI** (interface ChatGPT-like)
+## L'écosystème : Ollama parle à tout le monde
 
-Votre code peut switcher entre OpenAI, local, Anthropic sans changement.
+Un choix de design brillant : Ollama expose une API REST **compatible OpenAI** (endpoint `/v1/chat/completions`). Concrètement, n'importe quel code qui appelle l'API OpenAI peut pointer vers Ollama en changeant juste l'URL de base. Votre code peut switcher entre OpenAI, Ollama local, ou Anthropic sans modification.
 
-## Concurrents
+Les intégrations principales :
+- **LangChain** (`ChatOllama`) : pour construire des chaînes RAG et des agents
+- **Continue.dev** : autocomplete IA dans VS Code, alimenté par votre modèle local
+- **Open WebUI** : une interface web ChatGPT-like qui se connecte à Ollama
+- **LibreChat** : interface multi-modèle avec historique de conversations
+
+## Les concurrents : chacun son style
 
 ### LM Studio
-Interface graphique complète, navigateur de modèles intégré, monitoring GPU. Pour ceux qui aiment les UIs.
+Interface graphique complète avec un navigateur de modèles intégré, monitoring GPU en temps réel, et gestion visuelle des paramètres. Si vous préférez les interfaces visuelles à la ligne de commande, c'est le choix évident.
 
 ### Jan
-Open-source, privacy-first, plugins. Alternative fancy à Ollama.
+Open-source et privacy-first, avec un système de plugins extensible. Se positionne comme une alternative respectueuse de la vie privée à ChatGPT.
 
 ### GPT4All
-Pour les non-devs. CPU seul, installation Windows/Mac en un clic.
+Conçu pour les non-développeurs. Fonctionne uniquement sur CPU, installation en un clic sur Windows et Mac. Le compromis vitesse/accessibilité.
 
-## Combien de RAM vous faut-il ?
+## Combien de RAM vous faut-il ? Le guide réaliste
 
-**CPU seul** (pas de GPU) :
-- 3B Q4 : 4 Go → 5-10 tokens/sec
-- 7B Q4 : 6 Go → 3-7 tokens/sec
+La question que tout le monde se pose. Voici les chiffres concrets :
+
+**CPU seul** (pas de GPU dédié) :
+- 3B en Q4 : 4 Go de RAM → 5-10 tokens/sec (utilisable pour du chat simple)
+- 7B en Q4 : 6 Go de RAM → 3-7 tokens/sec (lent mais fonctionnel)
 
 **GPU NVIDIA RTX 4090** (24 Go VRAM) :
-- 30B Q4 : 40-80 tokens/sec ✨
+- 13B en Q4 : 30-50 tokens/sec (excellent)
+- 30B en Q4 : 40-80 tokens/sec avec offloading partiel
 
-**Apple M1 (8 Go RAM partagée)** :
-- 7B Q4 : 10-15 tokens/sec
+**Apple Silicon M1/M2** (RAM partagée GPU/CPU) :
+- 7B en Q4 : 10-15 tokens/sec sur M1 16 Go
+- 13B en Q4 : 8-12 tokens/sec sur M2 Pro 32 Go
 
 <Callout type="warning" title="RAM unifiée Apple ≠ VRAM dédiée">
-Votre M2 Pro a 16 Go de RAM. Ça ne signifie **pas** que vous pouvez charger un modèle 16B. Le système d'exploitation utilise 4-6 Go. Réalité : 7B Q4 c'est le max confortable.
+Votre M2 Pro a 16 Go de RAM. Mais attention : le système d'exploitation en consomme 4-6 Go, votre navigateur encore 2-3 Go. En réalité, il vous reste 8-10 Go pour le modèle. Un modèle 7B en Q4 (~5 Go) passe confortablement. Un 13B, c'est serré. Surveillez votre swap — si le système commence à écrire sur le disque, les performances s'effondrent.
 </Callout>
 
-## Checklist pour la perf
+## Checklist pour optimiser les performances
 
-1. Quantification Q4_K_M (défaut, bon) ou Q5_K_M (si RAM permet)
-2. Réduire `num_ctx` si RAM limit : chaque token de contexte = mémoire
-3. `--gpu-layers` : envoyer un max de couches sur le GPU
-4. Monitor l'utilisation mémoire : le swap disque tue la performance
+1. **Quantification** : Q4_K_M est le défaut recommandé (bon équilibre taille/qualité). Q5_K_M si votre RAM le permet, pour un léger gain de qualité
+2. **Taille du contexte** : réduisez `num_ctx` si la RAM est limitée — chaque token de contexte consomme de la mémoire proportionnellement à la taille du modèle
+3. **Offloading GPU** : utilisez `--gpu-layers` pour envoyer un maximum de couches sur le GPU — chaque couche déplacée accélère significativement l'inférence
+4. **Monitoring** : surveillez l'utilisation mémoire en temps réel — dès que le système swap sur le disque, la performance chute de 10x ou plus
 
-L'inférence locale est **maintenant accessible**. Un laptop 2023 lance facilement du 7-13B. Pour du RAG local sur vos documents ? Ollama + LangChain + Chroma (base vectorielle en mémoire) = système complet gratuit sur votre machine.
+## Le stack local complet : RAG gratuit sur votre machine
+
+L'inférence locale est **maintenant accessible à quiconque a un laptop récent**. Un modèle 7-13B tourne sur la plupart des machines de 2023+. Et le plus excitant, c'est ce qu'on peut construire par-dessus : **Ollama + LangChain + ChromaDB** (base vectorielle en mémoire) = un système RAG complet, entièrement gratuit, qui tourne offline sur vos documents. Pas de données qui partent dans le cloud, pas de facture à la fin du mois. C'est le futur du développement IA personnel.

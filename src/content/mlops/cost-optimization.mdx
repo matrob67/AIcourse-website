@@ -3,122 +3,119 @@ title: "Optimisation des coûts LLM : caching, routing, batching"
 description: "Les LLM coûtent cher. Réduisez la facture de 50-70% : semantic caching, routing intelligent, batching."
 ---
 
-## Les LLM vident votre budget
+## Les LLM peuvent vider votre budget en silence
 
-GPT-4 coûte $30 par million de tokens d'entrée et $60 par million de tokens de sortie. Ça semble pas cher en unité, mais pour une application à gros trafic ça devient vite des dizaines de milliers de dollars par mois.
+GPT-4o coûte $2,50 par million de tokens d'entrée et $10 par million de tokens de sortie. Claude Sonnet, dans la même gamme. En unité, ça semble dérisoire. Mais pour une application à fort trafic (10 000 requêtes par jour avec des prompts longs), la facture grimpe à des dizaines de milliers de dollars par mois.
 
-**La vraie question** : vous l'aviez pas correctement estimé au départ. Une appli en production qui coûtait $500/mois peut exploser à $50 000/mois. Beaucoup de startups ML ont fermé à cause d'une facture LLM catastrophique.
+**Le vrai problème** : beaucoup d'équipes ne l'estiment pas correctement au départ. Un prototype qui coûtait $500/mois peut exploser à $50 000/mois quand le trafic décolle. Des startups ont fermé à cause d'une facture LLM devenue insoutenable. L'optimisation des coûts n'est pas un nice-to-have, c'est une question de survie.
 
-<Callout type="info" title="L'anatomie des coûts">
-Trois trucs qui coûtent : (1) tokens d'entrée, (2) tokens de sortie, (3) le modèle choisi. Optimiser chacun de ces trois éléments : moins de contexte, limiter la sortie, choisir le modèle moins cher possible qui marche.
+<Callout type="info" title="Les trois leviers de coût">
+Trois choses déterminent votre facture : (1) le nombre de tokens d'entrée (la taille de vos prompts et contextes), (2) le nombre de tokens de sortie (la longueur des réponses), et (3) le modèle choisi (GPT-4o vs GPT-4o-mini = 10x de différence de prix). Optimiser chacun de ces leviers indépendamment permet de réduire la facture de 50-70%.
 </Callout>
 
-## Caching : laissez votre GPU respirer
+## Caching : ne payez pas deux fois pour la même réponse
 
-### Exact caching
+### Exact caching : le fruit le plus facile à cueillir
 
-Si quelqu'un pose **exactement la même requête**, retournez la réponse précédente. Zéro appel API.
+Si un utilisateur pose **exactement la même requête** qu'un utilisateur précédent, retournez la réponse en cache. Zéro appel API, zéro coût, latence quasi-nulle.
 
-**Gain** : dépend de votre app. FAQ bot = 30-50% des requêtes répétées. Chat général = < 5%.
+**Impact réel** : dépend fortement de votre application. Un chatbot FAQ avec des questions standardisées voit 30-50% de cache hits. Un assistant conversationnel libre, plutôt 3-5%. Même 5%, c'est de l'argent gratuit.
 
-### Semantic caching
+### Semantic caching : l'intelligence au-delà du mot à mot
 
-Au lieu de chercher une exact match, cherchez une **requête sémantiquement similaire**. "Quel temps fait-il à Paris ?" et "Météo parisienne ?" retourneraient la même réponse.
+L'exact match rate beaucoup de doublons. "Quel temps fait-il à Paris ?" et "Météo à Paris aujourd'hui ?" sont sémantiquement identiques mais textuellement différentes. Le semantic caching résout ça :
 
-**Comment** :
-1. Convertissez la requête en embedding (vecteur)
-2. Comparez avec les requêtes précédentes
-3. Si similarité cosinus > 0.95, retournez la réponse cached
-4. Sinon, appelez le LLM et cache la nouvelle réponse
+1. Convertissez chaque requête en embedding (vecteur sémantique)
+2. Comparez avec les requêtes précédentes via la similarité cosinus
+3. Si la similarité dépasse un seuil (ex: 0.95), retournez la réponse du cache
+4. Sinon, appelez le LLM, cachez la nouvelle paire requête/réponse
 
-**Outils** : GPTCache, Redis avec extensions vectorielles, FAISS.
+**Outils** : GPTCache (dédié), Redis avec extensions vectorielles, FAISS pour le stockage d'embeddings.
 
-<Callout type="tip" title="Le seuil parfait c'est l'équilibre">
-Trop bas (0.8) = retournez des réponses mauvaises. Trop haut (0.98) = le cache rate tout le temps. Commencez à 0.95 et tweak basé sur le taux de hit du cache et le feedback utilisateur.
+<Callout type="tip" title="Le seuil de similarité : un réglage délicat">
+Un seuil trop bas (0.80) retourne des réponses incorrectes pour des requêtes qui semblent proches mais ne le sont pas. Un seuil trop haut (0.99) ne matche presque rien. Commencez à 0.95, mesurez le taux de cache hit et collectez du feedback utilisateur pour ajuster. Le bon seuil est celui qui maximise les hits sans dégrader la qualité perçue.
 </Callout>
 
-### Prompt caching (côté provider)
+### Prompt caching côté provider : des réductions massives
 
-Anthropic et OpenAI offrent du caching au niveau API :
+Anthropic et OpenAI proposent du caching au niveau de leur API :
 
-- **Anthropic Prompt Caching** : les tokens du système prompt et du contexte coûtent **90% moins cher** s'ils sont cachés
-- **OpenAI Cached Tokens** : les préfixes longs coûtent 50% moins cher
+- **Anthropic Prompt Caching** : les tokens du system prompt et du contexte qui se répètent entre les requêtes coûtent **90% moins cher** quand ils sont en cache côté serveur. Pour une application RAG où le system prompt est identique à chaque requête, c'est une réduction massive.
+- **OpenAI Cached Tokens** : les préfixes longs qui se répètent (system prompt, few-shot examples) bénéficient d'une réduction de 50%
 
-C'est particulièrement efficace pour RAG : le prompt système est identique à chaque requête.
+C'est particulièrement efficace pour les patterns RAG et agent, où le system prompt et le contexte de base sont identiques d'une requête à l'autre.
 
+## Routing intelligent : ne payez pas le prix fort pour une question simple
 
+### L'intuition fondamentale
 
-## Routing : ne payez pas plus que nécessaire
+Toutes les requêtes n'ont pas besoin du modèle le plus puissant (et le plus cher). "Quelle est la capitale de la France ?" peut être traitée par un modèle à $0.10/M tokens. "Analyse les implications juridiques de ce contrat de 20 pages" nécessite un modèle à $10/M tokens. Envoyer la première requête au modèle cher, c'est jeter de l'argent par la fenêtre.
 
-### L'intuition
+### Stratégies de routing
 
-Pas tout le monde a besoin du modèle le plus cher. "Quel est la capitale de la France ?" → modèle cheap. "Analyze cette complexité contract juridique" → modèle puissant.
+**Par complexité estimée** : un petit classifieur (fine-tuné ou basé sur des heuristiques) estime si la requête est simple ou complexe. Simple &rarr; modèle économique (Claude Haiku, GPT-4o-mini). Complexe &rarr; modèle premium (Claude Sonnet, GPT-4o).
 
-### Stratégies
+**Par domaine** : requête de code &rarr; modèle spécialisé code. Question médicale &rarr; modèle médical. Conversation générale &rarr; généraliste. Chaque modèle spécialisé peut être plus petit et moins cher tout en étant meilleur sur son domaine.
 
-**Par complexité** : un classifier estime si la requête est simple ou complexe. Simple → Claude Haiku. Complexe → Claude Sonnet.
+**En cascade** : envoyez d'abord au modèle économique. Si sa réponse semble peu fiable (confiance basse), escaladez vers le modèle premium. La majorité des requêtes sont traitées à bas coût.
 
-**Par domaine** : code → modèle fine-tuné pour code. Médecine → modèle médical. Général → généraliste.
-
-**En cascade** : essayez d'abord le cheap, et si sa confiance est basse, escaladez au puissant.
-
-<Callout type="paper" title="Le cascade math">
-60-80% des requêtes peuvent être traitées par un petit modèle. Seulement 20-40% nécessitent le puissant. Le coût total : 50-70% moins cher pour une dégradation minimale.
+<Callout type="paper" title="Les maths de la cascade">
+En pratique, 60-80% des requêtes d'une application typique peuvent être traitées correctement par un petit modèle. Seuls 20-40% nécessitent le modèle premium. Si le modèle économique coûte 10x moins, le coût total chute de 50-70% avec une dégradation de qualité minimale sur l'ensemble.
 </Callout>
 
-### Évaluer la confiance
+### Comment évaluer la confiance du petit modèle
 
-Pour le fallback, mesurez si le petit modèle est sûr :
+Pour décider si le petit modèle suffit ou s'il faut escalader :
 
-- **Log-probabilities** : si elles sont hautes, le modèle est confiant
-- **Vérifieur** : un second modèle valide la réponse du premier
-- **Heuristiques** : longueur, présence de caveats ("je ne suis pas sûr")
+- **Log-probabilities** : des probabilités élevées indiquent que le modèle est confiant dans sa réponse. Sous un seuil, escaladez.
+- **Vérifieur externe** : un second modèle (petit et rapide) valide la réponse du premier. Si la validation échoue, escaladez.
+- **Heuristiques simples** : la réponse contient-elle des marqueurs d'incertitude ("je ne suis pas sûr", "il est possible que") ? Est-elle anormalement courte ou longue ?
 
-## Optimiser les prompts
+## Optimiser les prompts : moins de tokens = moins de coûts
 
-### Réduire le contexte
+### Réduire le contexte d'entrée
 
-- **Résumer les documents RAG** : au lieu de passer 5 documents entiers, passez un résumé
-- **Sélectionner** : prendre que les 2-3 documents les plus pertinents, pas tous
-- **System prompt optimisé** : éliminer les instructions redondantes
-- **Few-shot minimal** : le moins d'exemples possible
+- **Résumer les documents RAG** : au lieu de passer 5 documents entiers dans le prompt, passez des résumés ciblés. Le ratio information/tokens est bien meilleur.
+- **Sélectionner agressivement** : ne prenez que les 2-3 documents les plus pertinents, pas les 10 premiers. La qualité du top-2 est souvent suffisante.
+- **System prompt optimisé** : éliminez les instructions redondantes, les exemples superflus, le formatage excessif. Chaque token du system prompt est facturé à chaque requête.
+- **Few-shot minimal** : utilisez le minimum d'exemples nécessaire. Souvent 1-2 exemples suffisent là où on en met 5.
 
 ### Réduire la sortie
 
-- **max_tokens limité** : pas besoin d'une réponse de 2000 tokens si 200 suffisent
-- **Structured output** : JSON compact plutôt que texte libre
-- **Instructions de concision** : "réponds en 2-3 phrases max"
+- **max_tokens limité** : si vous attendez une réponse de 200 tokens, ne laissez pas le modèle en générer 2 000 par défaut
+- **Structured output** : un JSON compact est plus économique qu'une réponse en texte libre
+- **Instructions de concision** : "Réponds en 2-3 phrases maximum" réduit la verbosité et les coûts
 
-## Batching et infrastructure
+## Batching et APIs économiques
 
-### Batch API
+### Batch API : 50% de réduction pour le non-urgent
 
-- **OpenAI Batch API** : 50% de réduction pour les requêtes non-temps-réel (résultats en 24h)
-- **Anthropic Batch API** : tarifs réduits pour batch
+- **OpenAI Batch API** : soumettez un lot de requêtes et récupérez les résultats sous 24h. 50% de réduction sur le prix standard. Parfait pour l'évaluation de datasets, le preprocessing de données, ou toute tâche qui ne nécessite pas une réponse immédiate.
+- **Anthropic Batch API** : même principe avec des tarifs réduits pour les traitements en lot
 
-### Self-hosting
+### Self-hosting : rentable au-delà d'un certain volume
 
-Pour 1-5 millions de tokens par jour, self-host un modèle open source (Llama, Mistral) peut être moins cher que l'API. Mais y'a du coût caché : location GPU, maintenance, DevOps.
+Pour un volume de 1-5 millions de tokens par jour, auto-héberger un modèle open source (Llama 3, Mistral) sur vos propres GPU peut revenir moins cher que les APIs. Un serveur avec 2x A100 coûte ~$3/heure et peut servir des millions de tokens par heure.
 
 <Callout type="warning" title="Le coût caché du self-hosting">
-GPU location, infra maintenance, monitoring, updates, compétences DevOps. Le coût par token peut être inférieur aux APIs, mais le coût total (TCO) incluant les salaires peut être plus élevé pour les petites boîtes.
+Le coût par token est inférieur aux APIs, mais le TCO (Total Cost of Ownership) inclut : location GPU, maintenance de l'infrastructure, monitoring, mises à jour de sécurité, compétences DevOps dédiées. Pour une petite équipe sans expertise infra, le coût total peut être supérieur aux APIs. Faites le calcul complet avant de vous lancer.
 </Callout>
 
-## Monitoring des coûts
+## Monitoring des coûts : la paranoïa est de mise
 
-### Métriques essentielles
+### Métriques essentielles à suivre
 
-- **Coût par requête** : input/output tokens, par modèle
-- **Coût par utilisateur** : identifier les heavy users
-- **Cache hit rate** : % de requêtes servies par cache
-- **Routing distribution** : répartition requêtes entre modèles
-- **Coût par résultat business** : rapporter le coût LLM au revenu généré
+- **Coût par requête** : ventilé par tokens d'entrée/sortie et par modèle utilisé
+- **Coût par utilisateur** : identifiez les heavy users et les patterns d'usage abusif
+- **Cache hit rate** : pourcentage de requêtes servies par le cache. Si c'est bas, votre cache est mal configuré.
+- **Distribution du routing** : répartition des requêtes entre modèles. Si 90% va au modèle cher, votre routing est à revoir.
+- **Coût par résultat business** : rapportez le coût LLM au revenu généré. C'est la métrique qui compte vraiment.
 
-### Alertes
+### Alertes automatiques
 
-- Budgets par équipe/projet
-- Alertes si dépassement de X%
-- Tendances : anticiper les coûts futurs
-- Anomalies : pic soudain = quelque chose se casse
+- **Budgets par équipe/projet** : avec notification à 50%, 80% et 100% du budget
+- **Anomalies de consommation** : un pic soudain de 5x le volume habituel = probablement un bug (boucle infinie, prompt qui grossit sans fin)
+- **Tendances** : extrapolez les coûts futurs à partir des tendances actuelles. Mieux vaut anticiper que subir.
+- **Coût unitaire** : si le coût moyen par requête augmente sans raison, investiguez immédiatement
 
-**Soyez paranoia sur les coûts. Un bug qui fait multiplier le contexte par 10 = facture multiplié par 10.**
+Soyez paranoïaque sur les coûts LLM. Un bug qui multiplie la taille du contexte par 10 (un document injecté en boucle, un historique de conversation qui ne se tronque pas) multiplie votre facture par 10. Et ça peut passer inaperçu pendant des semaines si vous ne monitorez pas.

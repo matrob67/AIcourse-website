@@ -5,18 +5,23 @@ description: "Le découpage des documents en chunks est une étape cruciale du R
 
 ## Le dilemme du chunking : trop petit ou trop gros ?
 
-Vous découpez vos documents en bouts pour l'indexation RAG. **Trop petits** (100 tokens) : perte de contexte, chaque chunk est flou. **Trop gros** (2000 tokens) : beaucoup de bruit, le retrieval ramène des matchs médiocres.
+Quand tu construis un système RAG, tu dois découper tes documents en morceaux (chunks) pour les indexer et les retrouver. Ce choix de découpage est **la décision la plus impactante** de ton pipeline RAG, et paradoxalement la plus souvent bâclée.
 
-Le chunking affecte **plus** la qualité du RAG que n'importe quelle autre décision. C'est l'étape la plus impactante et la plus ignorée.
+**Chunks trop petits** (100 tokens) : chaque morceau manque de contexte. Une phrase isolée comme "Le résultat est de 42%" ne veut rien dire sans savoir de quel résultat on parle. Le retriever ramène des fragments incompréhensibles.
 
-<Callout type="info" title="C'est jamais parfait">
-Chunks parfaits = chunks qui contiennent l'idée complète sans bruit. Dans la réalité : impossible, c'est un compromis. Des expérimentations empiriques montrent que 256-512 tokens c'est le sweet spot pour 80% des cas.
+**Chunks trop gros** (2000 tokens) : chaque morceau contient tellement de sujets différents que l'embedding dilue l'information pertinente dans du bruit. Le retriever ramène des pavés dont seules 2 phrases sont utiles.
+
+C'est le Goldilocks problem : il faut trouver la taille juste.
+
+<Callout type="info" title="Le compromis incontournable">
+Le chunk parfait contiendrait exactement une idée complète, sans bruit, avec assez de contexte pour être autonome. En réalité, c'est impossible a atteindre systématiquement. Des expérimentations empiriques convergent vers un sweet spot de 256-512 tokens pour environ 80% des cas d'usage.
 </Callout>
 
-## Stratégies
+## Stratégies de découpage
 
 ### 1. Taille fixe (naive)
-Découper tous les N tokens avec overlap.
+
+Découper tous les N tokens avec un overlap (chevauchement) entre chunks consécutifs.
 
 ```python
 from langchain.text_splitter import CharacterTextSplitter
@@ -28,13 +33,12 @@ splitter = CharacterTextSplitter(
 chunks = splitter.split_text(doc)
 ```
 
-**Force** : simple, prévisible.
-**Faiblesse** : coupe arbitrairement les phrases et paragraphes.
+**Force** : simple, prévisible, rapide. Tu sais exactement combien de chunks tu auras.
+**Faiblesse** : coupe arbitrairement au milieu des phrases et paragraphes. Un tableau peut se retrouver coupé en deux morceaux incompréhensibles.
 
-### 2. Récursif (défaut conseillé)
-Essayer d'abord les gros séparateurs (paragraphes `\n\n`), puis les petits (phrases `.`).
+### 2. Récursif (le défaut recommandé)
 
-Résultat : chunks qui respectent la structure du texte.
+Essaie d'abord de couper sur les gros séparateurs (paragraphes `\n\n`), puis descend progressivement vers des séparateurs plus fins (sauts de ligne `\n`, phrases `.`, mots ` `). Le résultat : des chunks qui respectent la structure naturelle du texte autant que possible.
 
 ```python
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -45,43 +49,46 @@ splitter = RecursiveCharacterTextSplitter(
 )
 ```
 
-**Force** : respecte la structure, peu de "chunks orphelins".
-**Faiblesse** : taille variable.
+**Force** : respecte la structure du texte, produit peu de "chunks orphelins" (fragments incomplets).
+**Faiblesse** : taille variable selon la structure du document. Certains chunks seront proches de la limite, d'autres bien plus courts.
 
-<Callout type="tip" title="Commencez par RecursiveCharacterTextSplitter">
-C'est le défaut de LangChain pour une raison. Il marche bien pour 90% des cas. Si ça marche pas, affinez après.
+<Callout type="tip" title="Commence par RecursiveCharacterTextSplitter">
+C'est le défaut de LangChain pour une bonne raison : il marche bien dans 90% des cas sans configuration. Si les résultats ne sont pas satisfaisants, affine ensuite avec une stratégie plus spécifique.
 </Callout>
 
 ### 3. Sémantique
-Calculer l'embedding de chaque phrase, couper quand la similarité chute (changement de sujet).
 
-**Force** : chunks cohérents thématiquement.
-**Faiblesse** : lent (embeddings pour chaque phrase), taille imprévisible.
+Calcule l'embedding de chaque phrase, puis détecte les ruptures thématiques en mesurant la similarité cosinus entre phrases consécutives. Quand la similarité chute brusquement, ca indique un changement de sujet : c'est la qu'on coupe.
 
-Pour : docs scientifiques ou très structurés. Pour du texte normal : overkill.
+**Force** : produit des chunks thématiquement cohérents. Chaque chunk traite d'un seul sujet.
+**Faiblesse** : lent (il faut calculer l'embedding de chaque phrase individuellement), taille de chunks imprévisible, et la qualité dépend du modèle d'embeddings utilisé pour la détection.
+
+Recommandé pour : documents scientifiques, rapports structurés. Pour du texte courant ou des FAQ, c'est généralement overkill.
 
 ### 4. Par structure du document
-Exploiter la structure existante : headers Markdown, sections, chapitres.
+
+Exploiter la structure déja présente dans le document : headers Markdown, sections HTML, chapitres PDF.
 
 ```python
-# Code simplifié : couper sur les H2
+# Exemple simplifié : couper sur les H2 Markdown
 chunks = text.split("## ")
 ```
 
-**Force** : respecte l'intention de l'auteur.
-**Faiblesse** : nécessite parsing spécifique par format (Markdown, PDF, HTML, code, etc.).
+**Force** : respecte l'intention de l'auteur. Si un document a des sections, c'est que l'auteur a jugé que chaque section forme une unité cohérente.
+**Faiblesse** : nécessite un parsing spécifique par format (Markdown, PDF, HTML, code source). Et tous les documents ne sont pas bien structurés.
 
-Pour : documentation, manuels. Overkill pour des tweets.
+Idéal pour : documentation technique, manuels, code source. Inadapté pour des textes sans structure (emails, transcriptions).
 
 ### 5. Parent-Child (avancé)
-Stocker deux niveaux de chunks :
 
-- **Enfants** (petits, 200 tokens) : indexés et recherchés
-- **Parents** (grands, 1000 tokens) : retournés au LLM après retrieval
+Stocker **deux niveaux** de chunks avec des rôles différents :
 
-Retrieval cherche les petits chunks (précis), mais le LLM reçoit le parent (contexte élargi).
+- **Enfants** (petits, ~200 tokens) : indexés dans la base vectorielle et utilisés pour le retrieval. Leur petite taille permet un matching précis.
+- **Parents** (grands, ~1000 tokens) : retournés au LLM après que le retrieval ait trouvé un enfant pertinent. Leur grande taille donne au LLM assez de contexte pour répondre correctement.
 
-## Taille optimale
+C'est le meilleur des deux mondes : précision du retrieval (petits chunks) et richesse du contexte (grands chunks).
+
+## Taille optimale par cas d'usage
 
 | Cas d'usage | Taille | Overlap |
 |---|---|---|
@@ -90,15 +97,16 @@ Retrieval cherche les petits chunks (précis), mais le LLM reçoit le parent (co
 | Code | Par fonction | 0 |
 | Juridique | Par article | 50 |
 
-<Callout type="paper" title="Étude empirique : quelle taille ?">
-Des benchmarks comparatifs montrent 256-512 tokens = meilleur compromis recall/precision pour QA. Au-delà de 1024, la qualité chute : embeddings compressent trop d'info, et les vraiment pertinents se noient dans le bruit.
+<Callout type="paper" title="Que disent les benchmarks ?">
+Les comparaisons empiriques montrent que 256-512 tokens offrent le meilleur compromis recall/precision pour le QA factuel. Au-delà de 1024 tokens, la qualité chute : les embeddings compressent trop d'informations hétérogènes en un seul vecteur, et les passages réellement pertinents se noient dans le bruit des passages voisins.
 </Callout>
 
 
 ## Enrichissement des chunks
 
 ### Métadonnées
-Chaque chunk reçoit des métadonnées filtrables : source, page, date, auteur, section.
+
+Chaque chunk devrait recevoir des métadonnées filtrables : source, page, date, auteur, section. Ca permet un filtrage **avant** la recherche vectorielle.
 
 ```json
 {
@@ -112,35 +120,34 @@ Chaque chunk reçoit des métadonnées filtrables : source, page, date, auteur, 
 }
 ```
 
-Ça permet un **filtrage efficace** : "retrouver dans les rapports 2024 seulement".
+Exemple : "retrouver dans les rapports 2024 seulement" devient un simple filtre sur la métadonnée `date`, suivi d'une recherche vectorielle sur le sous-ensemble filtré.
 
 ### Contextual Retrieval (Anthropic)
-Ajouter un **contexte court** généré par LLM pour chaque chunk, expliquant sa position dans le doc :
 
-```
-Contexte : Ce chunk est du chapitre 3 du rapport 2024,
-section résultats financiers du Q3.
+Ajouter un **résumé contextuel court** généré par LLM pour chaque chunk, expliquant sa position et son rôle dans le document d'origine :
 
-[Contenu original du chunk]
-```
+> **Contexte** : Ce chunk provient du chapitre 3 du rapport annuel 2024, section résultats financiers du Q3.
+>
+> [Contenu original du chunk]
 
-Améliore le retrieval significativement : le modèle d'embeddings a plus de contexte.
+L'embedding capture alors non seulement le contenu du chunk mais aussi son contexte dans le document. Le retrieval s'améliore significativement car le modèle d'embeddings a plus d'information pour positionner le chunk dans l'espace vectoriel.
 
 ### Hypothetical Questions
-Générer des questions auxquelles le chunk répond et les stocker avec le chunk. Le retrieval cherche plutôt sur les questions hypothétiques que sur le texte brut.
 
-## Pièges courants à éviter
+Générer des questions auxquelles le chunk pourrait répondre, et les stocker avec le chunk. Lors du retrieval, au lieu de comparer la requête utilisateur au texte brut du chunk, on la compare aux questions hypothétiques. Ca rapproche l'espace de recherche de l'usage réel (l'utilisateur pose des questions, pas des affirmations).
 
-<Callout type="warning" title="Erreurs de chunking qui tuent la qualité">
-1. **Ignorer la structure** : découper un tableau au milieu le rend incompréhensible
-2. **Overlap nul** : les idées à cheval entre deux chunks = perdues
-3. **Une taille unique** : même chunking pour code, texte, tableaux (à adapter)
-4. **Pas de nettoyage** : chunks contenant headers répétés, footers, pagination
-5. **Chunks trop longs** : 2000+ tokens = LLM ignore la majorité du contexte
+## Pièges courants a éviter
+
+<Callout type="warning" title="Erreurs de chunking qui détruisent la qualité">
+1. **Ignorer la structure** : découper un tableau ou un bloc de code au milieu le rend incompréhensible
+2. **Overlap nul** : les idées a cheval entre deux chunks sont tout simplement perdues
+3. **Une seule taille pour tout** : appliquer le même chunking a du code, du texte narratif et des tableaux est une recette pour l'échec
+4. **Pas de nettoyage** : chunks pollués par des headers répétés, des footers de page, de la pagination
+5. **Chunks trop longs** : au-delà de 2000 tokens, le LLM tend a ignorer les parties non pertinentes du contexte fourni
 </Callout>
 
-## Comment évaluer votre stratégie
+## Comment évaluer ta stratégie
 
-Meilleure méthode : créer un petit set d'évaluation (50-100 questions avec les passages attendus comme réponses). Faire varier taille, overlap, et stratégie. **Mesurer le recall@5 et @10** sur votre dataset réel.
+La meilleure méthode : créer un petit set d'évaluation (50-100 questions avec les passages attendus comme réponses). Faire varier la taille, l'overlap et la stratégie de chunking. **Mesurer le recall@5 et recall@10** sur ton dataset réel.
 
-Le chunking optimal n'est pas universel. Ça dépend de votre domaine, votre type de requêtes, votre modèle d'embeddings. Des expérimentations rapides (10 configurations différentes, mesure du recall) valent mille débats théoriques.
+Le chunking optimal dépend de ton domaine, de tes types de requêtes et de ton modèle d'embeddings. Dix configurations testées empiriquement (ca prend quelques heures) valent mille débats théoriques. Les résultats te surprendront souvent : la configuration "intuitivement optimale" n'est pas toujours la meilleure.

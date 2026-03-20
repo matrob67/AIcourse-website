@@ -5,146 +5,178 @@ description: "Les architectures LSTM et GRU, leurs mécanismes de portes (gates)
 
 ## Le problème critique des RNN vanilla
 
-Un RNN classique ? Amnesique. Après 15-20 mots, il oublie tout. C'est le **vanishing gradient** : les poids ne changent pas pour les dépendances lointaines. Comment dire "le chat qui a traversé la rue hier a faim" si le réseau oublie "chat" au moment d'écrire "faim" ?
+Un RNN classique a une mémoire de poisson rouge. Après 15-20 tokens, il oublie pratiquement tout. C'est le **vanishing gradient** : quand tu rétropropages l'erreur à travers de nombreux pas de temps, les gradients sont multipliés par les mêmes poids encore et encore. Si ces poids sont inférieurs à 1, le gradient **rétrécit exponentiellement** et finit par devenir quasi nul. Résultat : les poids des premières couches ne se mettent plus à jour, le réseau n'apprend pas les dépendances à long terme.
 
-**LSTM** et **GRU** résolvent ça avec des **portes** (gates) : des contrôles qui décident quoi garder, quoi oublier, quoi apprendre. C'est comme des vannes d'eau intelligent.
+Concrètement, dans la phrase "Le chat qui a traversé la rue hier soir pendant qu'il pleuvait a très faim", un RNN classique a oublié "chat" au moment de traiter "faim". Il ne peut pas apprendre que c'est le chat qui a faim.
 
+<ImageWithSource
+  src="/images/admin/img-1774010522742.png"
+  alt="Schéma d'une cellule LSTM avec flux d'information"
+  source="https://colah.github.io/posts/2015-08-Understanding-LSTMs/"
+  caption="The repeating module in a standard RNN contains a single layer."
+  size="large"
+/>
 
+**LSTM** et **GRU** résolvent ce problème fondamental avec un mécanisme élégant : des **portes** (gates). Ce sont des contrôleurs appris qui décident, à chaque pas de temps, quoi garder en mémoire, quoi oublier, et quoi ajouter de nouveau. Imagine des vannes intelligentes sur un pipeline d'information : elles s'ouvrent et se ferment automatiquement en fonction du contexte.
 
 ## LSTM : Long Short-Term Memory
 
+<ImageWithSource
+  src="/images/admin/img-1774010564330.png"
+  alt="The repeating module in an LSTM contains four interacting layers."
+  source="https://colah.github.io/posts/2015-08-Understanding-LSTMs/"
+  caption="The repeating module in an LSTM contains four interacting layers."
+  size="large"
+/>
+
 ### Origines
 
-1997, Hochreiter et Schmidhuber l'inventent. Mais il faut attendre 2010-2015 pour que ça déchire (GPU, données). LSTM domine les RNN pendant 15 ans.
+Inventé en 1997 par Hochreiter et Schmidhuber, le LSTM a dû attendre la vague GPU et big data de 2010-2015 pour vraiment briller. Pendant environ 15 ans (2010-2025), il a été l'architecture dominante pour les séquences : traduction automatique, reconnaissance vocale, génération de texte, analyse de séries temporelles.
 
-### L'architecture magique
+### L'architecture : deux états, trois portes
 
-Clé d'or : **état de cellule** C(t), séparé de l'état caché h(t).
+La clé du LSTM est la séparation entre deux états : l'**état de cellule** $C_t$ et l'**état caché** $h_t$.
 
-Imaginez C comme un "tapis roulant" : l'information traverse par addition simple (pas multiplication par poids complexes). Donc le gradient ? Il **ne s'atténue pas**. C'est mathématiquement plus stable.
+L'état de cellule $C_t$ est le vrai cœur de l'architecture. Imagine-le comme un **tapis roulant** qui traverse le réseau de bout en bout. L'information y circule par des opérations d'addition simple, sans être multipliée par des matrices de poids complexes à chaque étape. Conséquence directe : le gradient peut circuler sur ce tapis roulant **sans s'atténuer**. C'est mathématiquement plus stable que le RNN classique, et c'est exactement ce qui résout le vanishing gradient.
 
-Trois portes contrôlent les modifications à C.
+L'état caché $h_t$ est ce que le LSTM "communique" au monde extérieur -- c'est la sortie visible de la cellule à chaque pas de temps.
+
+Trois portes contrôlent comment l'état de cellule est modifié.
 
 ### Porte d'oubli (Forget Gate)
 
-```
-f(t) = sigmoid(W_f . [h(t-1), x(t)] + b_f)
-```
+$$
+f_t = \sigma(W_f \cdot [h_{t-1}, x_t] + b_f)
+$$
 
-"Quoi supprimer du passé ?" Sigmoid → nombres entre 0 et 1. Proche de 0 = oublie, proche de 1 = garde.
+Cette porte répond à la question : "**quoi supprimer de la mémoire ?**" Elle prend en entrée l'état caché précédent $h_{t-1}$ et l'entrée actuelle $x_t$, les passe dans une sigmoïde qui produit des valeurs entre 0 et 1 pour chaque dimension. Proche de 0 = oublie cette information. Proche de 1 = garde-la intacte.
 
-Exemple : dans un modèle de langage, quand le sujet change ("Et maintenant..."), la porte d'oubli efface "le genre de l'ancien sujet", etc.
+Exemple concret : dans un modèle de langage, quand le sujet de la phrase change ("Et maintenant, parlons de Marie..."), la porte d'oubli efface les informations liées à l'ancien sujet (son genre, son nombre, ses propriétés) pour faire place au nouveau.
 
 ### Porte d'entrée (Input Gate)
 
-```
-i(t) = sigmoid(W_i . [h(t-1), x(t)] + b_i)
-C_candidate(t) = tanh(W_C . [h(t-1), x(t)] + b_C)
-```
+$$
+i_t = \sigma(W_i \cdot [h_{t-1}, x_t] + b_i)
+$$
 
-"Quoi ajouter de nouveau ?" i = quelles valeurs mettre à jour, C_candidate = les valeurs candidates.
+$$
+\tilde{C}_t = \tanh(W_C \cdot [h_{t-1}, x_t] + b_C)
+$$
+
+Cette porte répond à : "**quoi ajouter de nouveau ?**" Deux opérations travaillent ensemble. $i_t$ (la porte proprement dite) décide **quelles** dimensions mettre à jour, avec des valeurs entre 0 et 1. $\tilde{C}_t$ (les valeurs candidates) propose le **contenu** à ajouter, avec des valeurs entre -1 et 1 grâce au tanh. La multiplication élément par élément de ces deux vecteurs détermine ce qui est effectivement écrit en mémoire.
 
 ### Mise à jour de la cellule
 
-```
-C(t) = f(t) * C(t-1) + i(t) * C_candidate(t)
-```
+$$
+C_t = f_t \odot C_{t-1} + i_t \odot \tilde{C}_t
+$$
 
-**C'est ça la magie** : c'est une interpolation linéaire. L'ancien état (filtré par oubli) + nouveau (filtré par entrée). Pas de multiplication chaotique par poids complexes.
+**C'est ici que toute la magie opère.** Cette équation est une **interpolation linéaire** : l'ancien état (filtré par la porte d'oubli) plus le nouveau contenu (filtré par la porte d'entrée). Pas de multiplication par une matrice de poids, pas d'activation non-linéaire sauvage. Juste des additions et des multiplications élément par élément. C'est précisément cette simplicité qui permet au gradient de circuler sans disparaître.
 
 ### Porte de sortie (Output Gate)
 
-```
-o(t) = sigmoid(W_o . [h(t-1), x(t)] + b_o)
-h(t) = o(t) * tanh(C(t))
-```
+$$
+o_t = \sigma(W_o \cdot [h_{t-1}, x_t] + b_o)
+$$
 
-"Quoi révéler du passé ?" Détermine quelle partie de C devient le h extérieur.
+$$
+h_t = o_t \odot \tanh(C_t)
+$$
+
+Dernière étape : "**quoi révéler au monde extérieur ?**" L'état de cellule contient potentiellement beaucoup d'informations accumulées, mais tout n'est pas pertinent pour le pas de temps actuel. La porte de sortie filtre $C_t$ pour ne produire que la partie utile dans $h_t$, l'état caché qui sera vu par les couches suivantes.
 
 <Callout type="info" title="Pourquoi ça sauve les gradients">
-Gradient traverse le pas par la porte d'oubli. Si f ≈ 1, gradient passe intact. Si f ≈ 0, il s'évanouit, mais c'est **volontaire, appris**. Le réseau apprend lui-même quand oublier. Pas d'atténuation aveugle.
+Lors de la rétropropagation, le gradient traverse l'état de cellule via la porte d'oubli. Si $f \approx 1$, le gradient passe **intact** -- aucune atténuation. Si $f \approx 0$, le gradient s'évanouit, mais c'est un choix **volontaire et appris** par le réseau. Le réseau décide lui-même quand oublier, contrairement au RNN vanilla où l'atténuation est aveugle et incontrôlable.
 </Callout>
-
-
 
 ## GRU : Gated Recurrent Unit
 
+<ImageWithSource
+  src="/images/admin/img-1774010650228.png"
+  alt="Schéma d'une cellule GRU"
+  source="https://d2l.ai/chapter_recurrent-modern/gru.html"
+  caption="Ce schéma illustre le fonctionnement d'une cellule GRU (Gated Recurrent Unit), un type de réseau de neurones récurrent simplifié par rapport au LSTM. Il montre comment les portes de réinitialisation (reset gate) et de mise à jour (update gate) contrôlent le flux d'information pour calculer l'état caché."
+  size="large"
+/>
+
 ### La version simplifiée
 
-2014, Cho et collègues. Simplifient le LSTM : **2 portes au lieu de 3**, pas d'état de cellule séparé. Moins de paramètres (~25% de moins).
+Proposé en 2014 par Cho et collègues, le GRU simplifie le LSTM de façon élégante : **2 portes au lieu de 3**, et pas d'état de cellule séparé. Tout passe par un unique état caché $h_t$. Résultat : environ 25% de paramètres en moins, un entraînement plus rapide, et des performances souvent comparables.
 
 ### Porte de mise à jour (Update Gate)
 
-```
-z(t) = sigmoid(W_z . [h(t-1), x(t)] + b_z)
-```
+$$
+z_t = \sigma(W_z \cdot [h_{t-1}, x_t] + b_z)
+$$
 
-Combine les rôles d'oubli et entrée du LSTM. "Combien je remplace l'état avec du nouveau ?"
+La porte de mise à jour combine en une seule porte les rôles de la porte d'oubli ET de la porte d'entrée du LSTM. Elle répond simultanément à : "combien du passé garder ?" et "combien de nouveau intégrer ?" Quand $z_t$ est proche de 0, on garde l'ancien état. Quand $z_t$ est proche de 1, on le remplace par du nouveau.
 
 ### Porte de réinitialisation (Reset Gate)
 
-```
-r(t) = sigmoid(W_r . [h(t-1), x(t)] + b_r)
-```
+$$
+r_t = \sigma(W_r \cdot [h_{t-1}, x_t] + b_r)
+$$
 
-Contrôle l'influence du passé. Si r ≈ 0, le réseau "réinitialise", oublie tout.
+Cette porte contrôle **l'influence du passé sur le candidat**. Si $r \approx 0$, le réseau "réinitialise" en ignorant complètement l'état précédent pour calculer le nouveau candidat. Il repart de zéro, comme si la séquence commençait à cet instant. Si $r \approx 1$, le passé est pleinement pris en compte.
 
 ### Mise à jour de l'état
 
-```
-h_candidate(t) = tanh(W . [r(t) * h(t-1), x(t)] + b)
-h(t) = (1 - z(t)) * h(t-1) + z(t) * h_candidate(t)
-```
+$$
+\tilde{h}_t = \tanh(W \cdot [r_t \odot h_{t-1}, x_t] + b)
+$$
 
-**Intuition GRU** : un switch. z ≈ 0 ? Gardez h (mémoire long terme). z ≈ 1 ? Remplacez par du nouveau.
+$$
+h_t = (1 - z_t) \odot h_{t-1} + z_t \odot \tilde{h}_t
+$$
 
-<Callout type="tip" title="Intuition">
-GRU = "dois-je garder ou changer ?" C'est plus simple que LSTM avec ses trois portes. Ça suffit souvent.
+**L'intuition du GRU est limpide** : c'est un interrupteur à curseur. Le curseur $z_t$ glisse entre "garder tout le passé" ($z = 0$) et "tout remplacer par du nouveau" ($z = 1$). La beauté du design, c'est que $(1 - z_t)$ et $z_t$ sont complémentaires : plus tu gardes, moins tu remplaces, et vice versa. C'est cette contrainte qui rend le GRU à la fois plus simple et plus stable que ce qu'on pourrait obtenir avec deux portes indépendantes.
+
+<Callout type="tip" title="Intuition rapide">
+GRU = un seul choix binaire par dimension : "est-ce que je garde le passé ou est-ce que je le remplace ?" C'est plus simple à comprendre et souvent suffisant pour la plupart des tâches.
 </Callout>
-
-
 
 ## LSTM vs GRU : qui gagne ?
 
 | Aspect | LSTM | GRU |
 |--|--|--|
-| Portes | 3 | 2 |
+| Portes | 3 (oubli, entrée, sortie) | 2 (mise à jour, réinitialisation) |
+| États | 2 ($C_t$ et $h_t$) | 1 ($h_t$ uniquement) |
 | Paramètres | Plus | ~25% moins |
-| Vitesse | Lent | Rapide |
+| Vitesse d'entraînement | Plus lent | Plus rapide |
 | Mémoire long terme | Excellent | Très bon |
 
-### La vérité
+### La vérité empirique
 
-Empiriquement ? **Quasi égalité**. Aucun ne gagne systématiquement.
+Surprise : sur la plupart des benchmarks, **les performances sont quasi identiques**. Aucun des deux ne gagne systématiquement.
 
-- GRU mieux : petits datasets (moins de paramètres = moins d'overfitting)
-- LSTM mieux : très longues séquences (état de cellule séparé aide)
-- Recommandation : testez les deux, choisissez par résultats
+- **GRU mieux adapté** quand tu as peu de données (moins de paramètres = moins de risque d'overfitting) ou quand la vitesse d'entraînement est un facteur important
+- **LSTM mieux adapté** pour les très longues séquences où l'état de cellule séparé offre un avantage, ou quand tu as beaucoup de données pour entraîner les paramètres supplémentaires
+- **Recommandation pratique** : teste les deux, choisis celui qui donne les meilleurs résultats sur ta validation. Commence par le GRU (plus rapide à itérer), passe au LSTM si nécessaire
 
-<Callout type="paper" title="Les variantes">
-Peephole LSTM (portes regardent l'état de cellule), coupled LSTM (oubli et entrée liés), etc. Une étude 2015 de Greff compare 8 variantes : les différences de perf sont **minimes**. Le LSTM vanilla reste solide.
+<Callout type="paper" title="Les variantes explorées">
+De nombreuses variantes ont été proposées : Peephole LSTM (les portes regardent directement l'état de cellule), coupled LSTM (les portes d'oubli et d'entrée sont liées), etc. Une étude systématique de 2015 par Greff et al. compare 8 variantes de LSTM : les différences de performance sont **minimes**. Le LSTM vanilla reste le choix le plus robuste et le plus éprouvé.
 </Callout>
 
 ## Utilisation pratique
 
 ### Empiler les couches
 
-Deux à quatre couches LSTM/GRU empilées = usuel. La sortie de couche 1 à chaque pas devient l'entrée de couche 2. Au-delà de 4 ? Gains faibles, overfitting monte.
+En pratique, on empile souvent 2 à 4 couches de LSTM/GRU. La sortie de la couche 1 à chaque pas de temps devient l'entrée de la couche 2, et ainsi de suite. C'est comme empiler des niveaux d'abstraction : la couche 1 capture des patterns locaux, la couche 2 des patterns de plus haut niveau. Au-delà de 4 couches, les gains sont généralement faibles et le risque d'overfitting augmente.
 
 ### Bidirectionnalité
 
-BiLSTM/BiGRU : deux LSTM, un avant, un arrière, concaténés. Puissant pour classification de texte, NER, **tâches où la séquence entière est disponible**.
+Les BiLSTM et BiGRU font tourner deux réseaux en parallèle : un qui lit la séquence de gauche à droite, l'autre de droite à gauche. Les deux sorties sont concaténées. C'est particulièrement puissant pour la classification de texte, la reconnaissance d'entités nommées (NER), et toute tâche où **la séquence entière est disponible** au moment de la prédiction. Attention : ça ne s'applique pas à la génération de texte (tu ne connais pas le futur).
 
 ### Régularisation
 
-- **Dropout** : entre couches empilées, pas entre pas de temps (ça casserait la mémoire)
-- **Variational dropout** : même masque de dropout à chaque pas (sinon désynchronise)
-- **L2 regularization** : sur les poids
+- **Dropout** : appliqué entre les couches empilées, mais **pas entre les pas de temps** au sein d'une même couche (ça casserait la continuité de la mémoire)
+- **Variational dropout** : utilise le même masque de dropout à chaque pas de temps, ce qui maintient la cohérence temporelle
+- **L2 regularization** : pénalise les grands poids pour éviter l'overfitting
 
-<Callout type="info" title="Héritage durable">
-Transformers ont remplacé LSTM/GRU pour NLP. Mais les concepts de gating (portes intelligentes) ? Partout. State Space Models, gated MLPs, même Transformers avec gates. Les LSTM/GRU ont perdu la bataille mais pas la guerre : les principes survivent.
+<Callout type="info" title="Un héritage qui perdure">
+Les Transformers ont largement remplacé LSTM et GRU pour le NLP depuis 2018. Mais les concepts de gating (portes intelligentes) inventés par le LSTM survivent partout dans le deep learning moderne : State Space Models (Mamba), gated MLPs, et même certaines variantes de Transformers. LSTM et GRU ont perdu la bataille architecturale, mais leurs principes fondamentaux ont gagné la guerre. Les comprendre reste essentiel pour saisir l'évolution du deep learning.
 </Callout>
 
 ## Résumé
 
-LSTM/GRU = RNN + mémoire intelligente. Les portes apprennent quoi garder/oublier. Ça résout le vanishing gradient. Plus complexe que vanilla RNN, mais peut capturer 100+ pas de dépendances. C'est l'arme classique avant Transformers. Et ça marche encore très bien. Fondamental à comprendre pour grasp l'évolution du deep learning.
+LSTM et GRU sont des RNN augmentés d'une mémoire intelligente contrôlée par des portes. Les portes apprennent automatiquement quoi garder et quoi oublier, résolvant ainsi le vanishing gradient qui paralysait les RNN classiques. Le LSTM sépare état de cellule et état caché avec 3 portes ; le GRU simplifie à 2 portes et un seul état. En pratique, les performances sont similaires. Même si les Transformers dominent aujourd'hui, comprendre LSTM et GRU est fondamental : ce sont eux qui ont montré que des mécanismes de gating appris pouvaient résoudre les problèmes de mémoire dans les réseaux profonds.

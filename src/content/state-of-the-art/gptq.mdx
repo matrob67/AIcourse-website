@@ -5,65 +5,59 @@ description: "La méthode qui a permis de faire tourner 175 milliards de paramè
 
 ## La révolution GPTQ
 
-En 2022, l'équipe IST Austria a présenté GPTQ : comment compresser un modèle **sans le réentraîner**. C'était révolutionnaire. Soudain, vous pouviez faire tourner GPT-3 (175B) sur un GPU à 80 Go, du jamais vu.
+En 2022, l'équipe IST Austria a présenté GPTQ : une méthode pour compresser un modèle **sans le réentraîner**, en quelques heures seulement. Avant GPTQ, personne ne pensait possible de quantifier GPT-3 (175B paramètres) en 4 bits sans détruire la qualité. Soudain, vous pouviez faire tourner ce mastodonte sur un seul GPU A100 à 80 Go. Du jamais vu.
 
 <ArxivLink id="2210.17323" title="GPTQ: Accurate Post-Training Quantization (Frantar et al., 2022)" />
 
 ## L'idée brillante
 
-Au lieu de simplement arrondir les poids (méthode idiote), GPTQ utilise les **mathématiques de second ordre** pour minimiser l'erreur.
+La méthode naïve de quantification, c'est d'arrondir chaque poids indépendamment. Imaginez un orchestre de 100 musiciens : si vous demandez à chacun d'arrondir sa note individuellement, le résultat global sonne faux. GPTQ fait l'inverse : il quantifie les poids **un par un** et, à chaque étape, **corrige les poids restants** pour compenser l'erreur introduite.
 
-**L'analogie :** imaginez que vous compressez une photo en fusionnant des pixels. La méthode idiote : fusionner les pixels au hasard. La méthode smart : fusionner en sachant que certains pixels sont importants pour le résultat.
+Pour savoir quels poids protéger et comment compenser, GPTQ utilise la **matrice Hessienne** — un outil mathématique qui mesure la sensibilité des résultats à chaque poids. C'est une carte de chaleur qui dit : "ce poids-là, si tu le bouges d'un chouïa, la sortie du modèle change beaucoup ; cet autre, tu peux le secouer, ça change rien".
 
-GPTQ identifie quels poids sont importants (via la **matrice Hessienne**, une notion mathématique de sensibilité) et les protège pendant la quantification.
+$$\text{Erreur} = \| \text{Résultat original} - \text{Résultat quantifié} \|^2$$
 
-```
-Erreur = ||Résultat original - Résultat quantifié||²
-↓
-Minimiser cette erreur en utilisant la structure de la Hessienne
-```
+L'objectif est de minimiser cette erreur globale en utilisant la structure de la Hessienne pour guider les compensations.
 
 ## Comment ça fonctionne (simplifié)
 
 ### Étape 1 : Mesurer l'importance
 
-Passer 128-256 exemples à travers le modèle pour calculer la **matrice Hessienne** : elle dit "ce poids affecte énormément les résultats, le protégez".
+On passe 128-256 exemples de texte à travers le modèle pour calculer la **matrice Hessienne** de chaque couche. Elle dit, pour chaque poids : "si tu changes celui-ci, voilà l'impact sur la sortie". C'est comme sonder le terrain avant de construire : on sait où le sol est fragile.
 
 ### Étape 2 : Quantifier intelligemment
 
-Pour chaque bloc de colonnes (128 colonnes à la fois) :
-1. Quantifier les poids
-2. Calculer l'erreur introduite
-3. **Compenser cette erreur** sur les poids non encore quantifiés (utiliser la Hessienne inverse)
+Pour chaque couche, on traite les colonnes par **blocs de 128** :
+1. On quantifie les poids du bloc courant (arrondi vers les niveaux INT4)
+2. On calcule l'erreur que ça introduit sur la sortie
+3. On **compense cette erreur** en ajustant les poids non encore quantifiés, grâce à la Hessienne inverse
 
-C'est comme peindre une maison en ordonnant les pièces : en finissant chaque pièce, vous corrigez les murs des pièces suivantes.
+L'analogie : imaginez que vous peignez une fresque et que votre palette est limitée à 16 couleurs. En peignant chaque section, vous ajustez les teintes des sections voisines pour que le résultat final reste harmonieux. C'est exactement ce que fait GPTQ : une compensation en cascade.
 
 <Callout type="paper" title="L'innovation clé">
-GPTQ quantifie par **blocs** de 128 colonnes, pas poids par poids. Cela réduit la complexité mathématique de énorme à faisable : un modèle 175B peut être quantifié en quelques heures sur un GPU.
+GPTQ quantifie par **blocs** de 128 colonnes, pas poids par poids (comme l'ancien OBQ). C'est ce qui réduit la complexité de "des jours" à "quelques heures" : un modèle 175B peut être quantifié en 4 heures sur un seul GPU.
 </Callout>
-
-
 
 ## Les paramètres importants
 
 ### Nombre de bits
-- **4 bits** : le standard (bon compromis taille/qualité)
-- **3 bits** : possible mais perdez 10% de qualité
-- **8 bits** : peu d'intérêt (INT8 sans calibration suffit)
+- **4 bits** : le standard de facto (excellent compromis taille/qualité)
+- **3 bits** : possible mais coûteux en qualité, comptez ~10% de dégradation
+- **8 bits** : peu d'intérêt car la quantification INT8 simple (sans GPTQ) suffit déjà
 
 ### Taille du groupe (group_size)
-- **128** : le sweet spot (valeur par défaut)
-- **32** : plus précis mais 10% plus grand
-- **-1** : par canal (pas de groupes, trop coûteux)
+- **128** : le sweet spot reconnu (valeur par défaut partout)
+- **32** : légèrement plus précis mais ~10% plus lourd (plus de paramètres de scaling)
+- **-1** : quantification par canal (pas de groupes), rarement justifié
 
 <Callout type="tip" title="128 c'est magique">
-Un group_size de 128 offre le meilleur compromis : presque aussi bon que 32 mais bien plus petit. Ne changez pas cette valeur sans raison.
+Un group_size de 128 offre le meilleur compromis entre qualité et taille. En pratique, la différence avec 32 est minime, mais l'économie de stockage est réelle. Ne changez pas cette valeur sans avoir mesuré un gain concret sur vos benchmarks.
 </Callout>
 
 ### Dataset de calibration
-- C4 ou Wikitext-2 (datasets standards)
-- 128-256 exemples de 2000 tokens
-- Le choix affecte peu le résultat final
+- C4 ou Wikitext-2 sont les datasets standards
+- 128-256 exemples de 2000 tokens suffisent
+- Bonne nouvelle : le choix du dataset affecte peu le résultat final (GPTQ est robuste sur ce point)
 
 ## En pratique
 
@@ -81,11 +75,11 @@ model.quantize(calibration_dataset)
 model.save_quantized("mistral-7b-gptq")
 ```
 
-Beaucoup de modèles GPTQ sont déjà disponibles sur Hugging Face, prêts à l'emploi.
+En réalité, vous n'aurez probablement jamais à quantifier vous-même. Des milliers de modèles GPTQ sont déjà disponibles sur Hugging Face, prêts à télécharger et à utiliser. Cherchez le suffixe `-GPTQ` dans le nom du modèle.
 
 ## Résultats réels
 
-Sur Mistral-7B (test de perplexité) :
+Sur Mistral-7B (test de perplexité — plus le chiffre est bas, mieux c'est) :
 
 | Format | Perplexité | Taille |
 |---|---|---|
@@ -93,14 +87,14 @@ Sur Mistral-7B (test de perplexité) :
 | GPTQ 4-bit | 5.41 | 4.1 Go |
 | GPTQ 3-bit | 5.98 | 3.2 Go |
 
-La perte est très faible (3%) en quantifiant à 4 bits.
+La perte en 4 bits est minime (~3%), alors que le modèle est **3.5x plus petit**. En 3 bits, la dégradation devient notable (~14%), ce qui rend ce format moins attractif sauf contrainte mémoire extrême.
 
 ### Vitesse d'inférence
 
-GPTQ utilise des **kernels CUDA spécialisés** (ExLlama v2) pour reconvertir les INT4 en FP16 à la volée, très rapidement. Jusqu'à **3× plus rapide** qu'une déquantification naïve.
+GPTQ seul ne garantit pas la vitesse : il faut des **kernels CUDA spécialisés** pour décompresser les INT4 en FP16 à la volée. ExLlama v2 et Marlin sont les deux kernels les plus performants, capables d'atteindre **3x le débit** d'une déquantification naïve.
 
 <Callout type="info" title="GPTQ = GPU only">
-GPTQ est optimisé pour GPU NVIDIA. Pour CPU, utilisez GGUF (llama.cpp). Les deux formats sont complémentaires selon votre matériel cible.
+GPTQ est optimisé exclusivement pour GPU NVIDIA. Si vous ciblez du CPU ou du Apple Silicon, utilisez plutôt le format GGUF (llama.cpp). Les deux formats sont complémentaires selon votre matériel cible.
 </Callout>
 
 ## Comparaison GPTQ vs AWQ vs GGUF
@@ -112,8 +106,8 @@ GPTQ est optimisé pour GPU NVIDIA. Pour CPU, utilisez GGUF (llama.cpp). Les deu
 | Inférence GPU | Excellent | Excellent | Bon |
 | Inférence CPU | Non | Non | Excellent |
 
-GPTQ a inspiré toute une génération de méthodes. AWQ l'a supplanté pour les nouvelles quantifications, mais des milliers de modèles GPTQ restent populaires.
+GPTQ a été le pionnier qui a lancé la révolution de la quantification post-training. AWQ l'a supplanté pour les nouvelles quantifications grâce à une meilleure qualité et une quantification plus rapide. Mais des milliers de modèles GPTQ restent disponibles et populaires sur Hugging Face.
 
 <Callout type="warning" title="Le kernel est crucial">
-Un modèle GPTQ sans bon kernel peut être plus lent que FP16. Vérifiez que votre framework (vLLM, TGI) supporte ExLlama v2 ou Marlin pour bénéficier de l'accélération.
+Un modèle GPTQ sans bon kernel d'inférence peut être **plus lent** que le modèle FP16 original. Vérifiez que votre framework de serving (vLLM, TGI) supporte ExLlama v2 ou Marlin avant de déployer.
 </Callout>

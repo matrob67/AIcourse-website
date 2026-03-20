@@ -7,21 +7,23 @@ description: "Comparaison des principaux frameworks de serving de LLM en product
 
 ## Le défi : servir un LLM rapidement
 
-Faire tourner un modèle sur votre machine personnelle c'est facile : `model.generate()`. En **production**, c'est l'enfer. 100 utilisateurs veulent une réponse en même temps. Vous faites comment ?
+Faire tourner un modèle en local, c'est facile : `model.generate()` et c'est parti. Mais en **production**, c'est une autre histoire. 100 utilisateurs envoient des requêtes en même temps, chacun veut une réponse en moins de 2 secondes, et votre GPU a une mémoire limitée.
 
-Les frameworks de serving gèrent la mémoire, la file d'attente, le batching intelligent, et l'accélération GPU. Quatre solution dominantes se battent.
+Les frameworks de serving résolvent ce problème en gérant intelligemment la **mémoire GPU**, la **file d'attente** des requêtes, le **batching dynamique** (regrouper plusieurs requêtes pour les traiter en parallèle), et l'**accélération** via des kernels optimisés. Quatre solutions dominent le marché.
 
 <Callout type="info" title="Le choix dépend de votre contexte">
-vLLM pour la flexibilité, TGI si vous avez une pipeline Hugging Face, Triton si vous avez plusieurs modèles, SGLang si vous faites de l'agentic complexe.
+vLLM pour la flexibilité et la communauté. TGI si vous êtes dans l'écosystème Hugging Face. Triton si vous servez plusieurs modèles hétérogènes. SGLang si vous construisez des agents complexes.
 </Callout>
 
-## vLLM : le couteau suisse
+## vLLM : le standard de facto
 
-vLLM est le plus populaire. Inventé à Berkeley, maintenant stable.
+vLLM, né à UC Berkeley, est devenu le framework de serving le plus populaire grâce à une innovation clé : **PagedAttention**.
 
-**Son truc spécial** : **PagedAttention**. Habituellement, le KV cache (la mémoire que vous gardez pour accélérer) est un bloc de RAM continu. Oups, un utilisateur arrive avec un contexte plus long : réallouer = gaspillage. PagedAttention découpe le cache en petites pages comme un système d'exploitation. Résultat : gestion mémoire 10× meilleure.
+Le problème qu'il résout : pendant l'inférence, chaque requête maintient un **KV cache** (les clés et valeurs d'attention calculées pour les tokens précédents). Normalement, ce cache est un bloc de mémoire continu. Si un utilisateur arrive avec un contexte plus long que prévu, il faut tout réallouer — c'est du gaspillage massif, comme réserver une salle de 100 places pour une réunion de 10 personnes.
 
-**Bonus** : prefix caching (si 10 utilisateurs posent des questions sur le même document, le cache du document est réutilisé).
+PagedAttention découpe le KV cache en **petites pages** de mémoire (comme un système d'exploitation gère la RAM). Chaque requête prend exactement la mémoire dont elle a besoin, pas plus. Résultat : gestion mémoire **2 à 4x plus efficace**, ce qui permet de servir plus de requêtes simultanées.
+
+**Bonus** : le prefix caching — si 10 utilisateurs posent des questions sur le même document système, le KV cache de ce préfixe commun est calculé une seule fois et partagé.
 
 ```bash
 vllm serve mistralai/Mistral-7B-v0.1 \
@@ -32,9 +34,9 @@ vllm serve mistralai/Mistral-7B-v0.1 \
 
 ## TGI : la simplicité Hugging Face
 
-TGI c'est le serveur de Hugging Face, écrit en Rust pour être rapide et sûr.
+TGI (Text Generation Inference), c'est le serveur officiel de Hugging Face, écrit en Rust pour la performance et la fiabilité.
 
-**Avantage** : vous avez une pipeline Hugging Face ? Une commande Docker et c'est fait. Zéro configuration.
+Son atout principal : la **simplicité de déploiement**. Vous avez un modèle Hugging Face ? Une seule commande Docker et vous avez une API de production. Zéro configuration, zéro prise de tête.
 
 ```bash
 docker run --gpus all -p 8080:80 \
@@ -43,28 +45,28 @@ docker run --gpus all -p 8080:80 \
     --num-shard 2
 ```
 
-Ouais, c'est juste une commande. TGI gère tout automatiquement : quantification, sharding, API.
+TGI gère automatiquement la quantification, le sharding multi-GPU, le continuous batching, et expose une API compatible OpenAI. C'est le chemin le plus court entre un modèle sur le Hub et une API en production.
 
 <Callout type="tip" title="Pour un premier déploiement">
-TGI = le chemin le plus rapide du notebook Jupyter à l'API en production. Pas parfait pour tout, mais 80% des cas : TGI suffit.
+TGI = le chemin le plus rapide du notebook Jupyter à l'API de production. Il ne couvre pas 100% des cas avancés, mais pour 80% des déploiements, TGI suffit amplement. Commencez par là.
 </Callout>
 
-## NVIDIA Triton : le couteau suisse des modèles
+## NVIDIA Triton : la plateforme enterprise
 
-Triton n'est pas juste pour les LLM — c'est la plateforme généraliste de NVIDIA. Vous pouvez servir : LLM (via TensorRT-LLM), embeddings, rerankers, classifieurs, tout sur le même serveur.
+Triton n'est pas spécifiquement conçu pour les LLM — c'est la plateforme de serving **généraliste** de NVIDIA. Vous pouvez servir sur le même serveur : un LLM (via TensorRT-LLM), des modèles d'embeddings, des rerankers, des classifieurs d'images, des modèles de détection. Tout cohabite.
 
-**Forces** : A/B testing, canary deployments, métriques Prometheus, versioning des modèles.
-**Faiblesse** : config XML complexe, pas fait spécifiquement pour les LLM.
+**Forces** : A/B testing natif, canary deployments, métriques Prometheus, versioning des modèles, support multi-backend (TensorFlow, PyTorch, ONNX, TensorRT).
+**Faiblesse** : configuration complexe (XML/protobuf), courbe d'apprentissage raide, pas optimisé spécifiquement pour l'expérience développeur LLM.
 
-Utilisez Triton si vous avez **un écosystème complet** de modèles à servir. Sinon, c'est overkill.
+Utilisez Triton si vous avez un **écosystème complet** de modèles ML à servir et une équipe MLOps dédiée. Sinon, c'est overkill.
 
-## SGLang : le challenger modéré
+## SGLang : le challenger pour les agents
 
-SGLang est le nouveau venu, optimisé pour les **workflows structurés et agentiques**.
+SGLang est le nouveau venu, créé à Berkeley également, et optimisé pour les **workflows structurés et agentiques**.
 
-Truc spécial : **RadixAttention**, une meilleure gestion du KV cache basée sur un arbre Radix. Résultat : prefix caching optimal (meilleur que PagedAttention dans certains cas).
+Son innovation : **RadixAttention**, une gestion du KV cache basée sur un arbre Radix. Concrètement, quand un agent fait 10 appels successifs au LLM avec des préfixes qui se chevauchent, RadixAttention réutilise intelligemment les calculs déjà faits. Pour les workflows multi-tours, c'est souvent plus efficace que le PagedAttention de vLLM.
 
-Bonus : génération structurée native (JSON schemas, regex constraints) sans overhead.
+Autre atout : la **génération structurée native**. Si vous voulez que le LLM produise du JSON valide ou respecte un regex, SGLang le fait sans overhead significatif — le guided decoding est intégré au coeur du moteur.
 
 ```python
 import sglang as sgl
@@ -75,7 +77,7 @@ def multi_turn(s, question):
     s += sgl.assistant(sgl.gen("answer", max_tokens=256))
 ```
 
-SGLang c'est parfait si vous faites des **agents multi-appels** avec des réponses structurées.
+SGLang est le choix naturel si vous construisez des **agents multi-appels** avec des réponses structurées (JSON, formulaires, listes).
 
 ## Le tableau comparatif
 
@@ -89,7 +91,7 @@ SGLang c'est parfait si vous faites des **agents multi-appels** avec des répons
 | API OpenAI | Oui | Presque | Wrapper | Oui |
 
 <Callout type="warning" title="C'est un marché qui bouge vite">
-Les benchmarks de 2024 sont déjà obsolètes en 2025. Ces frameworks évoluent chaque mois. Testez sur **vos données réelles** avec les versions latest avant de choisir.
+Les benchmarks d'il y a 6 mois sont déjà obsolètes. Ces frameworks évoluent chaque mois avec des gains de performance significatifs. Testez toujours sur **vos données réelles** avec les versions les plus récentes avant de figer un choix.
 </Callout>
 
-**Conseil pratique** : commencez par TGI (Docker = zéro setup) ou vLLM (pip install = 30 secondes). Changez seulement si vous avez un besoin spécifique que le premier ne couvre pas.
+**Conseil pratique** : commencez par TGI (une commande Docker = zéro setup) ou vLLM (`pip install` = 30 secondes). Ne changez que si vous identifiez un besoin spécifique que votre premier choix ne couvre pas. Le pire piège, c'est de passer des semaines à comparer des frameworks au lieu de déployer.

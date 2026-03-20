@@ -10,7 +10,13 @@ export async function POST(request: NextRequest) {
   const apiKey = process.env.MISTRAL_API_KEY;
   if (!apiKey) return NextResponse.json({ error: "MISTRAL_API_KEY not set" }, { status: 500 });
 
-  const selectedModel = model || "pixtral-large-latest";
+  // Vision-capable models: mistral-small-latest (Small 4 supports vision natively)
+  // and pixtral-large-latest (Large with vision)
+  const modelMap: Record<string, string> = {
+    "mistral-small-latest": "mistral-small-latest",
+    "pixtral-large-latest": "pixtral-large-latest",
+  };
+  const selectedModel = modelMap[model] || model || "pixtral-large-latest";
 
   // Build image content — local files → base64, remote URLs → direct
   let imageContent: { type: "image_url"; image_url: { url: string } };

@@ -5,121 +5,127 @@ description: "Orchestrer 1000 GPUs : Slurm pour le HPC, Kubernetes pour le cloud
 
 ## Le problème : trop de GPUs, trop de jobs
 
-Un GPU H100 coûte $2-3 l'heure en cloud. Un cluster de 1 000 GPUs inutilisés pendant une heure = $2 000-3 000 perdus. L'objectif : utilisation proche de 100%.
+Imaginez un parking de 1 000 places à 3 euros l'heure chacune. Chaque place vide, c'est de l'argent qui brûle. Un cluster de GPU, c'est exactement pareil : un H100 coûte $2-3/heure en cloud. Mille GPUs qui tournent à vide pendant une heure = $2 000-3 000 évaporés. L'objectif absolu : utilisation proche de 100%.
 
-Un **orchestrateur de cluster** agit comme un chef d'orchestre. Vous soumettez les jobs (entraînement, inférence, preprocessing), et l'orchestrateur les assigne intelligemment aux ressources disponibles.
+Un **orchestrateur de cluster** agit comme un chef d'orchestre devant un orchestre symphonique. Vous, vous soumettez des jobs (entraînement de modèles, inférence, preprocessing de données), et l'orchestrateur décide intelligemment qui joue quoi, quand, et sur quels instruments. Sans lui, c'est la cacophonie : des GPU qui attendent alors que des jobs sont en file d'attente sur d'autres machines.
 
 <Callout type="info" title="Coût réel = utilisation">
-Un cluster à 50% d'utilisation coûte deux fois plus cher pour le même travail. L'orchestrateur cherche à écraser ce gaspillage en optimisant l'assignation des ressources.
+Un cluster à 50% d'utilisation coûte deux fois plus cher par job effectué. C'est comme payer un restaurant entier pour n'utiliser que la moitié des tables. L'orchestrateur cherche à écraser ce gaspillage en remplissant chaque créneau GPU disponible avec du travail utile.
 </Callout>
 
 ## Slurm : le standard HPC depuis 20 ans
 
-**Slurm** gère les clusters du HPC mondial (supercalculateurs, datacenters de recherche). Meta, Google DeepMind l'utilisent pour entraîner leurs modèles géants.
+**Slurm** (Simple Linux Utility for Resource Management) gère les clusters du HPC mondial : supercalculateurs, datacenters de recherche, clusters d'universités. Des géants comme Meta et Google DeepMind l'utilisent pour entraîner leurs modèles les plus massifs.
 
-### Architecture simple
+### Architecture simple mais robuste
 
-- **slurmctld** : le controller central qui décide qui utilise quoi
-- **slurmd** : daemon sur chaque nœud (machine)
-- **slurmdbd** : comptabilité des jobs et ressources
+Slurm repose sur trois composants :
 
-### Les concepts
+- **slurmctld** : le cerveau central. C'est lui qui décide quel job tourne sur quel noeud. Il maintient l'état complet du cluster en mémoire.
+- **slurmd** : un daemon qui tourne sur chaque machine (noeud) du cluster. Il reçoit les ordres du controller et exécute les jobs localement.
+- **slurmdbd** : le comptable. Il enregistre qui a utilisé quoi, combien de temps, et avec quelles ressources. Indispensable pour la facturation et le fair-share entre équipes.
 
-- **Partition** : un groupe de nœuds (ex: `gpu-h100`, `gpu-a100`, `cpu`)
-- **Job** : une tâche (ex: "entraîne mon modèle")
-- **QOS** : priorités et limites par utilisateur
-- **GRES** : ressources spéciales comme les GPU
+### Les concepts fondamentaux
 
-Vous écrivez un script qui dit "je veux 4 GPU, 32 GB RAM, 2 heures max". Slurm le met en queue et l'exécute quand les ressources sont libres.
+- **Partition** : un groupe logique de noeuds. Par exemple `gpu-h100` pour les machines avec des H100, `gpu-a100` pour les A100, `cpu` pour le preprocessing. Vous soumettez votre job à une partition spécifique.
+- **Job** : une tâche à exécuter. "Entraîne mon modèle sur 4 GPU pendant 48 heures max."
+- **QOS** (Quality of Service) : les priorités et limites par utilisateur ou par équipe. L'équipe de recherche a peut-être la priorité sur l'équipe data engineering, ou un plafond de GPU simultanés.
+- **GRES** (Generic Resources) : les ressources spéciales, notamment les GPU. Vous demandez "je veux 4 gpu:h100" et Slurm s'arrange pour les trouver.
 
-<Callout type="tip" title="Backfill scheduling">
-Slurm a un truc malin : si un gros job attend, il peut lancer des petits jobs dans les "trous" du planning. Si les petits terminent avant que les gros ressources soient libres, tout le monde est content. Ça utilise le cluster mieux.
+Concrètement, vous écrivez un script batch qui spécifie vos besoins : "4 GPU, 64 Go RAM, 24 heures max, partition gpu-h100". Slurm le met en file d'attente et l'exécute dès que les ressources se libèrent. Pas besoin de chercher manuellement une machine disponible.
+
+<Callout type="tip" title="Le backfill scheduling, la trouvaille de Slurm">
+Slurm a un mécanisme particulièrement malin. Imaginez qu'un gros job de 64 GPU attend que les ressources se libèrent dans 2 heures. Pendant ce temps, il y a 8 GPU libres. Slurm va regarder sa file d'attente et trouver des petits jobs qui tiennent en moins de 2 heures sur 8 GPU ou moins. Il les lance dans les "trous" du planning. Résultat : le gros job n'est pas retardé, et les petits passent en avance. Le cluster est mieux rempli sans pénaliser personne.
 </Callout>
 
 ### Forces et limites
 
-**Bon pour** : clusters HPC dédiés, gros jobs d'entraînement longs, topo réseau complexe
+**Bon pour** : clusters HPC dédiés on-premise, gros jobs d'entraînement qui durent des heures ou des jours, topologie réseau complexe (InfiniBand, NVSwitch)
 
-**Pas bon pour** : microservices, inférence dynamique, scaling élastique du cloud
-
-
+**Pas bon pour** : microservices, inférence avec scaling dynamique, environnements cloud élastiques où les machines apparaissent et disparaissent
 
 ## Kubernetes : l'orchestration cloud-native
 
-**Kubernetes** (K8s) c'est le standard pour les conteneurs. Initialement pour les microservices web, mais s'est étendu au ML grâce à des extensions.
+**Kubernetes** (K8s) est le standard pour l'orchestration de conteneurs. Né chez Google pour les microservices web, il s'est étendu au ML grâce à un écosystème d'extensions. Aujourd'hui, la majorité des déploiements d'inférence en production tournent sur K8s.
 
-### K8s pour le ML
+### K8s pour le ML : pas tout seul
 
-K8s seul ne gère pas les GPU optimalement. Faut ajouter :
+K8s seul ne sait pas gérer les GPU de manière optimale. Il faut ajouter des briques spécialisées :
 
-- **GPU Operator NVIDIA** : installation et gestion automatique des drivers GPU
-- **Kubeflow** : plateforme ML complète sur K8s
-- **KubeRay** : pour lancer Ray sur K8s
-- **Volcano** : scheduler spécialisé pour les jobs batch ML
-- **Kueue** : files d'attente pour les jobs batch
+- **GPU Operator NVIDIA** : installe et gère automatiquement les drivers GPU sur chaque noeud. Sans ça, il faut configurer CUDA à la main sur chaque machine.
+- **Kubeflow** : une plateforme ML complète sur K8s (notebooks, pipelines, serving, etc.)
+- **KubeRay** : permet de lancer des clusters Ray à l'intérieur de K8s, le meilleur des deux mondes
+- **Volcano** : un scheduler spécialisé pour les jobs batch ML qui comprend les contraintes GPU
+- **Kueue** : un système de files d'attente sophistiqué pour les jobs batch
 
-### Gang Scheduling : problème clé
+### Gang Scheduling : le problème critique
 
-Pour l'entraînement distribué multi-nœud, **tous les pods doivent démarrer simultanément**. Si seulement un démarre, les autres attendent, deadlock. Volcano et Kueue résolvent ça.
+Pour l'entraînement distribué multi-noeud, **tous les pods doivent démarrer simultanément**. C'est le "gang scheduling". Pourquoi ? Parce que PyTorch DDP attend que tous les processus soient prêts pour commencer. Si seulement 3 pods sur 4 démarrent, les 3 restent bloqués indéfiniment en attendant le quatrième. C'est un deadlock classique que Volcano et Kueue résolvent en réservant toutes les ressources d'un coup avant de lancer quoi que ce soit.
 
-<Callout type="warning" title="K8s c'est complexe pour l'entraînement">
-K8s excelle pour l'inférence (scaling, updates), c'est moins glamour pour l'entraînement distribué. La gestion réseau haute performance (RDMA, InfiniBand), la topologie GPU, et le gang scheduling nécessitent des configs avancées. Pour entraîner, Slurm c'est souvent plus simple.
+<Callout type="warning" title="K8s : excellent pour l'inférence, plus complexe pour l'entraînement">
+K8s brille pour l'inférence : auto-scaling en fonction du trafic, rolling updates sans downtime, écosystème riche de monitoring. Mais pour l'entraînement distribué, c'est une autre histoire. La gestion du réseau haute performance (RDMA, InfiniBand), la topologie GPU (quel GPU est connecté à quel switch NVLink), et le gang scheduling nécessitent des configurations avancées. Pour de l'entraînement lourd, Slurm reste souvent plus simple et plus fiable.
 </Callout>
 
 ### Forces et limites
 
-**Bon pour** : inférence, auto-scaling, rolling updates, ecosystem riche
+**Bon pour** : inférence en production, auto-scaling, rolling updates, écosystème riche de monitoring et de tooling
 
-**Pas bon pour** : entraînement multi-nœud complexe, overhead réseau
+**Pas bon pour** : entraînement multi-noeud complexe, overhead réseau par rapport à un cluster dédié
 
-## Ray : la façon Python distribuée
+## Ray : distribuer du Python sans douleur
 
-**Ray** permet de distribuer du code Python existant sur un cluster avec quasi zéro changements.
+**Ray** permet de transformer du code Python existant en code distribué avec un effort minimal. C'est l'outil préféré des data scientists qui veulent scaler sans devenir ingénieurs infrastructure.
 
-### L'idée
+### L'idée géniale
 
-Au lieu d'écrire du code distribué complexe, vous écrivez du Python normal :
+Au lieu d'apprendre MPI, gRPC ou des frameworks distribués complexes, vous annotez vos fonctions Python :
 
 ```python
-def train_model(data):
-    # votre code normal ici
+import ray
+
+@ray.remote
+def train_model(data_chunk):
+    # votre code PyTorch normal ici
+    model = train(data_chunk)
     return model
 
-# Et au lieu de train_model(data), vous:
-futures = [ray.remote(train_model).remote(chunk) for chunk in data_chunks]
-results = ray.get(futures)
+# Lance 10 entraînements en parallèle sur le cluster
+futures = [train_model.remote(chunk) for chunk in data_chunks]
+results = ray.get(futures)  # récupère les résultats
 ```
 
-C'est simplement `ray.remote()` qui dit "exécute ça sur le cluster".
+Le décorateur `@ray.remote` dit simplement : "exécute ça quelque part sur le cluster". Ray s'occupe de la sérialisation, du transfert réseau, de la planification. Vous écrivez du Python, Ray le distribue.
 
-### Écosystème Ray AI
+### L'écosystème Ray AI
 
-- **Ray Train** : entraînement distribué (PyTorch, TensorFlow, HuggingFace)
-- **Ray Serve** : inférence avec batching dynamique
-- **Ray Tune** : cherche d'hyperparamètres distribuée
-- **Ray Data** : preprocessing et streaming distribué
+Ray n'est pas qu'un scheduler de fonctions. C'est un écosystème complet :
 
-<Callout type="paper" title="Ray en production">
-OpenAI (ChatGPT), Anthropic, Uber, Spotify utilisent Ray. C'est pas juste un truc de research, ça scale pour du vrai.
+- **Ray Train** : entraînement distribué pour PyTorch, TensorFlow, HuggingFace Transformers. Supporte data parallelism et model parallelism.
+- **Ray Serve** : serving d'inférence avec batching dynamique. Particulièrement bon pour les LLM.
+- **Ray Tune** : recherche d'hyperparamètres distribuée avec des algos avancés (Bayesian, population-based training)
+- **Ray Data** : preprocessing et streaming distribué, idéal pour alimenter l'entraînement sans matérialiser les données
+
+<Callout type="paper" title="Ray en production, pas qu'en recherche">
+OpenAI (ChatGPT), Anthropic, Uber, Spotify, LinkedIn utilisent Ray en production. Anyscale (la société derrière Ray) gère des clusters de milliers de noeuds. C'est un outil battle-tested qui tient la charge.
 </Callout>
 
 ### Forces et limites
 
-**Bon pour** : code Python existant, distribué simple, inférence + data processing
+**Bon pour** : code Python existant qu'on veut distribuer, pipelines combinant data processing + entraînement + inférence, équipes de data scientists
 
-**Pas bon pour** : très gros clusters HPC (overhead plus élevé que Slurm)
+**Pas bon pour** : très gros clusters HPC purs (overhead un peu plus élevé que Slurm sur 1000+ GPU), cas où la performance réseau brute est critique
 
 ## Récap : qui pour quoi
 
-| Cas d'usage | Recommandation |
-|---|---|
-| **Cluster GPU dédié on-premise** | Slurm |
-| **Inférence en production** | Kubernetes |
-| **Entraînement cloud distribué** | Ray ou Slurm |
-| **Stack ML complète cloud** | Kubernetes + Kubeflow |
-| **Prototypage distribué** | Ray |
-| **Supercalculateur HPC** | Slurm |
+| Cas d'usage | Recommandation | Pourquoi |
+|---|---|---|
+| **Cluster GPU dédié on-premise** | Slurm | Conçu pour ça depuis 20 ans |
+| **Inférence en production** | Kubernetes | Auto-scaling, rolling updates |
+| **Entraînement cloud distribué** | Ray ou Slurm | Ray si Python-first, Slurm si HPC |
+| **Stack ML complète cloud** | Kubernetes + Kubeflow | Écosystème le plus riche |
+| **Prototypage distribué** | Ray | Minimal effort pour distribuer |
+| **Supercalculateur HPC** | Slurm | Standard du domaine |
 
-En pratique, les boîtes les plus sérieuses utilisent les trois : Ray pour l'inférence, Slurm pour l'entraînement, orchestré par K8s.
+En pratique, les organisations les plus matures utilisent les trois ensemble : Slurm pour l'entraînement sur les gros clusters dédiés, Ray pour l'inférence et le data processing, le tout orchestré par Kubernetes pour la gestion du cycle de vie des services.
 
-Le choix dépend vraiment de votre setup : on-prem vs cloud, taille du cluster, type de jobs. Pas de réponse universelle.
+Le choix dépend de votre contexte : on-premise vs cloud, taille du cluster, type de workloads, compétences de l'équipe. Il n'y a pas de réponse universelle, mais comprendre les forces de chacun permet de faire le bon choix pour chaque composant de votre stack.

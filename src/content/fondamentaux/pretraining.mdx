@@ -5,68 +5,68 @@ description: "Les objectifs d'entraînement des LLM : causal language modeling, 
 
 ## Un enfant qui lit tout Internet
 
-Imagine un enfant à qui on donne accès à une bibliothèque infinie — des milliards de livres, d'articles, de conversations, de code — et qu'on lui dit : "Lis tout ça, et à chaque fois qu'on cache un mot, devine-le." Après des années de lecture, cet enfant a tellement vu de patterns qu'il peut terminer n'importe quelle phrase, dans n'importe quel style.
+Imagine un enfant à qui on donne accès à une bibliothèque infinie — des milliards de livres, d'articles, de conversations, de code — et qu'on lui dit : "Lis tout ça, et à chaque fois qu'on cache un mot, devine-le." Après des années de lecture, cet enfant a tellement vu de patterns qu'il peut terminer n'importe quelle phrase, dans n'importe quel style. Il ne sait pas *pourquoi* "la Terre tourne autour du Soleil" est vrai, mais il sait que c'est la suite la plus probable après certaines phrases. Et à force d'accumuler ces prédictions, il finit par développer quelque chose qui ressemble étrangement à de la compréhension.
 
-C'est exactement ce qu'est le **pré-entraînement** d'un LLM. C'est la première phase, la plus longue et la plus coûteuse. Le modèle ingère des quantités astronomiques de texte brut — sans qu'on lui dise "cette phrase est bonne" ou "cette réponse est fausse" — et apprend à deviner le mot qui vient ensuite. On appelle ça l'**apprentissage auto-supervisé** : le signal qui permet d'apprendre vient directement du texte lui-même, pas d'un humain.
+C'est exactement ce qu'est le **pré-entraînement** d'un LLM. C'est la première phase de la vie du modèle, la plus longue (des semaines, parfois des mois) et la plus coûteuse (des millions de dollars). Le modèle ingère des quantités astronomiques de texte brut — des pages Wikipedia, du code GitHub, des livres, des forums, des articles scientifiques — sans qu'on lui dise "cette phrase est bonne" ou "cette réponse est fausse". Il apprend simplement à deviner le mot qui vient ensuite. On appelle ça l'**apprentissage auto-supervisé** : le signal qui permet d'apprendre vient directement du texte lui-même, pas d'un humain qui annote les données.
 
 
 
-<Callout type="info" title="Auto-supervisé, qu'est-ce que ca veut dire ?">
-Dans l'apprentissage supervisé classique, quelqu'un étiquette les données : "cette photo c'est un chat", "cet email c'est du spam". C'est lent et cher. L'apprentissage auto-supervisé est malin : il crée ses propres étiquettes à partir du texte. Si la phrase dit "La capitale de la France est ___", la réponse "Paris" est déjà là, cachée dans les données.
+<Callout type="info" title="Auto-supervisé, qu'est-ce que ça veut dire ?">
+Dans l'apprentissage supervisé classique, quelqu'un étiquette les données à la main : "cette photo c'est un chat", "cet email c'est du spam". C'est lent, cher, et ça ne passe pas à l'échelle de milliards d'exemples. L'apprentissage auto-supervisé est malin : il crée ses propres étiquettes à partir du texte. Si la phrase dit "La capitale de la France est ___", la réponse "Paris" est déjà là, cachée dans les données. C'est un truc élégant : on a un dataset infini de paires (contexte, mot suivant) sans jamais demander à un humain d'annoter quoi que ce soit.
 </Callout>
 
 ## La grande question : comment apprendre exactement ?
 
-L'**objectif d'entraînement** (training objective), c'est la règle du jeu : comment exactement on cache des mots et comment on mesure si le modèle a bien deviné. Il en existe trois grands types, et chacun produit un type de modèle très différent.
+OK, on sait que le modèle doit "deviner des mots". Mais la manière précise dont on formule ce jeu de devinette change *tout*. L'**objectif d'entraînement** (training objective), c'est la règle du jeu : quels mots on cache, dans quel sens on lit la phrase, et comment on mesure si le modèle a bien deviné. Il en existe trois grands types, et chacun produit un type de modèle fondamentalement différent — un peu comme un musicien qui s'entraîne à l'oreille, à la lecture, ou à l'improvisation.
 
 ## Objectif 1 : Causal Language Modeling — deviner le mot suivant
 
 C'est l'approche de GPT, LLaMA, Mistral, Claude — la quasi-totalité des grands modèles d'aujourd'hui. La règle est simple : **prédit le prochain mot, en n'ayant le droit de regarder qu'à gauche**.
 
-```
-Séquence : "Le chat mange une ___"
-Le modèle voit : "Le", "chat", "mange", "une"
-Il doit prédire : "souris" (ou "croquette", ou "pomme"...)
-```
+**Séquence** : "Le chat mange une ___"
+- Le modèle voit : "Le", "chat", "mange", "une"
+- Il doit prédire : "souris" (ou "croquette", ou "pomme"...)
 
-Le mot "causal" vient du fait que l'information ne va que dans un sens : du passé vers le futur. Le token à la position 5 ne peut pas voir le token à la position 6. C'est une contrainte naturelle : quand on écrit, on ne connaît pas la suite.
+Le mot "causal" vient du fait que l'information ne va que dans un sens : du passé vers le futur. Le token à la position 5 ne peut pas voir le token à la position 6. C'est une contrainte naturelle : quand tu écris une phrase, tu ne connais pas encore la suite. C'est exactement cette contrainte que le modèle apprend à respecter.
+
+Concrètement, cette restriction est implémentée via un **masque d'attention causal** : une matrice triangulaire qui bloque les connexions vers les tokens futurs. Le modèle "regarde" littéralement dans une seule direction.
 
 <Callout type="tip" title="L'argument d'Ilya Sutskever">
-Le co-fondateur d'OpenAI a souvent dit : pour prédire parfaitement le prochain mot d'un article sur la physique quantique, il faut *comprendre* la physique quantique. Prédire le prochain token semble anodin, mais poussé à l'extrême avec assez de données, ça force le modèle à comprendre le monde entier. C'est l'intuition qui a guidé GPT depuis le début.
+Le co-fondateur d'OpenAI a souvent dit : pour prédire parfaitement le prochain mot d'un article sur la physique quantique, il faut *comprendre* la physique quantique. Prédire le prochain token semble anodin, mais poussé à l'extrême avec assez de données, ça force le modèle à construire un modèle interne du monde. Savoir qu'après "l'eau bout à" vient "100 degrés", c'est encoder un fait physique. À l'échelle de milliers de milliards de tokens, le modèle finit par encoder des quantités phénoménales de connaissances — juste en jouant au jeu de la prédiction.
 </Callout>
 
 En pratique, l'entraînement se déroule ainsi :
-1. On découpe le texte brut en morceaux de longueur fixe (ex. : 4 096 tokens par morceau)
+1. On découpe le texte brut en morceaux de longueur fixe (ex. : 4 096 tokens par morceau, parfois 8 192 ou plus)
 2. Des milliers de morceaux sont traités en parallèle (c'est un **batch**)
-3. Pour chaque position, le modèle prédit le token suivant
-4. On mesure l'erreur (la **cross-entropy loss**) et on ajuste les poids
-5. On répète ça des milliards de fois, sur des milliers de milliards de tokens
+3. Pour **chaque position** dans chaque morceau, le modèle prédit le token suivant — un seul morceau de 4 096 tokens fournit donc 4 096 signaux d'entraînement
+4. On mesure l'erreur (la **cross-entropy loss** : à quel point la distribution prédite est loin du bon token) et on ajuste les poids via la backpropagation
+5. On répète ça des milliards de fois, sur des milliers de milliards de tokens, pendant des semaines
 
 ## Objectif 2 : Masked Language Modeling — combler les trous
 
-C'est l'approche de BERT, RoBERTa, DeBERTa. Ici, on cache aléatoirement 15% des mots dans une phrase et on demande au modèle de les retrouver — mais il peut regarder dans les **deux directions**, avant et après le trou.
+C'est l'approche de BERT, RoBERTa, DeBERTa. Ici, on cache aléatoirement 15% des mots dans une phrase et on demande au modèle de les retrouver — mais cette fois, il peut regarder dans les **deux directions**, avant et après le trou.
 
-```
-Entrée : "Le [MASK] mange une souris dans le [MASK]."
-À prédire : "chat" et "grenier"
-```
+**Entrée** : "Le [MASK] mange une souris dans le [MASK]."
+**À prédire** : "chat" et "grenier"
 
-L'avantage : voir le contexte complet rend le modèle très fort pour comprendre le sens d'un texte. L'inconvénient majeur : ce modèle ne peut pas *générer* du texte naturellement. Il sait remplir des trous, pas écrire une histoire depuis le début.
+L'avantage est clair : voir le contexte complet (ce qui précède ET ce qui suit le trou) rend le modèle très fort pour *comprendre* le sens d'un texte. Pour deviner que le premier [MASK] est "chat", il utilise à la fois "mange" (à droite) et "souris" (encore plus à droite). C'est un superpouvoir que le CLM n'a pas.
+
+L'inconvénient majeur : ce modèle ne peut pas *générer* du texte naturellement. Il sait remplir des trous, pas écrire une histoire du début à la fin. Pourquoi ? Parce qu'il a été entraîné à prédire des mots *manquants* dans une phrase complète, pas à produire le mot *suivant* dans une séquence inachevée. L'architecture elle-même (attention bidirectionnelle) n'est pas conçue pour la génération séquentielle.
 
 <Callout type="info" title="Pourquoi BERT a disparu des assistants IA">
-BERT (2018) a dominé le NLP pendant des années pour la classification et l'analyse de texte. Mais quand on a voulu faire des chatbots, on a eu besoin de génération — et là, BERT est impuissant. C'est pourquoi les assistants comme ChatGPT ou Claude utilisent tous le Causal Language Modeling, pas le MLM.
+BERT (2018) a dominé le NLP pendant des années pour la classification, la recherche sémantique et l'analyse de texte. Mais quand on a voulu faire des chatbots, on a eu besoin de génération — et là, BERT est impuissant. On ne peut pas lui demander "écris un poème" parce qu'il ne sait pas produire du texte token par token. C'est pourquoi les assistants comme ChatGPT ou Claude utilisent tous le Causal Language Modeling. BERT reste cependant très utilisé en production pour des tâches de compréhension (embeddings, classification, NER).
 </Callout>
 
 ## Objectif 3 : Span Corruption — cacher des bouts entiers
 
-C'est l'approche de T5 et BART. On va plus loin que cacher un mot : on cache des **séquences entières** (des "spans") et on les remplace par un token unique. Le modèle encoder-decoder doit ensuite régénérer les séquences manquantes.
+C'est l'approche de T5 et BART. On va plus loin que cacher un seul mot : on cache des **séquences entières** (des "spans" de 3-5 tokens) et on les remplace par un token sentinelle unique. Le modèle encoder-decoder doit ensuite régénérer les séquences manquantes.
 
-```
-Entrée :  "Le chat <X> dans le jardin <Y> souris."
-Cible :   "<X> dormait paisiblement <Y> en chassant une"
-```
+**Entrée** : "Le chat \<X\> dans le jardin \<Y\> souris."
+**Cible** : "\<X\> dormait paisiblement \<Y\> en chassant une"
 
-Cette approche hybride combine la compréhension bidirectionnelle (côté encoder) et la génération (côté decoder). T5 a été pionnier dans l'idée d'unifier toutes les tâches NLP en "traduis ce texte en ce résultat".
+C'est un exercice nettement plus difficile que le MLM : le modèle doit non seulement deviner *quels* mots manquent, mais aussi *combien* il y en a (la longueur du span caché n'est pas connue). L'encoder lit le texte corrompu avec son attention bidirectionnelle et le comprend malgré les trous. Le decoder régénère les spans manquants token par token.
+
+Cette approche hybride combine donc compréhension bidirectionnelle (encoder) et génération séquentielle (decoder). T5 a été pionnier dans l'idée d'unifier toutes les tâches NLP sous un format unique "texte-vers-texte" : la traduction, le résumé, la classification — tout devient "traduis ce texte en ce résultat".
 
 ## Pourquoi le Causal Language Modeling a gagné
 
@@ -77,37 +77,44 @@ Cette approche hybride combine la compréhension bidirectionnelle (côté encode
 | Span corruption | Encoder-decoder | Les deux | Tâches texte-vers-texte |
 
 <Callout type="paper" title="Le CLM scale mieux">
-Le CLM a fini par dominer pour une raison pratique : il se prete naturellement à la génération de texte (ce que les utilisateurs veulent), et les **scaling laws** lui sont plus favorables. Quand on augmente la taille des modèles decoder-only, les gains sont plus réguliers et plus prédictibles. La simplicité paie.
+Le CLM a fini par dominer pour plusieurs raisons convergentes. D'abord, il se prête naturellement à la génération de texte — c'est ce que les utilisateurs veulent (des chatbots, de l'écriture, du code). Ensuite, les **scaling laws** (Kaplan et al., 2020) montrent que quand on augmente la taille des modèles decoder-only, les gains en performance sont plus réguliers et plus prédictibles. Enfin, le CLM ne nécessite aucune paire de données : n'importe quel texte brut suffit, ce qui donne accès à des corpus d'entraînement quasi illimités. La simplicité paie.
 </Callout>
 
-## Les ficelles techniques qui font que ca marche
+## Les ficelles techniques qui font que ça marche
+
+Le pré-entraînement d'un LLM moderne est un exploit d'ingénierie autant que de recherche. Voici les techniques clés qui rendent ça possible.
 
 ### Le learning rate schedule
 
-On ne commence pas à fond. L'entraînement utilise un **warmup** : les premières milliers d'étapes, le learning rate monte progressivement pour stabiliser le début. Ensuite, il redescend doucement selon une courbe cosinus jusqu'à la fin. C'est comme démarrer une voiture en douceur avant de prendre l'autoroute.
+On ne commence pas à fond. L'entraînement utilise un **warmup** : pendant les premières milliers d'étapes, le learning rate monte progressivement depuis une valeur quasi nulle. Pourquoi ? Parce qu'au tout début, les gradients sont instables et des mises à jour trop agressives peuvent faire diverger le modèle. Une fois le warmup terminé, le learning rate redescend doucement selon une courbe cosinus jusqu'à la fin de l'entraînement. C'est comme démarrer une voiture en première avant de passer sur l'autoroute, puis lever progressivement le pied à l'approche de la destination.
 
 ### Des batches gigantesques
 
-On ne traite pas les textes un par un. On en traite des millions à la fois — souvent plusieurs millions de tokens par batch. Certains entraînements commencent avec de petits batches (signal plus bruité, exploration) et grossissent progressivement (signal plus stable, affinage).
+On ne traite pas les textes un par un — ce serait désespérément lent. On en traite des millions à la fois : souvent 4 à 16 millions de tokens par batch. Certains entraînements modernes commencent avec de petits batches (le signal est plus bruité, ce qui favorise l'exploration de l'espace des paramètres) et grossissent progressivement (signal plus stable pour un affinage fin des poids). LLaMA-3, par exemple, double la taille du batch à mi-parcours.
 
 ### Mixed precision : la mémoire a un prix
 
-Les GPU ont de la mémoire limitée. Pour faire tenir des milliards de paramètres, on utilise la **mixed precision** : les poids sont stockés en FP32 (précision complète) mais les calculs se font en BF16 (moitié moins de bits). On divise l'empreinte mémoire par deux avec quasi aucune perte de qualité.
+Les GPU ont de la mémoire limitée (40-80 Go pour les meilleurs). Pour faire tenir des milliards de paramètres, on utilise la **mixed precision** : les poids de référence sont stockés en FP32 (32 bits, précision complète) mais les calculs du forward et du backward pass se font en BF16 (16 bits, la moitié). On divise l'empreinte mémoire par deux avec quasi aucune perte de qualité. Le format BF16 est particulièrement adapté car il garde le même range que FP32 (contrairement à FP16 qui peut overflow).
 
 ### Diviser le modèle sur des centaines de GPU
 
-Un modèle de 70 milliards de paramètres ne tient pas sur un seul GPU. Il faut le découper :
-- **Model parallelism** : différentes couches sur différents GPU
-- **Data parallelism** : différents batches traités en parallèle
-- **Pipeline parallelism** : les couches forment un pipeline d'usine
+Un modèle de 70 milliards de paramètres ne tient pas sur un seul GPU (il faudrait ~140 Go juste pour les poids en FP16). Il faut le découper — et c'est un problème d'ingénierie majeur :
+- **Tensor parallelism** : une même couche est découpée sur plusieurs GPU (chaque GPU calcule une partie des matrices d'attention)
+- **Data parallelism** : le même modèle est répliqué sur plusieurs GPU, chacun traitant un batch différent, puis les gradients sont moyennés
+- **Pipeline parallelism** : les couches sont réparties séquentiellement sur des GPU, comme une chaîne de montage — pendant qu'un GPU traite la couche 10, un autre traite la couche 11 sur le batch précédent
 
 <Callout type="warning" title="Le coût astronomique du pré-entraînement">
-LLaMA-3 405B aurait nécessité environ 30 millions d'heures GPU sur des H100. Aux prix cloud actuels, ca représente plusieurs dizaines de millions de dollars. Voilà pourquoi seules une poignée d'organisations dans le monde font du pré-entraînement from scratch. Les autres partent d'un modèle existant et l'adaptent.
+LLaMA-3 405B aurait nécessité environ 30 millions d'heures GPU sur des H100. Aux prix cloud actuels, ça représente plusieurs dizaines de millions de dollars — sans compter l'électricité, le refroidissement et les ingénieurs. Voilà pourquoi seules une poignée d'organisations dans le monde (OpenAI, Google, Meta, Anthropic, Mistral...) font du pré-entraînement from scratch. Les autres partent d'un modèle existant et l'adaptent via le fine-tuning.
 </Callout>
 
+### La qualité des données : le secret le mieux gardé
+
+Un aspect souvent sous-estimé : la qualité des données de pré-entraînement est au moins aussi importante que la taille du modèle. On ne verse pas "tout Internet" dans le modèle sans filtrage. Les équipes de pré-entraînement investissent énormément dans la curation des données : déduplication (supprimer les textes en double), filtrage de qualité (garder les textes bien écrits), décontamination (retirer les benchmarks pour éviter la triche), et équilibrage (la bonne proportion de code, de science, de conversation, etc.). LLaMA-3 a été entraîné sur 15 000 milliards de tokens soigneusement sélectionnés — c'est moins que ce qui est disponible, mais c'est la qualité qui prime.
 
 ## Ce qu'on obtient — et ce qu'il manque encore
 
-Au terme du pré-entraînement, on a un **modèle de base** (base model). Il est bluffant pour compléter du texte de façon cohérente. Mais si vous lui posez une question, il risque de... continuer avec d'autres questions. Parce que dans ses données d'entraînement, les questions étaient souvent suivies d'autres questions.
+Au terme du pré-entraînement, on a un **modèle de base** (base model, aussi appelé "foundation model"). Il est bluffant pour compléter du texte de façon cohérente. Donnez-lui le début d'un article de physique, et il continuera avec des phrases qui ressemblent à de la physique. Donnez-lui du code Python, et il complétera avec du code syntaxiquement correct.
 
-Le modèle de base ne sait pas avoir une conversation, suivre des instructions, ni refuser des demandes dangereuses. C'est le **fine-tuning** — et particulièrement les techniques d'alignement comme le RLHF et le DPO — qui transforment cette encyclopédie brute en assistant utile. C'est ce qu'on explore dans les sections suivantes.
+Mais si vous lui posez une question, il risque de... continuer avec d'autres questions. "Quelle est la capitale de l'Allemagne ?" pourrait être suivi de "Quelle est la capitale de l'Italie ? Quelle est la capitale du Japon ?". Parce que dans ses données d'entraînement, les listes de questions étaient fréquentes, et le modèle ne fait que compléter le pattern le plus probable.
+
+Le modèle de base ne sait pas avoir une conversation, suivre des instructions, ni refuser des demandes dangereuses. Il est comme une encyclopédie vivante qui ne comprend pas qu'on lui parle. C'est le **fine-tuning** — et particulièrement les techniques d'alignement comme le RLHF et le DPO — qui transforment cette encyclopédie brute en assistant utile et sûr. C'est ce qu'on explore dans les sections suivantes.

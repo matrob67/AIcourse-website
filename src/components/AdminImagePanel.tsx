@@ -1,86 +1,65 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
+
+type ImageSize = "small" | "medium" | "large" | "full";
 
 interface Block {
   index: number;
   text: string;
 }
 
-type ImageSize = "small" | "medium" | "large" | "full";
-type VisionModel = "pixtral-large-latest" | "mistral-small-latest";
-
-interface AdminImagePanelProps {
-  partId: string;
-  slug: string;
-}
-
-const MODELS: { id: VisionModel; label: string; desc: string }[] = [
-  { id: "pixtral-large-latest", label: "Pixtral Large", desc: "Plus précis" },
-  { id: "mistral-small-latest", label: "Mistral Small 4", desc: "Plus rapide" },
-];
-
-export default function AdminImagePanel({ partId, slug }: AdminImagePanelProps) {
+export default function AdminImagePanel({ partId, slug }: { partId: string; slug: string }) {
   const [open, setOpen] = useState(false);
   const [blocks, setBlocks] = useState<Block[]>([]);
+  const [loadingBlocks, setLoadingBlocks] = useState(false);
   const [selectedBlock, setSelectedBlock] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
 
+  // Image input
+  const [inputMode, setInputMode] = useState<"url" | "paste">("url");
   const [imageUrl, setImageUrl] = useState("");
-  const [imagePreview, setImagePreview] = useState("");
   const [pastedImage, setPastedImage] = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Metadata
   const [alt, setAlt] = useState("");
+  const [caption, setCaption] = useState("");
   const [source, setSource] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
-  const [caption, setCaption] = useState("");
   const [size, setSize] = useState<ImageSize>("large");
+
+  // AI generation
+  const [aiModel, setAiModel] = useState<string>("mistral-small-latest");
+  const [aiLoading, setAiLoading] = useState(false);
+
+  // Insert state
   const [saving, setSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "success" | "error">("idle");
 
-  const [visionModel, setVisionModel] = useState<VisionModel>("pixtral-large-latest");
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analyzeError, setAnalyzeError] = useState("");
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Image management state
+  const [editingImage, setEditingImage] = useState<number | null>(null);
+  const [deletingImage, setDeletingImage] = useState<number | null>(null);
 
   // Load blocks when panel opens
   useEffect(() => {
     if (!open) return;
-    setLoading(true);
+    setLoadingBlocks(true);
     fetch(`/api/admin/page-content?partId=${partId}&slug=${slug}`)
-      .then(r => r.json())
-      .then(data => {
-        setBlocks(data.blocks || []);
-        setLoading(false);
-      });
+      .then((r) => r.json())
+      .then((data) => setBlocks(data.blocks || []))
+      .finally(() => setLoadingBlocks(false));
   }, [open, partId, slug]);
 
+  // Sync preview with URL input
   useEffect(() => {
-    if (!pastedImage) setImagePreview(imageUrl);
-  }, [imageUrl, pastedImage]);
+    if (inputMode === "url") setImagePreview(imageUrl);
+  }, [imageUrl, inputMode]);
 
-  const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (!file) continue;
-        const form = new FormData();
-        form.append("file", file);
-        const res = await fetch("/api/admin/upload-image", { method: "POST", body: form });
-        const data = await res.json();
-        if (data.url) {
-          setPastedImage(data.url);
-          setImagePreview(data.url);
-        }
-        break;
-      }
-    }
-  }, []);
+  const currentSrc = inputMode === "url" ? imageUrl : pastedImage;
 
-  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Upload handler (paste or file)
+  const uploadFile = useCallback(async (file: File) => {
     const form = new FormData();
     form.append("file", file);
     const res = await fetch("/api/admin/upload-image", { method: "POST", body: form });
@@ -91,250 +70,532 @@ export default function AdminImagePanel({ partId, slug }: AdminImagePanelProps) 
     }
   }, []);
 
-  const handleAnalyze = async () => {
-    const src = pastedImage || imageUrl;
-    if (!src) return;
-    setAnalyzing(true);
-    setAnalyzeError("");
+  // Global paste listener — works anywhere when panel is open in paste mode
+  useEffect(() => {
+    if (!open || inputMode !== "paste") return;
+    const handler = (e: ClipboardEvent) => {
+      if (!e.clipboardData) return;
+      for (const item of e.clipboardData.items) {
+        if (item.type.startsWith("image/")) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) uploadFile(file);
+          break;
+        }
+      }
+    };
+    window.addEventListener("paste", handler);
+    return () => window.removeEventListener("paste", handler);
+  }, [open, inputMode, uploadFile]);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith("image/")) uploadFile(file);
+    },
+    [uploadFile]
+  );
+
+  // AI caption generation
+  const generateWithAI = async () => {
+    if (!currentSrc) return;
+    setAiLoading(true);
+    const contextText = selectedBlock !== null ? blocks[selectedBlock]?.text || "" : "";
     try {
-      const contextText = selectedBlock !== null
-        ? blocks.find(b => b.index === selectedBlock)?.text ?? ""
-        : "";
       const res = await fetch("/api/admin/analyze-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ src, partId, slug, contextText, model: visionModel }),
+        body: JSON.stringify({ src: currentSrc, partId, slug, contextText, model: aiModel }),
       });
       const data = await res.json();
       if (data.error) {
-        setAnalyzeError(data.error);
+        alert("Erreur Mistral : " + data.error);
       } else {
         if (data.alt) setAlt(data.alt);
         if (data.caption) setCaption(data.caption);
         if (data.source) setSource(data.source);
       }
     } catch {
-      setAnalyzeError("Erreur réseau");
+      alert("Erreur de connexion à l'API");
     }
-    setAnalyzing(false);
+    setAiLoading(false);
   };
 
+  // Insert image
   const handleInsert = async () => {
-    if (selectedBlock === null) return;
-    const src = pastedImage || imageUrl;
-    if (!src) return;
-
+    if (!currentSrc || selectedBlock === null) return;
     setSaving(true);
-    setSaveStatus("idle");
+    setStatus("idle");
     try {
       const res = await fetch("/api/admin/insert-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ partId, slug, afterBlockIndex: selectedBlock, src, alt, source, sourceUrl, caption, size }),
+        body: JSON.stringify({
+          partId,
+          slug,
+          afterBlockIndex: selectedBlock,
+          src: currentSrc,
+          alt: alt || caption || "illustration",
+          source,
+          sourceUrl,
+          caption,
+          size,
+        }),
       });
       const data = await res.json();
       if (data.success) {
-        setSaveStatus("success");
-        fetch(`/api/admin/page-content?partId=${partId}&slug=${slug}`)
-          .then(r => r.json())
-          .then(d => setBlocks(d.blocks || []));
-        setImageUrl(""); setImagePreview(""); setPastedImage(null);
-        setAlt(""); setSource(""); setSourceUrl(""); setCaption("");
+        setStatus("success");
+        // Reload blocks
+        await reloadBlocks();
+        // Reset form
+        setImageUrl("");
+        setImagePreview("");
+        setPastedImage(null);
+        setAlt("");
+        setCaption("");
+        setSource("");
+        setSourceUrl("");
         setSelectedBlock(null);
-        setTimeout(() => window.location.reload(), 800);
       } else {
-        setSaveStatus("error");
+        setStatus("error");
       }
     } catch {
-      setSaveStatus("error");
+      setStatus("error");
     }
     setSaving(false);
   };
 
-  const currentSrc = pastedImage || imageUrl;
-  const canInsert = selectedBlock !== null && !!currentSrc;
-  const canAnalyze = !!currentSrc;
+  // Reload blocks helper
+  const reloadBlocks = async () => {
+    const fresh = await fetch(`/api/admin/page-content?partId=${partId}&slug=${slug}`).then((r) => r.json());
+    setBlocks(fresh.blocks || []);
+  };
 
-  return (
-    <>
-      {/* Floating trigger button */}
+  // Delete image
+  const handleDeleteImage = async (blockIndex: number) => {
+    setDeletingImage(blockIndex);
+    try {
+      const res = await fetch("/api/admin/delete-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partId, slug, blockIndex }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setStatus("success");
+        await reloadBlocks();
+      } else {
+        alert("Erreur: " + (data.error || "inconnue"));
+      }
+    } catch {
+      alert("Erreur de connexion");
+    }
+    setDeletingImage(null);
+  };
+
+  // Resize image
+  const handleResizeImage = async (blockIndex: number, newSize: ImageSize) => {
+    try {
+      const res = await fetch("/api/admin/update-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partId, slug, blockIndex, size: newSize }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setStatus("success");
+        await reloadBlocks();
+        setEditingImage(null);
+      } else {
+        alert("Erreur: " + (data.error || "inconnue"));
+      }
+    } catch {
+      alert("Erreur de connexion");
+    }
+  };
+
+  const canInsert = !!currentSrc && selectedBlock !== null;
+
+  // Missing fields hint
+  const missingHints: string[] = [];
+  if (!currentSrc) missingHints.push("image");
+  if (selectedBlock === null) missingHints.push("emplacement");
+
+  // Floating button when closed
+  if (!open) {
+    return (
       <button
         onClick={() => setOpen(true)}
+        className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full shadow-lg flex items-center justify-center text-2xl hover:scale-110 transition-transform"
+        style={{ background: "var(--accent)", color: "white" }}
         title="Insérer une image"
-        className="fixed bottom-6 right-6 z-40 w-12 h-12 rounded-full bg-accent text-white shadow-lg shadow-accent/30 flex items-center justify-center text-xl hover:scale-110 transition-transform"
       >
         🖼️
       </button>
+    );
+  }
 
-      {/* Overlay */}
-      {open && (
-        <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm" onClick={() => setOpen(false)} />
-      )}
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
 
-      {/* Slide-over drawer */}
-      <div className={`fixed top-0 right-0 z-50 h-full w-[480px] bg-background border-l border-card-border shadow-2xl flex flex-col transition-transform duration-300 ${open ? "translate-x-0" : "translate-x-full"}`}>
-
+      {/* Panel */}
+      <div
+        className="relative ml-auto w-full max-w-2xl h-full overflow-y-auto shadow-2xl flex flex-col"
+        style={{ background: "var(--background)", borderLeft: "1px solid var(--card-border)" }}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-card-border shrink-0">
-          <div>
-            <h2 className="font-semibold text-base">🖼️ Insérer une image</h2>
-            <p className="text-xs text-muted mt-0.5">{partId} / {slug}</p>
+        <div className="sticky top-0 z-10 flex items-center gap-3 px-5 py-4 border-b" style={{ background: "var(--background)", borderColor: "var(--card-border)" }}>
+          <span className="text-xl">🖼️</span>
+          <div className="flex-1">
+            <h2 className="text-base font-bold">Insérer une image</h2>
+            <p className="text-xs" style={{ color: "var(--muted)" }}>
+              {partId}/{slug}
+            </p>
           </div>
-          <button onClick={() => setOpen(false)} className="text-muted hover:text-foreground text-xl leading-none">✕</button>
+          <button onClick={() => setOpen(false)} className="text-xl px-2 hover:opacity-60">
+            ✕
+          </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto flex flex-col gap-4 p-5">
-
-          {/* STEP 1 - Select block */}
-          <div>
-            <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
-              1 · Après quel paragraphe ?
-            </p>
-            {loading && <p className="text-sm text-muted">Chargement…</p>}
-            <div className="space-y-0 max-h-56 overflow-y-auto rounded-lg border border-card-border">
-              {blocks.map(block => {
-                const isImage = block.text.startsWith("<ImageWithSource");
-                const isSelected = selectedBlock === block.index;
-                return (
-                  <div
-                    key={block.index}
-                    onClick={() => !isImage && setSelectedBlock(block.index)}
-                    className={`px-3 py-2 text-xs cursor-pointer border-b border-card-border last:border-0 transition-colors ${
-                      isImage ? "text-muted opacity-50 cursor-default bg-card/30"
-                      : isSelected ? "bg-accent/10 text-accent font-medium"
-                      : "hover:bg-card/50"
-                    }`}
-                  >
-                    {isImage
-                      ? "🖼️ image existante"
-                      : <span className="line-clamp-2 font-mono leading-relaxed">{block.text.slice(0, 120)}{block.text.length > 120 ? "…" : ""}</span>
-                    }
-                    {isSelected && <span className="block text-accent text-xs mt-0.5">↓ image ici</span>}
-                  </div>
-                );
-              })}
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {/* ===== IMAGE INPUT ===== */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--muted)" }}>
+              1. Image
+            </h3>
+            <div className="flex gap-2 mb-3">
+              <button
+                onClick={() => { setInputMode("url"); setPastedImage(null); setImagePreview(imageUrl); }}
+                className="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
+                style={{
+                  background: inputMode === "url" ? "var(--accent)" : "transparent",
+                  color: inputMode === "url" ? "white" : "var(--muted)",
+                  borderColor: inputMode === "url" ? "var(--accent)" : "var(--card-border)",
+                }}
+              >
+                🔗 URL
+              </button>
+              <button
+                onClick={() => { setInputMode("paste"); setImagePreview(pastedImage || ""); }}
+                className="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
+                style={{
+                  background: inputMode === "paste" ? "var(--accent)" : "transparent",
+                  color: inputMode === "paste" ? "white" : "var(--muted)",
+                  borderColor: inputMode === "paste" ? "var(--accent)" : "var(--card-border)",
+                }}
+              >
+                📋 Coller / Glisser
+              </button>
             </div>
-          </div>
 
-          {/* STEP 2 - Image */}
-          <div>
-            <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
-              2 · Image
-            </p>
-            <div className="space-y-2">
+            {inputMode === "url" && (
               <input
                 type="text"
                 placeholder="https://..."
                 value={imageUrl}
-                onChange={e => setImageUrl(e.target.value)}
-                disabled={!!pastedImage}
-                className="w-full rounded-lg border border-card-border bg-background px-3 py-2 text-xs font-mono outline-none focus:border-accent disabled:opacity-40"
+                onChange={(e) => setImageUrl(e.target.value)}
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none font-mono"
+                style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}
               />
+            )}
+
+            {inputMode === "paste" && (
               <div
-                onPaste={handlePaste}
+                onDrop={handleDrop}
+                onDragOver={(e) => e.preventDefault()}
                 onClick={() => fileInputRef.current?.click()}
                 tabIndex={0}
-                className={`rounded-xl border-2 border-dashed p-4 text-center cursor-pointer transition-colors outline-none ${pastedImage ? "border-accent bg-accent/5" : "border-card-border hover:border-accent/50"}`}
+                className="rounded-xl border-2 border-dashed p-6 text-center cursor-pointer transition-colors outline-none hover:opacity-80"
+                style={{ borderColor: pastedImage ? "var(--accent)" : "var(--card-border)" }}
               >
                 {pastedImage ? (
                   <div>
-                    <p className="text-accent text-xs font-medium">✓ Image collée</p>
+                    <p className="text-sm font-medium" style={{ color: "var(--accent)" }}>
+                      Image chargee
+                    </p>
+                    <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>{pastedImage}</p>
                     <button
-                      onClick={e => { e.stopPropagation(); setPastedImage(null); setImagePreview(imageUrl); }}
-                      className="text-xs text-red-400 hover:underline mt-1"
-                    >Supprimer</button>
+                      onClick={(e) => { e.stopPropagation(); setPastedImage(null); setImagePreview(""); }}
+                      className="mt-2 text-xs text-red-500 hover:underline"
+                    >
+                      Supprimer
+                    </button>
                   </div>
                 ) : (
-                  <p className="text-xs text-muted">📋 Ctrl+V ou cliquer pour choisir un fichier</p>
+                  <div>
+                    <p className="text-3xl mb-1">📋</p>
+                    <p className="text-sm" style={{ color: "var(--muted)" }}>Ctrl+V pour coller ou glisser-deposer</p>
+                    <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>ou cliquer pour choisir un fichier</p>
+                  </div>
                 )}
               </div>
-            </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFile(f); }}
+            />
 
-            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
-
+            {/* Preview */}
             {imagePreview && (
-              <div className="mt-2 rounded-lg border border-card-border overflow-hidden">
+              <div className="mt-3 rounded-lg border overflow-hidden" style={{ borderColor: "var(--card-border)" }}>
+                <div className="px-3 py-1.5 text-xs border-b" style={{ color: "var(--muted)", borderColor: "var(--card-border)", background: "var(--card-bg)" }}>
+                  Apercu
+                </div>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={imagePreview} alt="preview" className="w-full max-h-32 object-contain" onError={() => setImagePreview("")} />
+                <img
+                  src={imagePreview}
+                  alt="preview"
+                  className="w-full object-contain max-h-48"
+                  onError={() => setImagePreview("")}
+                />
               </div>
             )}
-          </div>
+          </section>
 
-          {/* STEP 3 - AI Analysis */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-muted uppercase tracking-wide">3 · Infos</p>
-              {/* Model selector + analyze button */}
-              <div className="flex items-center gap-1.5">
-                <div className="flex rounded-lg border border-card-border overflow-hidden">
-                  {MODELS.map(m => (
+          {/* ===== PLACEMENT ===== */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--muted)" }}>
+              2. Emplacement (cliquer sur un bloc)
+            </h3>
+            <div
+              className="rounded-lg border overflow-hidden"
+              style={{ borderColor: "var(--card-border)", maxHeight: 240, overflowY: "auto" }}
+            >
+              {loadingBlocks && (
+                <p className="p-3 text-xs" style={{ color: "var(--muted)" }}>Chargement...</p>
+              )}
+              {!loadingBlocks && blocks.length === 0 && (
+                <p className="p-3 text-xs" style={{ color: "var(--muted)" }}>Aucun contenu MDX trouve</p>
+              )}
+              {blocks.map((block) => {
+                const isImage = block.text.startsWith("<ImageWithSource");
+                const isSelected = selectedBlock === block.index;
+                const isEditing = editingImage === block.index;
+                // Extract current size from image block
+                const currentSize = isImage ? (block.text.match(/size="([^"]*)"/)?.[1] || "large") : "";
+                // Extract src for preview
+                const imgSrc = isImage ? (block.text.match(/src="([^"]*)"/)?.[1] || "") : "";
+                // Extract caption
+                const imgCaption = isImage ? (block.text.match(/caption="([^"]*)"/)?.[1] || "") : "";
+
+                return (
+                  <div
+                    key={block.index}
+                    onClick={() => !isImage && setSelectedBlock(block.index)}
+                    className="px-3 py-2 text-xs border-b last:border-0 transition-colors"
+                    style={{
+                      borderColor: "var(--card-border)",
+                      cursor: isImage ? "default" : "pointer",
+                      background: isSelected ? "var(--accent-light)" : isImage ? "var(--card-bg)" : "transparent",
+                      borderLeft: isSelected ? "3px solid var(--accent)" : "3px solid transparent",
+                    }}
+                  >
+                    {isImage ? (
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span style={{ color: "var(--accent)" }}>🖼️</span>
+                          <span className="flex-1 truncate" style={{ color: "var(--foreground)" }}>
+                            {imgCaption || imgSrc.split("/").pop() || "image"}
+                          </span>
+                          <span
+                            className="px-1.5 py-0.5 rounded text-[10px] font-mono"
+                            style={{ background: "var(--card-border)", color: "var(--muted)" }}
+                          >
+                            {currentSize}
+                          </span>
+                        </div>
+                        {/* Action buttons */}
+                        <div className="flex gap-1.5 mt-1.5">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setEditingImage(isEditing ? null : block.index); }}
+                            className="px-2 py-1 rounded text-[10px] font-medium border transition-colors hover:opacity-80"
+                            style={{
+                              borderColor: "var(--card-border)",
+                              color: isEditing ? "white" : "var(--accent)",
+                              background: isEditing ? "var(--accent)" : "transparent",
+                            }}
+                          >
+                            Redimensionner
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm("Supprimer cette image ?")) handleDeleteImage(block.index);
+                            }}
+                            disabled={deletingImage === block.index}
+                            className="px-2 py-1 rounded text-[10px] font-medium border transition-colors hover:opacity-80"
+                            style={{ borderColor: "#fecaca", color: "#dc2626", background: "transparent" }}
+                          >
+                            {deletingImage === block.index ? "..." : "Supprimer"}
+                          </button>
+                        </div>
+                        {/* Resize picker */}
+                        {isEditing && (
+                          <div className="flex gap-1 mt-2">
+                            {(["small", "medium", "large", "full"] as ImageSize[]).map((s) => (
+                              <button
+                                key={s}
+                                onClick={(e) => { e.stopPropagation(); handleResizeImage(block.index, s); }}
+                                className="flex-1 py-1 rounded text-[10px] font-medium border transition-colors"
+                                style={{
+                                  background: currentSize === s ? "var(--accent)" : "transparent",
+                                  color: currentSize === s ? "white" : "var(--muted)",
+                                  borderColor: currentSize === s ? "var(--accent)" : "var(--card-border)",
+                                }}
+                              >
+                                {s}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="font-mono line-clamp-2 break-words" style={{ color: "var(--foreground)" }}>
+                        {block.text.slice(0, 150)}{block.text.length > 150 ? "..." : ""}
+                      </span>
+                    )}
+                    {isSelected && (
+                      <div className="mt-1 text-xs font-medium" style={{ color: "var(--accent)" }}>
+                        ↓ image inseree ici
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* ===== METADATA ===== */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--muted)" }}>
+              3. Metadonnees
+            </h3>
+
+            {/* AI generation */}
+            {currentSrc && (
+              <div
+                className="flex items-center gap-2 mb-3 p-3 rounded-lg border"
+                style={{ background: "var(--card-bg)", borderColor: "var(--card-border)" }}
+              >
+                <select
+                  value={aiModel}
+                  onChange={(e) => setAiModel(e.target.value)}
+                  className="text-xs rounded border px-2 py-1.5 outline-none"
+                  style={{ borderColor: "var(--card-border)", background: "var(--background)" }}
+                >
+                  <option value="mistral-small-latest">Mistral Small 4</option>
+                  <option value="pixtral-large-latest">Pixtral Large</option>
+                </select>
+                <button
+                  onClick={generateWithAI}
+                  disabled={aiLoading}
+                  className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                  style={{
+                    background: aiLoading ? "var(--card-border)" : "var(--accent)",
+                    color: "white",
+                  }}
+                >
+                  {aiLoading ? "Analyse en cours..." : "✨ Generer legende avec Mistral"}
+                </button>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Legende</label>
+                <input
+                  type="text"
+                  placeholder="Ex : Figure 2 — Architecture du modele BERT"
+                  value={caption}
+                  onChange={(e) => setCaption(e.target.value)}
+                  className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                  style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}
+                />
+              </div>
+              <div>
+                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>
+                  Source (optionnel)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex : arXiv 1706.03762, Wikipedia"
+                  value={source}
+                  onChange={(e) => setSource(e.target.value)}
+                  className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                  style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}
+                />
+              </div>
+              <div>
+                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>URL source (optionnel)</label>
+                <input
+                  type="text"
+                  placeholder="https://..."
+                  value={sourceUrl}
+                  onChange={(e) => setSourceUrl(e.target.value)}
+                  className="w-full rounded-lg border px-3 py-2 text-sm outline-none font-mono text-xs"
+                  style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}
+                />
+              </div>
+              <div>
+                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Taille</label>
+                <div className="flex gap-2">
+                  {(["small", "medium", "large", "full"] as ImageSize[]).map((s) => (
                     <button
-                      key={m.id}
-                      onClick={() => setVisionModel(m.id)}
-                      title={m.desc}
-                      className={`px-2 py-1 text-xs transition-colors ${visionModel === m.id ? "bg-accent text-white" : "text-muted hover:text-foreground hover:bg-card/50"}`}
+                      key={s}
+                      onClick={() => setSize(s)}
+                      className="flex-1 py-1.5 rounded-lg text-xs border transition-colors"
+                      style={{
+                        background: size === s ? "var(--accent)" : "transparent",
+                        color: size === s ? "white" : "var(--muted)",
+                        borderColor: size === s ? "var(--accent)" : "var(--card-border)",
+                      }}
                     >
-                      {m.label}
+                      {s}
                     </button>
                   ))}
                 </div>
-                <button
-                  onClick={handleAnalyze}
-                  disabled={!canAnalyze || analyzing}
-                  title="Analyser l'image avec l'IA"
-                  className={`px-3 py-1 rounded-lg text-xs font-medium border transition-all ${canAnalyze && !analyzing ? "border-accent text-accent hover:bg-accent hover:text-white" : "border-card-border text-muted cursor-not-allowed"}`}
-                >
-                  {analyzing ? "…" : "✨ Générer"}
-                </button>
               </div>
             </div>
-
-            {analyzeError && (
-              <p className="text-xs text-red-400 mb-2">{analyzeError}</p>
-            )}
-
-            <div className="space-y-2">
-              <input type="text" placeholder="Texte alt (optionnel)" value={alt} onChange={e => setAlt(e.target.value)}
-                className="w-full rounded-lg border border-card-border bg-background px-3 py-1.5 text-xs outline-none focus:border-accent" />
-              <textarea placeholder="Légende (optionnel)" value={caption} onChange={e => setCaption(e.target.value)} rows={2}
-                className="w-full rounded-lg border border-card-border bg-background px-3 py-1.5 text-xs outline-none focus:border-accent resize-none" />
-              <input type="text" placeholder="Source (optionnel)" value={source} onChange={e => setSource(e.target.value)}
-                className="w-full rounded-lg border border-card-border bg-background px-3 py-1.5 text-xs outline-none focus:border-accent" />
-              <input type="text" placeholder="URL source (optionnel)" value={sourceUrl} onChange={e => setSourceUrl(e.target.value)}
-                className="w-full rounded-lg border border-card-border bg-background px-3 py-1.5 text-xs font-mono outline-none focus:border-accent" />
-              <div className="flex gap-1.5">
-                {(["small", "medium", "large", "full"] as ImageSize[]).map(s => (
-                  <button key={s} onClick={() => setSize(s)}
-                    className={`flex-1 py-1 rounded text-xs border transition-colors ${size === s ? "bg-accent text-white border-accent" : "border-card-border text-muted hover:border-accent"}`}>
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          </section>
         </div>
 
-        {/* Footer */}
-        <div className="p-5 border-t border-card-border shrink-0 space-y-2">
-          {saveStatus === "success" && (
-            <div className="text-xs bg-green-500/10 text-green-400 px-3 py-2 rounded-lg border border-green-500/20 text-center">
-              ✓ Image insérée — rechargement…
+        {/* ===== FOOTER / INSERT ===== */}
+        <div className="sticky bottom-0 p-4 border-t space-y-2" style={{ background: "var(--background)", borderColor: "var(--card-border)" }}>
+          {status === "success" && (
+            <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#dcfce7", color: "#166534" }}>
+              Image inseree avec succes ! Rechargez la page pour voir le resultat.
             </div>
           )}
-          {saveStatus === "error" && (
-            <div className="text-xs bg-red-500/10 text-red-400 px-3 py-2 rounded-lg border border-red-500/20 text-center">
-              ✗ Erreur lors de l&apos;insertion
+          {status === "error" && (
+            <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#fef2f2", color: "#991b1b" }}>
+              Erreur lors de l&apos;insertion.
+            </div>
+          )}
+          {missingHints.length > 0 && (
+            <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "var(--card-bg)", color: "var(--muted)" }}>
+              Manque : {missingHints.join(", ")}
             </div>
           )}
           <button
             onClick={handleInsert}
             disabled={!canInsert || saving}
-            className={`w-full py-3 rounded-xl text-sm font-semibold transition-all ${canInsert && !saving ? "bg-accent text-white hover:bg-accent/90 shadow-lg shadow-accent/20" : "bg-card text-muted border border-card-border cursor-not-allowed"}`}
+            className="w-full py-3 rounded-xl text-sm font-semibold transition-all"
+            style={{
+              background: canInsert && !saving ? "var(--accent)" : "var(--card-border)",
+              color: canInsert && !saving ? "white" : "var(--muted)",
+              cursor: canInsert && !saving ? "pointer" : "not-allowed",
+            }}
           >
-            {saving ? "Insertion…" : "Insérer l'image"}
+            {saving ? "Insertion..." : "Inserer l'image"}
           </button>
         </div>
       </div>
-    </>
+    </div>
   );
 }

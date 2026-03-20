@@ -5,76 +5,94 @@ description: "Microsoft 2021. Fine-tuner GPT-3 coûte 280 GB mémoire. LoRA : ad
 
 
 
-## Le problème coûteux
+## Le problème : fine-tuner un gros modèle coûte une fortune
 
-Fine-tuner LLM de 70B : 70B paramètres à mettre à jour. 280 GB en mémoire. Prohibitif.
+Tu as un modèle de 70 milliards de paramètres. Tu veux l'adapter à ton domaine : médical, juridique, ton style d'écriture. Le fine-tuning classique consiste à mettre à jour **tous** les 70 milliards de paramètres.
 
-Chaque tâche ? Copie du modèle. Et updates.
+En pratique, ça demande environ 280 GB de mémoire GPU (les poids en float16, plus les gradients, plus les états de l'optimiseur). C'est un cluster de GPU A100. Des dizaines de milliers de dollars.
 
-Solution : LoRA.
+Et si tu veux adapter le même modèle à 10 tâches différentes ? Tu stockes 10 copies de 140 GB chacune. C'est absurde.
 
-<Callout type="info" title="La révolution d'efficience">
-LoRA rend le fine-tuning des gros modèles possible. Sur GPU unique. Pas de clusters. C'est crucial pour l'adoption.
+**LoRA** (Low-Rank Adaptation, Hu et al., Microsoft, 2021) résout tout ça d'un coup.
+
+<Callout type="info" title="La révolution de l'efficience">
+LoRA rend le fine-tuning des gros modèles possible sur un **seul GPU**. Pas de cluster. Pas de budget de recherche. Un étudiant avec une RTX 4090 peut adapter un modèle de 7B paramètres. C'est ça qui a rendu le fine-tuning accessible à tous.
 </Callout>
 
-## L'idée : rang faible
+## L'idée géniale : les mises à jour sont de rang faible
 
-Les mises à jour des poids ont rang intrinsèque faible. Au lieu d'updater W (d x d), décomposez :
+L'intuition derrière LoRA est mathématiquement élégante. Quand tu fine-tunes un modèle, les changements apportés aux poids (les "deltas") ne sont pas arbitraires. Ils ont un **rang intrinsèque faible**. En clair : les mises à jour vivent dans un sous-espace beaucoup plus petit que l'espace total des paramètres.
 
-```
-delta_W = B * A
+Au lieu de mettre à jour la matrice de poids $W$ complète (de dimensions $d \times d$), LoRA décompose la mise à jour :
 
-B : d x r
-A : r x d
-r << d
-```
+$$\Delta W = B \times A$$
 
-Exemple : d=1000, r=8. Vous mettez à jour 8000 paramètres au lieu d'un million.
+- $B$ a pour dimensions $d \times r$
+- $A$ a pour dimensions $r \times d$
+- $r \ll d$ (le rang, typiquement entre 4 et 64)
 
-## Mécanisme
+Pour donner un exemple concret : si $d = 4096$ (typique d'un LLM moderne) et $r = 8$, tu mets à jour $4096 \times 8 + 8 \times 4096 = 65\,536$ paramètres au lieu de $4096 \times 4096 = 16\,777\,216$. C'est **256x moins de paramètres**.
 
-Pour chaque couche :
+L'analogie ? Imagine que tu veux modifier une photo de 10 mégapixels. Au lieu de redesigner chaque pixel, tu décris les modifications avec quelques filtres simples (luminosité, contraste, balance des couleurs). Le résultat est visuellement identique, mais ta "recette de modification" tient en quelques octets au lieu de 10 Mo.
 
-1. Geler W (pas de gradients)
-2. Ajouter deux petites matrices A et B (rang r, typiquement 8-64)
-3. Sortie devient : y = Wx + BAx
-4. Entraîner seulement A et B
+## Le mécanisme en pratique
 
-Après entraînement ? Fusionnez : W' = W + BA. Même architecture. Même vitesse.
+Pour chaque couche du modèle que tu veux adapter :
 
-## Les chiffres
+1. **Gèle W** : la matrice de poids originale ne reçoit aucun gradient, elle reste intacte
+2. **Ajoute deux petites matrices A et B** : initialisées de manière à ce que $BA = 0$ au départ (pas de perturbation initiale)
+3. **La sortie devient** : $y = Wx + BAx$ (l'original plus la correction)
+4. **Entraîne uniquement A et B** : seuls ces paramètres reçoivent des gradients
 
-GPT-3 175B avec r=4 :
+Après l'entraînement, la magie : tu peux **fusionner** les adaptations avec les poids originaux. $W' = W + BA$. Le modèle résultant a exactement la même architecture et la même vitesse d'inférence que l'original. Pas de surcoût en production.
 
-- Paramètres entraînables : 4.7M
-- Réduction : **10 000x**
-- Performance : égale ou supérieure au fine-tuning complet
+Et si tu veux adapter le même modèle de base à 10 tâches différentes ? Tu stockes 10 paires (A, B), chacune de quelques mégaoctets. Tu échanges les adapteurs en quelques millisecondes. Un seul modèle de base, des dizaines de spécialisations.
 
 <Callout type="tip" title="Quelles couches adapter ?">
-LoRA peut adapter n'importe quelles matrices. Study montre : Q et V donnent meilleur ratio. Pratique : adapter tout (q, k, v, o, FFN) avec petit rang fonctionne bien.
+LoRA peut s'appliquer à n'importe quelle matrice de poids. L'étude originale montre que les projections $Q$ (query) et $V$ (value) de l'attention donnent le meilleur ratio qualité/coût. En pratique, adapter toutes les couches (Q, K, V, O, FFN) avec un rang petit ($r = 8$) fonctionne souvent mieux que quelques couches avec un rang élevé.
 </Callout>
 
-## Les variantes
+## Les chiffres qui parlent
 
-**QLoRA** (2023) : combine LoRA avec quantification 4-bit. Fine-tune 65B sur GPU 48GB. Révolution.
+Sur GPT-3 175B avec un rang $r = 4$ :
 
-**DoRA** : décompose poids en magnitude et direction. LoRA appliqué séparément.
+- **Paramètres entraînables** : 4.7 millions (sur 175 milliards)
+- **Réduction** : **10 000x** moins de paramètres à entraîner
+- **Performance** : égale ou supérieure au fine-tuning complet sur plusieurs tâches
+- **Mémoire** : un seul GPU suffit (au lieu d'un cluster)
+- **Stockage** : quelques Mo par adaptation (au lieu de centaines de Go)
 
-**LoRA+** : learning rates différents pour A vs B.
+Comment c'est possible que 0.003% des paramètres suffisent ? Parce que le modèle pré-entraîné a déjà appris les représentations fondamentales du langage. Le fine-tuning ne fait que les "ajuster" légèrement. Et ces ajustements sont de rang faible : ils ne modifient qu'un petit sous-espace des poids.
+
+## Les variantes : l'évolution de LoRA
+
+**QLoRA** (Dettmers et al., 2023) : la vraie révolution. Combine LoRA avec une quantification 4-bit du modèle de base. Résultat : fine-tuner un modèle de 65B paramètres sur un **seul GPU de 48 GB** (une A6000 ou une A100). C'est QLoRA qui a véritablement démocratisé le fine-tuning pour la communauté.
+
+**DoRA** (Weight-Decomposed Low-Rank Adaptation) : décompose les poids en composante de **magnitude** et de **direction**, puis applique LoRA séparément sur chacune. Plus fidèle au comportement du fine-tuning complet.
+
+**LoRA+** : utilise des learning rates différents pour les matrices A et B, ce qui accélère la convergence.
+
+**rsLoRA** : ajuste le facteur de scaling en fonction du rang pour améliorer la stabilité.
 
 ## L'écosystème LoRA
 
-PEFT (Hugging Face) : library pour LoRA. Civitai : milliers de LoRA pour images. Partout.
+LoRA est devenu le **standard de facto du fine-tuning**. L'écosystème est massif :
 
-C'est le standard de facto du fine-tuning.
+- **PEFT** (Hugging Face) : la bibliothèque de référence pour LoRA et autres méthodes de fine-tuning efficace
+- **Unsloth** : fine-tuning LoRA optimisé, 2x plus rapide
+- **Civitai** : des milliers de LoRA communautaires pour la génération d'images (Stable Diffusion)
+- **Axolotl** : framework de fine-tuning simplifié
 
-## Applications
+## Applications concrètes
 
-- Personnalisation de style (écriture)
-- Spécialisation domaine (médical, juridique)
-- Instruction tuning (base model → assistant)
-- Génération d'images (Stable Diffusion styles)
+Les usages de LoRA sont partout :
 
-<Callout type="warning" title="LoRA n'est pas panacée">
-Réduit le coût, pas la qualité des données. Rang trop bas limite les performances sur tâches complexes. Catastrophic forgetting possible.
+- **Personnalisation de style** : adapter le ton d'écriture d'un assistant (formel, décontracté, technique)
+- **Spécialisation par domaine** : médical, juridique, financier, scientifique
+- **Instruction tuning** : transformer un modèle de base en assistant conversationnel
+- **Génération d'images** : entraîner des styles visuels personnalisés sur Stable Diffusion (un artiste, un type de photo, un personnage)
+- **Multilinguisme** : adapter un modèle anglophone à une autre langue
+
+<Callout type="warning" title="LoRA n'est pas une panacée">
+LoRA réduit le coût, mais pas la nécessité de bonnes données. Des données de mauvaise qualité produiront un mauvais fine-tuning, peu importe la méthode. Un rang trop bas ($r = 1$ ou $r = 2$) limite les performances sur les tâches complexes qui nécessitent des modifications profondes du comportement. Et le catastrophic forgetting reste possible : en adaptant le modèle à une nouvelle tâche, il peut "oublier" des capacités existantes.
 </Callout>

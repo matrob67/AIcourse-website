@@ -3,92 +3,89 @@ title: "Architecture Mixture-of-Experts chez Mistral"
 description: "Plongée technique dans l'architecture MoE de Mistral AI : routage sparse, 8 groupes d'experts, sélection top-2 par token, et comment cela permet une grande capacité à faible coût d'inférence."
 ---
 
-## MoE : Comment Mistral échange la puissance brute contre l'intelligence
+## MoE : Comment Mistral obtient la puissance d'un géant au prix d'un modèle moyen
 
-Imaginez une usine. Un modèle classique (dense), c'est une grosse machine qui tourne à plein régime TOUT le temps. Même si tu fais un truc simple, tous les pistons de la machine fonctionnent. Massif. Inefficace. Cher en électricité.
+Imaginez une usine. Un modèle classique (dense), c'est une seule énorme machine qui tourne à plein régime TOUT le temps. Même pour visser un boulon, tous les pistons de la machine sont en marche. Massif. Gaspilleur. Cher en électricité.
 
-Mixture-of-Experts (MoE)? C'est un système où 8 machines spécialisées sont présentes, mais une question simple n'active QUE 2 machines. Gaspillage zéro. C'est comme ça que Mistral obtient la puissance d'un modèle géant en payant l'électricité d'un modèle moyen.
+Le Mixture-of-Experts (MoE)? C'est un atelier avec 8 machines spécialisées, mais pour chaque pièce à usiner, on n'en active que 2 : celles qui sont les plus adaptées au travail du moment. Les 6 autres restent au repos. Résultat : la capacité de production d'un atelier complet, mais une facture d'électricité divisée par 4. C'est exactement comme ça que Mistral obtient la puissance d'un modèle géant en ne payant le calcul que d'un modèle moyen.
 
-### Dense vs MoE : la différence en chiffres
+### Dense vs MoE : la différence qui change tout
 
-**Modèle dense (classique):** 70 milliards de paramètres. Chaque token active = 70 milliards d'opérations. Lent. Cher.
+**Modèle dense (classique) :** 70 milliards de paramètres. Chaque token active les 70 milliards. Chaque requête mobilise l'intégralité du réseau de neurones. C'est puissant, mais c'est comme allumer toutes les lumières d'un immeuble pour lire un livre dans une seule pièce.
 
-**Modèle MoE (Mistral):** 46,7 milliards de paramètres TOTAUX. Mais chaque token n'active que 12,9 milliards. Pourquoi? Parce qu'on a 8 experts (groupes de paramètres), et le router dit "ce token, tu vas aux experts 3 et 7". Les autres restent dormants.
+**Modèle MoE (Mistral) :** 46,7 milliards de paramètres au TOTAL, mais chaque token n'en active que 12,9 milliards. Pourquoi? Parce que le modèle contient 8 groupes de paramètres (les "experts"), et un routeur intelligent dit "ce token-ci, tu vas aux experts 3 et 7". Les 6 autres restent dormants.
 
-Résultat : puissance d'un modèle 70B, coût d'un modèle 13B. Magie? Non, juste de l'ingénierie smart.
+Résultat concret : la capacité de représentation d'un modèle 70B, le coût de calcul d'un modèle 13B. C'est pas de la magie, c'est de l'ingénierie intelligente.
 
-<Callout type="info" title="Pourquoi on coupe la partie 'feed-forward' et pas l'attention?">
-Dans un transformer, ~66% des paramètres sont dans les couches feed-forward (FFN—juste des gros réseaux de neurones). L'autre 33% est dans l'attention (qui gère "quels mots regarder"). On coupe la FFN parce qu'elle est redondante: tous les tokens n'en ont pas besoin. L'attention? C'est shared, c'est utile pour tout le monde.
+<Callout type="info" title="Pourquoi on découpe les couches feed-forward et pas l'attention?">
+Dans un transformer, environ 66% des paramètres se trouvent dans les couches feed-forward (FFN) : de gros réseaux de neurones denses. Les 33% restants sont dans les couches d'attention, qui gèrent les relations entre les mots. On transforme les FFN en experts parce qu'elles sont les plus redondantes : tous les tokens n'ont pas besoin de la même "expertise". L'attention, elle, est partagée par tous les tokens, car tout le monde a besoin de savoir quels mots regarder.
 </Callout>
 
 
 
-### Comment marche le router : qui dirige les tokens?
+### Le routeur : le chef d'orchestre du MoE
 
-Chaque couche Mistral a:
-1. **Attention** (partagée par tous)
-2. **8 experts** (spécialisés)
-3. **Un routeur** (décide où envoyer chaque token)
+Chaque couche d'un modèle Mistral MoE contient trois composants :
+1. **L'attention** (partagée par tous les tokens)
+2. **8 experts** (des FFN spécialisées)
+3. **Un routeur** (qui décide quels experts activer pour chaque token)
 
-**Le router c'est intelligent:**
+Le routeur est un petit réseau linéaire. Il prend un token en entrée, calcule un score pour chacun des 8 experts, et sélectionne les 2 meilleurs. Les sorties de ces 2 experts sont ensuite combinées en une moyenne pondérée par leurs scores respectifs.
 
-Le router regarde un token et dit "je t'envoie à l'expert 3 ET 7. Ils vont tous les deux te traiter, et j'en fais une moyenne des résultats."
+En formules :
 
-En formule mathématique (version simple):
+$$\text{score} = \text{token} \times W$$
 
-```
-score_pour_chaque_expert = token × W
-top_2_experts = les 2 avec les meilleurs scores
-resultat = expert1_output × poids1 + expert2_output × poids2
-```
+$$\text{top\_2\_experts} = \text{les 2 avec les meilleurs scores}$$
+
+$$\text{résultat} = \text{expert1\_output} \times \text{poids1} + \text{expert2\_output} \times \text{poids2}$$
 
 **Pourquoi top-2 (2 experts par token)?**
-- Top-1 (1 expert): C'est trop limité. Si tu envoies le token à UNun expert pourri, tu es foutu.
-- Top-2: 2 perspectives différentes. Bon équilibre coût/qualité.
-- Top-3+: Plus cher, pas assez mieux.
+- **Top-1 (1 seul expert) :** trop risqué. Si le routeur se trompe et envoie le token au mauvais expert, la qualité chute brutalement. Aucun filet de sécurité.
+- **Top-2 :** deux perspectives complémentaires. Le meilleur compromis entre coût et qualité. Si un expert est moyennement pertinent, l'autre compense.
+- **Top-3+ :** le gain marginal est faible, mais le coût de calcul augmente significativement.
 
-<Callout type="paper" title="Top-k routing">
-Le routage top-k est simple mais efficace. Des variantes existent (routage softmax doux, routage stochastique) mais Mistral reste fidèle à top-2. C'est du pragmatisme.
+<Callout type="paper" title="Top-k routing : simple mais efficace">
+Le routage top-k est l'approche la plus directe. Des variantes plus sophistiquées existent (routage softmax continu, routage stochastique avec exploration), mais Mistral reste fidèle au top-2 déterministe. C'est du pragmatisme : pourquoi compliquer ce qui marche bien?
 </Callout>
 
 ### Les 8 experts : qu'est-ce qu'ils font vraiment?
 
-Question classique: "Est-ce qu'un expert fait les maths, un autre le code, un autre la poésie?"
+Question classique : "Est-ce qu'un expert gère les maths, un autre le code, un autre la poésie?"
 
-**Réponse: Non, c'est plus subtil.**
+**Réponse courte : non, c'est bien plus subtil et intéressant que ça.**
 
-L'analyse montre que la spécialisation n'est pas "par domaine" (math vs code) mais "par structure linguistique". Un expert peut s'être spécialisé dans:
-- Les verbes conjugués
-- Les listes et énumérations
+L'analyse des patterns de routage montre que la spécialisation ne se fait pas par domaine de connaissance (math vs code vs littérature), mais par structure linguistique. Un expert peut s'être spécialisé dans :
+- Les verbes conjugués et leurs temps
+- Les listes et les énumérations
 - Les structures conditionnelles ("si... alors...")
-- Les références entre mots
+- Les références et pronoms (comprendre "il" renvoie à qui)
 
-C'est plus fin et plus puissant. Pour un token donné (ex: le mot "alors"), le router active 2 experts qui ensemblent comprennent les structures conditionnelles. Flexible, efficace.
+C'est plus fin et plus puissant qu'une spécialisation par domaine. Pour le mot "alors" dans une phrase conditionnelle, le routeur active les 2 experts qui comprennent le mieux les structures conditionnelles, quel que soit le domaine (code, droit, cuisine). La spécialisation est linguistique, pas thématique.
 
-### Le grand défi: équilibrer les experts
+### Le grand défi : l'équilibrage des experts
 
-**Le problème:** Imagine que 3 experts sont trop bons et le router les préfère systématiquement. Les 5 autres jamais. Résultat? Les 3 "chouchous" s'améliorent (plus de feedback), les 5 autres "stagnent. C'est pas juste, c'est inefficace.
+**Le problème du "winner-take-all".** Imaginez que 3 experts sont légèrement meilleurs que les 5 autres au début de l'entraînement. Le routeur les préfère. Ils reçoivent plus de tokens, donc plus de feedback, donc ils s'améliorent encore plus. Les 5 autres, délaissés, stagnent. Rapidement, 3 experts font tout le travail et 5 ne servent à rien. C'est un cercle vicieux qui gaspille 62% de la capacité du modèle.
 
-**La solution:** Mistral ajoute une "pénalité" à l'entraînement qui dit "distribue les tokens équitablement entre les 8 experts". Si un expert reçoit 50% des tokens, il est pénalisé. L'idée: tous les experts doivent être utiles.
+**La solution : la perte auxiliaire de load balancing.** Mistral ajoute un terme de pénalité pendant l'entraînement qui dit "distribue les tokens de manière équitable entre les 8 experts". Si un expert reçoit 50% des tokens alors qu'il ne devrait en recevoir que 12,5%, il est pénalisé.
 
-**Le dilemme:** Si tu fais la pénalité trop forte, tu forces l'équité mais les tokens vont à des experts nuls. Si tu la fais trop faible, tu reviens au problème initial (winner-take-all). L'équilibre? C'est de l'art, pas de la science. Mistral maîtrise cet équilibre (ça vient du savoir-faire).
+**Le dilemme du réglage.** Si la pénalité est trop forte, on force l'équité mais des tokens finissent chez des experts mal adaptés. Si elle est trop faible, on retombe dans le winner-take-all. Trouver le bon coefficient, c'est un art qui relève autant de l'expérience que de la science. Et c'est l'un des savoir-faire distinctifs de Mistral.
 
-### Comment ça marche en production (la vraie vie)
+### En production : les réalités pratiques du MoE
 
-**Mémoire vs calcul**
-Contradiction: tu dois CHARGER tous les experts en RAM (46,7B pour Mixtral), mais tu n'utilises que 12,9B par token. Solution? Les GPU modernes ont assez de mémoire pour charger tous les experts. Les calculs sont réduits, donc c'est rapide.
+**Le paradoxe mémoire vs calcul.** Contradiction apparente : il faut CHARGER tous les 46,7B paramètres en RAM GPU (tous les experts doivent être prêts), mais on n'en utilise que 12,9B par token. La mémoire requise est celle d'un modèle de 47B, mais le coût de calcul est celui d'un modèle de 13B. En pratique, ça fonctionne bien parce que les GPU modernes ont beaucoup de mémoire et que c'est le calcul (pas la mémoire) qui limite la vitesse.
 
-**Distribuer sur plusieurs GPU**
-Si tu as 8 experts, tu peux mettre:
-- GPU 1: experts 0-1
-- GPU 2: experts 2-3
-- etc.
-Un token arrive: le router dit "va à expert 3 et 7". GPU 2 et GPU 4 travaillent. Les autres dorment. Efficace.
+**Distribution sur plusieurs GPU.** Si tu as 8 experts, tu peux répartir :
+- GPU 1 : experts 0-1
+- GPU 2 : experts 2-3
+- GPU 3 : experts 4-5
+- GPU 4 : experts 6-7
 
-**Batching complexe**
-100 tokens en parallèle activent différents experts. Pas tous les mêmes. La RAM est chaotique (accès irrégulier). Les outils modernes (vLLM) gèrent ça bien maintenant.
+Un token arrive, le routeur dit "expert 3 et expert 7". GPU 2 et GPU 4 travaillent, les autres attendent. C'est l'Expert Parallelism, une forme de parallélisme naturellement adaptée au MoE.
 
-### Évolution du MoE chez Mistral
+**Batching irrégulier.** Quand 100 tokens sont traités en parallèle, chacun active des experts différents. Les accès mémoire deviennent irréguliers et chaotiques. Les frameworks modernes comme vLLM gèrent cette complexité, mais c'est un défi d'ingénierie non trivial.
+
+### L'évolution du MoE chez Mistral
 
 | Modèle | Experts | Top-k | Ratio total/actif |
 |--------|---------|-------|--------------------|
@@ -96,17 +93,17 @@ Un token arrive: le router dit "va à expert 3 et 7". GPU 2 et GPU 4 travaillent
 | Mixtral 8x22B | 8 | 2 | 4,5:1 |
 | Mistral Large 3 | N/A (probablement plus) | N/A | ~16:1 |
 
-L'augmentation du ratio total/actif dans Mistral Large 3 suggère soit un nombre d'experts plus important, soit un routage plus sélectif (top-1 ou un mécanisme plus sophistiqué).
+L'augmentation spectaculaire du ratio total/actif dans Mistral Large 3 (16:1 contre 3,6:1 pour Mixtral 8x7B) suggère soit un nombre d'experts bien plus important, soit un routage plus sélectif, soit un mécanisme de sparsité plus sophistiqué. Mistral n'a pas publié les détails, mais la tendance est claire : on va vers des modèles de plus en plus "sparse".
 
-<Callout type="tip" title="Pourquoi Mistral gagne avec le MoE">
-Maîtriser le MoE c'est pas facile. L'équilibrage, l'instabilité d'entraînement, l'optimisation du routage... Peu de labo font ça bien. Mistral oui. C'est pourquoi Mistral peut faire des modèles puissants avec 3 fois moins de ressources que les Américains. C'est un avantage technique durable.
+<Callout type="tip" title="Pourquoi le MoE est l'avantage stratégique de Mistral">
+Maîtriser le MoE est difficile. L'équilibrage des experts, la stabilité de l'entraînement, l'optimisation du routage : peu de laboratoires dans le monde font ça bien. Mistral fait partie de ce club restreint. C'est ce qui leur permet de produire des modèles compétitifs avec 3 à 5 fois moins de ressources de calcul que les géants américains. C'est un avantage technique durable, pas un coup de chance.
 </Callout>
 
-### Demain : encore plus smart
+### L'avenir du MoE : encore plus intelligent
 
-Le MoE évolue. Prochaines étapes possibles:
-- **Routage adaptatif**: Selon la difficulté du token, active 1 ou 2 ou 3 experts.
-- **Experts partagés**: Certains experts TOUJOURS activés (une base commune).
-- **MoE hiérarchique**: Des experts d'experts (expert meta-level).
+Le MoE est une architecture en pleine évolution. Les prochaines étapes probables :
+- **Routage adaptatif :** selon la difficulté du token, activer 1, 2 ou 3 experts dynamiquement. Les tokens simples consomment moins, les complexes consomment plus.
+- **Experts partagés :** certains experts sont TOUJOURS activés (une base commune de connaissances), tandis que d'autres sont spécialisés et activés à la demande.
+- **MoE hiérarchique :** des experts d'experts, où un premier niveau de routage choisit un groupe, puis un second niveau choisit l'expert précis dans ce groupe.
 
-Mistral suit tout ça de près et intégrera dans les futurs modèles.
+Mistral suit activement ces pistes de recherche et les intégrera dans les futurs modèles.

@@ -5,148 +5,167 @@ description: "Les réseaux adversariaux génératifs, le principe d'entraînemen
 
 ## L'idée révolutionnaire : faire deux réseaux qui se battent
 
-2014, Ian Goodfellow invente le GAN. Approche **radicale** : deux réseaux, entraînement **adversarial** (un contre l'autre).
+En 2014, Ian Goodfellow invente le GAN lors d'une discussion dans un bar (selon la légende). L'approche est **radicale** : au lieu d'entraîner un seul réseau à générer des données, on en utilise **deux** qui s'entraînent l'un **contre** l'autre dans un processus adversarial.
 
-Métaphore : un **faussaire** (le générateur) qui produit de faux billets vs un **détective** (le discriminateur) qui les reconnaît. Chacun améliore l'autre. Après 1 million d'itérations, les faux billets sont parfaits.
+La métaphore classique : un **faussaire** (le générateur) qui produit de faux billets face à un **détective** (le discriminateur) qui essaie de les repérer. Le faussaire s'améliore pour tromper le détective, le détective s'améliore pour démasquer le faussaire. Après des millions d'itérations de ce jeu, les faux billets deviennent indiscernables des vrais.
+
+Ce qui rend cette idée si marquante, c'est qu'elle s'inspire de la théorie des jeux plutôt que de la statistique classique. On ne définit pas explicitement ce qu'est une "bonne" image -- on laisse le discriminateur le découvrir par lui-même, et le générateur s'adapte en conséquence.
 
 <ArxivLink id="1406.2661" title="Generative Adversarial Nets" />
-
-
 
 ## Architecture
 
 ### Le générateur G
 
-Réseau neural qui transforme du **bruit aléatoire** z en données synthétiques :
+Le générateur est un réseau de neurones qui transforme du **bruit aléatoire** z en données synthétiques (typiquement des images) :
 
-```
-x_fake = G(z)  où z ~ N(0, I)
-```
+$$x_{\text{fake}} = G(z), \quad z \sim \mathcal{N}(0, I)$$
 
-Pour images : couches denses, puis convolutions transposées qui agrandissent, 4×4 → 8×8 → 16×16 → 64×64, etc.
+Le vecteur z est échantillonné depuis une distribution gaussienne standard. Ce vecteur de bruit est l'unique "graine" à partir de laquelle le générateur doit créer quelque chose de réaliste. Deux z différents donnent deux images différentes. Un z légèrement modifié donne une image légèrement modifiée (en théorie).
+
+Pour la génération d'images, l'architecture typique commence par des couches denses qui transforment le vecteur z en un petit tenseur spatial (par exemple 4x4 avec beaucoup de canaux), puis des **convolutions transposées** agrandissent progressivement la résolution : 4x4 → 8x8 → 16x16 → 32x32 → 64x64. Chaque étape double la résolution spatiale tout en réduisant le nombre de canaux, jusqu'à obtenir une image RGB à la résolution souhaitée.
 
 ### Le discriminateur D
 
-Classificateur binaire : "vrai ou faux ?"
+Le discriminateur est un classificateur binaire qui répond à une seule question : "cette image est-elle réelle ou générée ?"
 
-```
-D(x) -> [0, 1]  (probabilité que ce soit réel)
-```
+$$D(x) \rightarrow [0, 1] \quad \text{(probabilité que l'image soit réelle)}$$
 
-CNN classique : convolutions qui réduisent la résolution, puis classification.
+C'est un CNN classique : des convolutions qui réduisent progressivement la résolution spatiale, suivies d'une couche dense et d'une sigmoïde. L'architecture est essentiellement l'inverse du générateur : là où G agrandit, D réduit.
 
-
+Le discriminateur reçoit en alternance des images réelles du dataset et des images générées par G, et doit apprendre à faire la distinction. Au début c'est facile (les fausses images sont du bruit), mais au fur et à mesure que G s'améliore, la tâche devient de plus en plus ardue.
 
 ## Le jeu minimax
 
-Fonction objectif :
-```
-min_G max_D  E_x[log D(x)] + E_z[log(1 - D(G(z)))]
-```
+Tout le génie des GAN tient dans leur fonction objectif :
 
-Signification :
-- Discriminateur **maximise** : veut D(x_real) = 1, D(x_fake) = 0
-- Générateur **minimise** : veut D(G(z)) = 1 (tromper le discriminateur)
+$$\min_G \max_D \; \mathbb{E}_{x}[\log D(x)] + \mathbb{E}_{z}[\log(1 - D(G(z)))]$$
+
+Décomposons cette formule pour bien la comprendre :
+
+- **$\mathbb{E}_{x}[\log D(x)]$** : sur les vraies images x, le discriminateur veut que $D(x)$ soit proche de 1. Le log de 1 = 0, c'est le maximum. Le discriminateur **maximise** ce terme.
+- **$\mathbb{E}_{z}[\log(1 - D(G(z)))]$** : sur les fausses images G(z), le discriminateur veut que $D(G(z))$ soit proche de 0, donc $\log(1 - 0) = 0$. Le générateur, lui, veut que $D(G(z))$ soit proche de 1, donc il **minimise** ce terme (qui vaut $\log(1-1) = -\infty$).
+
+C'est un jeu à somme nulle : ce que l'un gagne, l'autre le perd.
 
 ### Entraînement alternant
 
-À chaque itération :
+L'entraînement se fait en alternant deux phases à chaque itération :
 
-**Phase 1 - Entraîner D** :
-- Batch de vraies données x
-- Générer fausses données G(z)
-- Discriminateur apprend à les distinguer
+**Phase 1 -- Entraîner D (le détective)** :
+- Prendre un batch de vraies images x du dataset
+- Générer un batch de fausses images G(z) à partir de bruit
+- Le discriminateur apprend à donner un score élevé aux vraies et bas aux fausses
+- On met à jour **seulement** les poids de D
 
-**Phase 2 - Entraîner G** :
-- Batch de bruit z
-- Générer G(z)
-- Générateur apprend à tromper D
+**Phase 2 -- Entraîner G (le faussaire)** :
+- Générer un batch de fausses images G(z) à partir de bruit
+- Les passer dans D (dont les poids sont gelés)
+- Le générateur apprend à produire des images qui maximisent D(G(z))
+- On met à jour **seulement** les poids de G
 
-Aller-retour, aller-retour.
+Aller-retour, aller-retour. L'équilibre entre les deux est crucial : si l'un prend trop d'avance, tout s'effondre.
 
 <Callout type="info" title="L'équilibre théorique">
-À l'optimum, G génère indistinguable du réel, et D ne peut plus décider (probabilité 0.5). C'est un **équilibre de Nash**. En pratique ? Très dur à atteindre.
+À l'optimum, le générateur produit des données indiscernables du réel, et le discriminateur ne peut plus décider -- il répond 0.5 pour toute image. C'est un **équilibre de Nash** : aucun des deux joueurs ne peut améliorer sa situation en changeant unilatéralement de stratégie. En pratique ? Cet équilibre est extrêmement difficile à atteindre, et l'entraînement est notoirement capricieux.
 </Callout>
 
 ## Les catastrophes d'entraînement
 
-### Mode collapse (l'effondrement)
+Les GAN sont célèbres non seulement pour leurs résultats spectaculaires, mais aussi pour la difficulté de leur entraînement. Voici les problèmes les plus fréquents.
 
-G apprend à générer seulement **quelques modes** que D accepte facilement. Exemple : GAN sur MNIST, apprend à générer 1000 images de "9" parfaites, ignore tous autres chiffres.
+### Mode collapse (l'effondrement modal)
 
-Pourquoi ? Générer la diversité est hard. G trouve facile de spécialiser sur un mode.
+C'est le fléau le plus connu. Le générateur apprend à produire seulement **quelques types de sorties** qui trompent efficacement le discriminateur, au lieu de couvrir toute la diversité des données réelles.
 
-### Instabilité
+Exemple concret : tu entraînes un GAN sur MNIST (chiffres manuscrits). Au lieu de générer les chiffres 0-9 de manière équilibrée, le générateur se spécialise dans la production de "9" parfaits. Pourquoi ? Parce que c'est plus simple de perfectionner un seul mode que de maîtriser la diversité complète. Le générateur trouve une "recette" qui marche et s'y accroche.
 
-- **Oscillations** : au lieu de converger, D et G oscillent, s'adaptent mutuellement endlessly
-- **Gradient vanishing** : si D est trop bon, le gradient de G disparaît (log(0.0001) ≈ -10, pas de signal)
-- **Déséquilibre** : si l'un des deux est trop fort, l'autre s'effondre
+C'est un peu comme un étudiant qui ne révise qu'un seul chapitre pour l'examen : il le connaît parfaitement, mais rate tout le reste.
 
-Hyperparamètres : learning rate, architecture, ratio entraînement D/G = critique.
+### Instabilité de l'entraînement
+
+- **Oscillations** : au lieu de converger vers l'équilibre de Nash, D et G oscillent indéfiniment. Le générateur trouve une astuce, le discriminateur s'adapte, le générateur change de stratégie, etc. Les courbes de loss forment des vagues qui ne s'amortissent jamais.
+- **Gradient vanishing** : si le discriminateur est trop bon trop vite, il rejette toutes les fausses images avec une confiance de 99.99%. Le gradient que reçoit le générateur est alors quasi-nul ($\log(1 - 0.9999) \approx -9$, gradient minuscule). Le générateur n'a plus de signal pour s'améliorer -- il est "aveugle".
+- **Déséquilibre** : si l'un des deux réseaux domine l'autre, le perdant s'effondre et l'entraînement ne récupère jamais.
+
+Le réglage des hyperparamètres (learning rates, architecture, ratio d'entraînement D/G) est absolument critique et souvent plus un art qu'une science.
 
 <Callout type="tip" title="Heuristiques de stabilisation">
-- Label smoothing : D apprend 0.9 au lieu de 1 pour réel
-- Entraîner D plus (3-5 fois) que G
-- Normalisation spectrale dans D
-- Ajouter du bruit aux entrées D
-- Monitorer FID, pas la loss brute
+La communauté a développé de nombreuses astuces pour dompter les GAN :
+- **Label smoothing** : D apprend avec des labels 0.9 au lieu de 1.0 pour les vrais (évite la surconfiance)
+- **Entraîner D plus souvent** : 3-5 itérations de D pour 1 de G (maintenir l'avance du détective)
+- **Normalisation spectrale** dans D (contrôler la constante de Lipschitz)
+- **Ajouter du bruit** aux entrées de D (empêcher une discrimination trop facile au début)
+- **Monitorer le FID**, pas la loss brute (la loss GAN est notoirement peu informative)
 </Callout>
 
 ### Non-convergence
 
-Contrairement à des modèles classiques qui minimisent une loss unique, les GAN : **jeu à deux joueurs**. Pas de garantie théorique de convergence à l'équilibre de Nash pour les réseaux profonds. La loss peut être inutile (peut être élevée et ça génère bien, ou basse et ça génère mal).
+Contrairement aux modèles classiques qui minimisent une loss unique et convergent vers un minimum, les GAN sont un **jeu à deux joueurs**. Il n'y a pas de garantie théorique de convergence à l'équilibre de Nash pour les réseaux profonds. C'est un problème fondamental de la théorie des jeux appliquée au deep learning.
+
+Une conséquence pratique surprenante : la valeur de la loss est souvent **inutile** pour juger de la qualité. Un modèle avec une loss élevée peut générer d'excellentes images, tandis qu'un modèle avec une loss basse peut être en plein mode collapse. C'est pourquoi on utilise des métriques externes comme le FID.
 
 ## Évaluer les GAN
 
+Comment savoir si un GAN génère de bonnes images ? On ne peut pas se fier à la loss. Il faut des métriques dédiées.
+
 ### Frechet Inception Distance (FID)
 
-Distance dans l'espace des features d'un réseau Inception pré-entraîné, entre les distributions réelle et générée.
+C'est la **métrique standard**. On passe les images réelles et les images générées dans un réseau Inception pré-entraîné pour extraire leurs features (représentations internes). Ensuite, on mesure la distance entre les deux distributions de features en modélisant chacune comme une gaussienne multivariée.
 
-FID bas = bon. **Métrique standard**.
+FID bas = les distributions se ressemblent = les images générées sont proches des vraies. Un FID de 0 signifierait que les deux distributions sont identiques. En pratique, un FID sous 10 est excellent, sous 50 est correct.
 
 ### Inception Score (IS)
 
-Deux aspects :
-- **Qualité** : chaque image générée doit être clarament reconnaissable
-- **Diversité** : couvrir beaucoup de classes
+L'IS évalue deux aspects complémentaires :
+- **Qualité** : chaque image générée individuellement doit être clairement reconnaissable par un classificateur (distribution concentrée sur une classe)
+- **Diversité** : l'ensemble des images générées doit couvrir beaucoup de classes différentes (distribution marginale uniforme)
 
-Basé sur Inception classificateur.
+L'IS est moins fiable que le FID car il ne compare pas directement aux données réelles, mais il reste utilisé comme métrique complémentaire.
 
 <Callout type="info" title="GAN vs VAE vs Diffusion">
-GAN : images nettes (optimise directement perceptuel via D). VAE : floues (pixel-par-pixel). Diffusion : ultra-nettes (mais 1000 étapes forward). Historiquement : GAN gagnait. Maintenant : diffusion gagne en qualité + stabilité.
+Les GAN produisent des images nettes car le discriminateur optimise directement la qualité perceptuelle. Les VAE tendent à produire des images floues car elles optimisent pixel par pixel (MSE). Les modèles de diffusion produisent des images ultra-nettes mais nécessitent des centaines d'étapes de débruitage. Historiquement, les GAN dominaient la génération d'images. Aujourd'hui, les modèles de diffusion les surpassent en qualité et en stabilité d'entraînement.
 </Callout>
 
 ## Variantes clés
 
 ### Conditional GAN (cGAN)
 
-Conditionne la génération sur une information y (classe, texte, image). G reçoit z + y, D reçoit x + y. Contrôler type de contenu généré.
+Le GAN de base génère des images "au hasard" -- tu n'as aucun contrôle sur le contenu. Le cGAN résout ça en **conditionnant** la génération sur une information supplémentaire y (une classe, un texte, une image de référence).
 
-### DCGAN
+Le générateur reçoit z + y, le discriminateur reçoit x + y. Ainsi, on peut demander "génère-moi un chien" ou "transforme ce croquis en photo réaliste". C'est la base de pix2pix et de nombreuses applications pratiques.
 
-Bonnes pratiques architecturales (2015) qui ont stabilisé les GAN :
-- Conv stridées (pas pooling)
-- Batch norm everywhere
-- ReLU en G, LeakyReLU en D
-- Pas de couches denses
+### DCGAN (Deep Convolutional GAN)
 
-Ça a changé le game.
+Avant DCGAN (2015), les GAN étaient extrêmement instables. Radford et al. ont proposé un ensemble de **bonnes pratiques architecturales** qui ont changé la donne :
+- Convolutions à pas (strided convolutions) au lieu de pooling
+- Batch normalization dans G et D
+- ReLU dans G, LeakyReLU dans D
+- Pas de couches entièrement connectées (sauf entrée de G et sortie de D)
+
+Ces règles simples ont rendu les GAN enfin utilisables de manière fiable. DCGAN est le point de départ de pratiquement toutes les architectures GAN qui ont suivi.
+
+### Wasserstein GAN (WGAN)
+
+WGAN (2017) remplace la divergence de Jensen-Shannon par la distance de Wasserstein. Au lieu de demander au discriminateur "vrai ou faux ?", on lui demande de scorer les images avec un nombre réel (il devient un "critic" plutôt qu'un classificateur). La loss est plus stable, les gradients sont plus informatifs, et le mode collapse est réduit. WGAN a été une avancée théorique majeure pour comprendre et stabiliser les GAN.
 
 ## L'héritage
 
-Malgré les problèmes, GAN ont apporté :
-- Première génération d'images photoréalistes
-- Inspiration pour super-résolution, style transfer, face synthesis
-- Principes adversariaux en robustesse
-- Domaine adaptation
+Malgré leurs problèmes d'entraînement, les GAN ont laissé une empreinte considérable :
+- **Première génération d'images photoréalistes** (StyleGAN, ProGAN)
+- **Super-résolution** : transformer une image basse résolution en haute résolution
+- **Style transfer et face synthesis** : FaceApp, deepfakes, vieillissement de portraits
+- **Data augmentation** : générer des données synthétiques pour l'entraînement
+- **Principes adversariaux** en robustesse et domain adaptation
 
-<Callout type="paper" title="Post-GAN">
-Diffusion models ont surpassé les GAN. Mais GAN restent utilisés pour :
-- Génération temps réel (une seule passe vs 1000 étapes diffusion)
-- Applications où stabilité > qualité ultime
-- Recherches hybrides GAN + diffusion
+<Callout type="paper" title="L'ère post-GAN">
+Les modèles de diffusion ont largement surpassé les GAN pour la génération d'images de haute qualité. Mais les GAN conservent des niches importantes :
+- **Génération temps réel** : une seule passe forward vs des centaines d'étapes de débruitage pour la diffusion
+- **Applications embarquées** : quand la vitesse compte plus que la qualité ultime
+- **Recherche hybride** : certains travaux combinent GAN et diffusion pour le meilleur des deux mondes
+- **Distillation** : des modèles de diffusion sont "distillés" en générateurs one-step inspirés des GAN
 </Callout>
 
 ## Résumé
 
-GAN = deux réseaux qui se battent. G génère, D discrimine. Entraînement adversarial cool mais chaotique. Mode collapse et instabilité sont les fléaux. Malgré ça, révolutionnaire. C'est quoi la prochaine évolution ? Diffusion models, stabilité, meilleure qualité. Mais comprendre les GAN ? C'est comprendre la génération adversariale, qui est partout maintenant.
+Les GAN incarnent une idée audacieuse : deux réseaux qui s'affrontent pour progresser ensemble. Le générateur crée, le discriminateur juge, et de cette compétition émergent des images d'un réalisme saisissant. Mais cette approche adversariale vient avec son lot de difficultés : mode collapse, instabilité, non-convergence. Les modèles de diffusion ont pris le relais comme méthode dominante, mais comprendre les GAN reste essentiel -- le principe adversarial se retrouve partout en deep learning moderne, de l'adversarial training à la robustesse des modèles.

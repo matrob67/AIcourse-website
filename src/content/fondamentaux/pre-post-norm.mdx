@@ -11,94 +11,106 @@ Deux options :
 1. Normaliser **après** la skip connection
 2. Normaliser **avant** la skip connection
 
-Semble sans importance, n'est-ce pas ? **Faux.** Ce détail architectura décide si :
-- Votre modèle s'entraîne ou s'écrase
-- Vous pouvez faire 6 couches ou 100 couches
-- Votre learning rate peut être 0.001 ou 1e-5
+Semble sans importance, n'est-ce pas ? **Faux.** Ce détail architectural décide si :
+- Votre modèle s'entraîne correctement ou s'écrase lamentablement
+- Vous pouvez empiler 6 couches ou 100 couches
+- Votre learning rate peut être 0.001 ou doit rester coincé à 1e-5
 
-C'est ridicule que si petit détail fasse une si grande différence. Mais c'est la réalité de l'apprentissage profond.
+C'est ridicule qu'un si petit détail fasse une si grande différence. Mais c'est la réalité de l'apprentissage profond : parfois, déplacer une seule opération d'un cran dans le pipeline change tout. Et celui-ci est peut-être le plus impactant de tous.
 
-
+Pour bien comprendre ce qui suit, il faut avoir en tête deux concepts : la **layer normalization** (qui remet les activations à une échelle raisonnable) et les **skip connections** (aussi appelées connexions résiduelles, qui ajoutent l'entrée d'un bloc directement à sa sortie). Si tu n'es pas à l'aise avec ces notions, va d'abord voir les pages dédiées.
 
 ## Post-norm : la version instable (Transformer original, 2017)
 
-La normalisation vient **après** la skip connection :
+C'est l'architecture du papier "Attention Is All You Need". La normalisation vient **après** la skip connection :
 
-```
-output = Normalisation(input + Transformation(input))
-```
+$$
+\text{output} = \text{LayerNorm}(\text{input} + \text{Transformation}(\text{input}))
+$$
 
-Visualisation :
+Visualisation du flux : **input** → Transformation → **(+)** avec input → LayerNorm → **output**
 
-```
-input ──┐
-        ├──(+)──→ Normalisation ──→ output
-        │
-   Transformation
-```
+Concrètement, l'input passe d'abord par la sous-couche (attention ou feedforward), puis on ajoute l'input original via la skip connection, et **ensuite seulement** on normalise le résultat. La normalisation agit donc sur la somme des deux signaux.
 
 ### Les problèmes majeurs
 
 **1. Instabilité de l'entraînement**
 
-Sans normalisation sur le chemin directe (skip connection), les valeurs peuvent devenir énormes en remontant les couches. Le chemin skip="+" laisse tout passer sans frein. Les gradients explosent aux couches peu profondes.
+Le chemin direct (la skip connection, le "+") laisse passer les valeurs brutes sans aucun contrôle. Pas de normalisation sur ce chemin. Résultat : les magnitudes des activations peuvent croître couche après couche de manière incontrôlée. Imagine un escalier où chaque marche est un peu plus haute que la précédente -- au bout de 80 marches, tu es sur l'Everest.
+
+Mathématiquement, quand on calcule les gradients en rétropropagation, ces valeurs qui grandissent se retrouvent dans les dérivées partielles. Les gradients explosent aux couches profondes, ce qui rend l'optimisation chaotique.
 
 **2. Warm-up obligatoire**
 
-Vous devez commencer l'entraînement avec un très petit learning rate (0.00001) et l'augmenter progressivement. C'est inefficace et délica.
+Pour contourner cette instabilité, tu es obligé de commencer l'entraînement avec un learning rate minuscule (genre 0.00001) et de l'augmenter très progressivement sur des milliers d'itérations. C'est ce qu'on appelle le "warm-up". Sans ça, le modèle diverge dès les premières itérations -- les gradients sont trop violents et les poids partent dans tous les sens.
+
+C'est inefficace : tu passes des heures à "chauffer" le modèle avant qu'il commence vraiment à apprendre. Et c'est délicat : le schedule de warm-up (combien de pas ? quelle courbe ?) est un hyperparamètre de plus à régler.
 
 **3. Scaling impossible**
 
-Plus vous ajoutez de couches (6 → 12 → 24 → 80), plus l'entraînement devient instable. Un BERT de 24 couches with post-norm ? Bon courage.
+Plus tu empiles de couches (6 → 12 → 24 → 80), plus le problème s'aggrave. Chaque couche supplémentaire amplifie l'instabilité. Un BERT de 24 couches avec post-norm ? Il faut des astuces spécifiques et beaucoup de patience. Un modèle de 100 couches ? Pratiquement impossible à entraîner de manière fiable.
+
+C'est un vrai blocage pour l'ère des grands modèles. Si tu ne peux pas empiler plus de couches, tu ne peux pas augmenter la capacité du modèle. Et augmenter la capacité, c'est exactement ce qui a permis les percées de GPT-3 et ses successeurs.
 
 <Callout type="warning" title="Pourquoi post-norm est un cauchemar">
-Le chemin direct (skip connection) n'a **aucune normalisation**. Les valeurs croissent à chaque couche. Après 80 couches, elles peuvent être 10^50 ou 10^-50. Les gradients explosent ou s'évanouissent. Catastrophe.
+Le chemin direct (skip connection) n'a **aucune normalisation**. Les valeurs croissent à chaque couche. Après 80 couches, elles peuvent atteindre 10^50 ou tomber à 10^-50. Les gradients explosent ou s'évanouissent. C'est une catastrophe numérique qui rend l'entraînement des grands modèles pratiquement impossible sans artifices.
 </Callout>
 
 ## Pre-norm : la version stable (standard moderne)
 
-La normalisation vient **avant** la transformation :
+L'idée est simple : déplacer la normalisation **avant** la transformation :
 
-```
-output = input + Transformation(Normalisation(input))
-```
+$$
+\text{output} = \text{input} + \text{Transformation}(\text{LayerNorm}(\text{input}))
+$$
 
-Visualisation :
+Visualisation : **input** → LayerNorm → Transformation → **(+)** avec input (skip connection directe) → **output**
 
-```
-input ──┬──→ Normalisation ──→ Transformation ──┐
-        │                                        ├──(+)──→ output
-        │                                        │
-        └────────────────────────────────────────┘
-              (skip connection directe)
-```
+La différence semble minime, mais l'impact est fondamental. Regardons pourquoi.
 
 ### Pourquoi c'est stable
 
-Le chemin skip (le "+") **court-circuite tout**. La valeur passe directement, sans transformation, sans normalisation. C'est une autoroute pure.
+Le secret est dans le chemin de la skip connection. Avec pre-norm, le "+" additionne directement l'input et la sortie transformée. Le chemin résiduel (le "+") **court-circuite tout** : ni normalisation, ni transformation ne se trouvent sur ce chemin direct. C'est une autoroute pure pour les valeurs et, surtout, pour les gradients.
 
-Mathématiquement, la dérivée du "+" c'est 1. Le gradient passe intouché à travers 100 couches. Pas d'explosion, pas d'évanouissement.
+Mathématiquement, la dérivée du "+" c'est 1. Le gradient passe donc **intact** à travers chaque couche via la skip connection. Que tu aies 10 couches ou 100 couches, le gradient arrive à la première couche avec pratiquement la même magnitude qu'à la dernière. Pas d'explosion, pas d'évanouissement.
 
-Résultat : entraînement ultra-stable.
+Pour bien comprendre l'intuition : imagine un immeuble de 100 étages. Avec post-norm, pour monter ou descendre, tu dois passer par chaque étage et son "filtre" (normalisation). Avec pre-norm, tu as un ascenseur express qui va directement du rez-de-chaussée au 100e étage -- c'est la skip connection non-obstruée. Les gradients prennent cet ascenseur.
+
+### Conséquences pratiques
+
+- **Pas besoin de warm-up complexe** : tu peux démarrer directement avec ton learning rate cible
+- **Learning rate plus élevé** : le modèle tolère des taux d'apprentissage 10x à 100x plus grands
+- **Scaling facile** : empiler 100+ couches ne pose plus de problème de stabilité
+- **Entraînement plus rapide** : moins d'itérations perdues en warm-up, convergence plus directe
 
 **Utilisé par :**
-- GPT-2, GPT-3 (premiers gros modèles à découvrir cela)
-- LLaMA, Mistral (tous les LLM modernes)
-- Flan-T5, Qwen, et quasi tous les LLM de 2023+
+- GPT-2, GPT-3 (les premiers gros modèles à adopter pre-norm)
+- LLaMA, Mistral, Qwen (tous les LLM modernes)
+- Flan-T5 et quasi tous les LLM de 2023+
 
 <Callout type="tip" title="Pas besoin de warm-up">
-Avec pre-norm, vous pouvez démarrer l'entraînement **directement** avec votre learning rate cible. Pas de warm-up graduel. Entraînement plus rapide, plus simple.
+Avec pre-norm, tu peux démarrer l'entraînement **directement** avec ton learning rate cible. Pas de warm-up graduel de milliers de pas. L'entraînement est plus rapide, plus simple, et il y a moins d'hyperparamètres à régler. C'est un gain de temps et de santé mentale considérable.
 </Callout>
 
 ## Le trade-off : stabilité vs performance
 
-Voici une ironie : **post-norm offre une légère meilleure performance**.
+Voici une ironie : **post-norm offre une légère meilleure performance en théorie**.
 
-Les études montrent que la normalisation après la résiduelle crée des interactions plus riches. Les chiffres à l'évaluation sont marginalement meilleurs.
+Les études montrent que la normalisation après la résiduelle crée des interactions plus riches entre les composantes. Les représentations apprises sont légèrement plus expressives, et les scores d'évaluation sont marginalement meilleurs dans les comparaisons contrôlées.
 
-**Mais** : cet avantage est écrasé par les problèmes de stabilité. Vous ne pouvez pas entraîner de gros modèles avec post-norm. Alors oui, post-norm est meilleur, mais seulement si vous pouvez l'entraîner. Ce que vous ne pouvez pas.
+L'intuition derrière cet avantage : avec post-norm, la normalisation agit sur la **somme** de l'input et de la transformation. Elle voit donc l'interaction entre les deux signaux et peut les calibrer ensemble. Avec pre-norm, la normalisation agit sur l'input **avant** la transformation, donc elle ne voit jamais le résultat combiné.
 
-Pre-norm ? Moins de performance brute, mais vous pouvez entraîner des modèles 10 fois plus gros. Le résultat final : perte de performance de 0.1%, gain de capacité de 1000%. C'est facile à choisir.
+**Mais** : cet avantage est complètement écrasé par les problèmes de stabilité. Tu ne peux tout simplement pas entraîner de gros modèles avec post-norm. Alors oui, post-norm est théoriquement meilleur, mais seulement si tu arrives à l'entraîner. Ce que tu ne peux pas faire à grande échelle.
+
+Pre-norm ? Moins de performance brute sur le papier, mais tu peux entraîner des modèles 10 fois plus gros. Et un modèle 10x plus gros avec une architecture 0.1% moins performante bat largement un petit modèle "optimal". C'est un choix facile.
+
+## Pourquoi c'est important pour toi
+
+Comprendre ce détail te permet de :
+- **Débuguer un entraînement instable** : si ton modèle diverge, vérifie si tu utilises post-norm par erreur
+- **Lire les papiers de recherche** : beaucoup de variantes architecturales jouent sur le placement de la normalisation
+- **Comprendre les choix des LLM modernes** : quand tu lis "LLaMA utilise Pre-RMSNorm", tu sais exactement ce que ça veut dire et pourquoi c'est ce choix
+- **Appréhender une leçon plus large** : en deep learning, des détails apparemment insignifiants peuvent avoir des conséquences gigantesques
 
 ## Comparaison concrète
 
@@ -106,13 +118,26 @@ Pre-norm ? Moins de performance brute, mais vous pouvez entraîner des modèles 
 |---|---|---|
 | Stabilité | Fragile | Très stable |
 | Warm-up requis | Oui (complexe) | Non (simple) |
-| Performance brute | 1% meilleure | Référence |
-| Nombre de couches possible | 6-12 (max) | 80-100+ (facile) |
-| Apprentissage (learning rate) | 1e-5 à 1e-4 | 0.001 à 0.1 |
+| Performance brute | ~1% meilleure | Référence |
+| Nombre de couches possible | 6-12 (max pratique) | 80-100+ (facile) |
+| Learning rate typique | 1e-5 à 1e-4 | 0.001 à 0.1 |
 | Utilisé par | BERT, T5 original | GPT-2/3/4, LLaMA, Mistral |
+| Complexité du tuning | Élevée (warm-up, schedule) | Faible (direct) |
+
+## Recherche récente : le meilleur des deux mondes ?
+
+La communauté n'a pas abandonné l'idée de récupérer les avantages de post-norm sans ses inconvénients. Quelques approches intéressantes :
+
+- **DeepNorm** (Microsoft, 2022) : modifie la skip connection avec un facteur de scaling qui compense l'instabilité. Permet d'entraîner des modèles post-norm de 1000+ couches. Utilisé dans certaines variantes de grands modèles.
+- **Sandwich-norm** : normalise à la fois avant ET après la transformation. Plus coûteux mais combine les avantages.
+- **Adaptive norm placement** : certains chercheurs expérimentent avec un placement dynamique selon la profondeur de la couche.
+
+Ces approches restent marginales. En pratique, pre-norm + RMSNorm reste la combinaison dominante et éprouvée.
 
 ## Conclusion : la compétition est finie
 
 **Pre-norm a gagné.** Partout. Tous les modèles modernes l'utilisent.
 
-Post-norm est un artefact historique. BERT et T5 originales l'utilaisaient parce que c'était 2018 et on ne savait pas mieux. Maintenant, on sait. Pre-norm + RMSNorm = l'équipe gagnante pour 2024-2026.
+Post-norm est un artefact historique. BERT et T5 originaux l'utilisaient parce que c'était 2018 et on ne savait pas mieux. L'article "Attention Is All You Need" proposait post-norm, et tout le monde a suivi sans questionner. Il a fallu que GPT-2 passe à pre-norm pour que la communauté réalise la différence.
+
+Maintenant, la recette standard est claire : **Pre-norm + RMSNorm** = l'équipe gagnante pour 2024-2026. Si tu conçois un Transformer aujourd'hui, c'est le choix par défaut. Point final.

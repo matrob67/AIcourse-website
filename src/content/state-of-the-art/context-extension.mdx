@@ -5,79 +5,73 @@ description: "Comment faire tenir 64K mots à un modèle entraîné sur 4K. Inte
 
 ## Le problème central : RoPE ne scale pas
 
-Vous entraînez sur 4K tokens. Vous testez sur 16K. Catastrophe : le modèle devient mauvais.
+Tu entraînes ton modèle sur des séquences de 4K tokens. Tout va bien. Puis tu lui donnes une séquence de 16K tokens a l'inférence. Catastrophe : la qualité s'effondre complètement.
 
-Pourquoi ? RoPE utilise des rotations à des fréquences qui ont été vues pendant l'entraînement. À position 16K, vous activez des rotations complètement nouvelles. Le modèle ne les a jamais apprises.
+Pourquoi ? RoPE encode les positions via des rotations a des fréquences spécifiques. Pendant l'entraînement, le modèle a appris a interpréter ces rotations pour les positions 0 a 4095. A la position 16000, les rotations prennent des valeurs que le modèle n'a **jamais vues**. C'est comme demander a quelqu'un de lire une horloge qui fait soudainement 40 tours par heure au lieu de 1 : les aiguilles bougent, mais ca ne veut plus rien dire.
 
 <Callout type="info" title="L'analogie du spectre">
-Imaginez une radio entraînée sur les fréquences 100-200 MHz. À 500 MHz, c'est du bruit blanc. C'est pareil pour RoPE : les fréquences qui encodent les positions n'ont jamais été vues aussi loin.
+Imagine une radio entraînée a capter les fréquences 100-200 MHz. A 500 MHz, elle ne recoit que du bruit. C'est exactement ce qui arrive a RoPE au-delà de sa fenêtre d'entraînement : les fréquences positionnelles deviennent du bruit pour le modèle.
 </Callout>
 
 ## Solution 1 : Position Interpolation (PI)
 
-Le truc le plus bête qui marche : **réduisez les positions pour les forcer dans la plage connue**.
+L'approche la plus directe : **compresser les positions pour les faire rentrer dans la plage connue**.
 
-```
-position_écrasée = position_réelle × (L_entrainement / L_cible)
-```
+$$
+\text{position\_écrasée} = \text{position\_réelle} \times \frac{L_{\text{entrainement}}}{L_{\text{cible}}}
+$$
 
-Entraîné sur 4K, vous en testez 16K ? Mapez la position 16000 → 4000. Toutes les rotations restent dans la plage vue à l'entraînement.
+Entraîné sur 4K, tu testes sur 16K ? Mappe la position 16000 vers 4000. Toutes les rotations restent dans la plage que le modèle connaît.
 
-**Avantage** : c'est juste une transformation, ça marche.
+**Avantage** : ca marche tout de suite, c'est juste un facteur multiplicatif sur les positions.
 
-**Problème** : vous écrasez la résolution. Les tokens voisins deviennent artificiellement plus proches. Les hautes fréquences (qui distinguent les tokens voisins) souffrent beaucoup.
+**Problème** : tu écrases la résolution. Imagine que tu prennes une règle graduée de 0 a 100 cm et que tu la comprimes pour mesurer de 0 a 400 cm. Les graduations sont maintenant 4 fois plus rapprochées : tu perds en précision pour distinguer les petites distances. Concrètement, les tokens voisins deviennent artificiellement plus proches, et le modèle perd sa capacité a distinguer finement les positions locales.
 
 <Callout type="warning" title="Perte de précision locale">
-Avec un facteur 4x, deux tokens adjacents passent de "distance 1" à "distance 0.25". Les différences fines disparaissent. Votre modèle a du mal à distinguer les tokens qui se suivent.
+Avec un facteur 4x, deux tokens adjacents passent de "distance 1" a "distance 0.25". Les hautes fréquences de RoPE (celles qui encodent les relations locales entre tokens voisins) souffrent énormément. Le modèle confond les tokens qui se suivent.
 </Callout>
 
 ## Solution 2 : NTK-aware (plus intelligent)
 
-L'observation : les basses fréquences encodent les positions globales (où êtes-vous dans le document ?). Les hautes fréquences encodent la localité fine (êtes-vous avant ou après ce token ?).
+L'observation clé : dans RoPE, les **basses fréquences** encodent les positions globales (ou suis-je dans le document ?) tandis que les **hautes fréquences** encodent la localité fine (quel token est juste avant ou après moi ?).
 
-**Idea** : interpolez seulement les basses fréquences.
+L'idée de NTK-aware : au lieu d'écraser uniformément toutes les positions (comme PI), modifier la **base** de RoPE pour affecter différemment les fréquences :
 
-Au lieu de changer les positions, modifiez la **base** (le paramètre de RoPE) :
+$$
+\text{base}' = \text{base} \times \alpha^{\frac{d}{d-2}}
+$$
 
-```
-base' = base × alpha^(d/(d-2))
-```
+ou `alpha` est le facteur d'extension (par exemple 4 pour passer de 4K a 16K).
 
-où `alpha` = facteur d'extension (par exemple 4 pour passer de 4K à 16K).
+Augmenter la base réduit toutes les fréquences, mais les basses fréquences (déja petites) sont proportionnellement plus étirées que les hautes. Résultat : les hautes fréquences gardent une bonne résolution locale, tandis que les basses fréquences s'étirent pour couvrir un contexte plus long.
 
-Augmenter la base réduit les fréquences proportionnellement, mais plus fortement les basses (qui sont déjà petites) que les hautes.
-
-<Callout type="paper" title="Résultat : sweet spot">
-Les hautes fréquences gardent leur résolution locale. Les basses fréquences s'étirent pour couvrir plus de terrain. Vous conservez la capacité à distinguer les tokens proches tout en pouvant gérer des séquences plus longues.
+<Callout type="paper" title="Le meilleur des deux mondes">
+Les hautes fréquences conservent leur capacité a distinguer les tokens proches. Les basses fréquences s'adaptent pour couvrir plus de terrain. Tu gardes la précision locale tout en gagnant en portée globale. C'est un bien meilleur compromis que l'interpolation uniforme.
 </Callout>
 
-### Dynamic NTK : le bonus
+### Dynamic NTK : ajustement automatique
 
-Au lieu de calculer la base une fois, calculez-la en fonction de la longueur **réelle** du contexte :
+Au lieu de fixer la base une fois pour toutes, on la calcule dynamiquement en fonction de la longueur **réelle** du contexte en cours :
 
-```
-base'(L) = base × (L / L_entrainement)^(d/(d-2))
-```
+$$
+\text{base}'(L) = \text{base} \times \left(\frac{L}{L_{\text{entrainement}}}\right)^{\frac{d}{d-2}}
+$$
 
-Résultat : pour une séquence de 5K tokens, la base s'ajuste légèrement. Pour 20K, elle s'ajuste plus. Le modèle dégrade progressivement au lieu de s'effondrer soudain.
+Pour une séquence de 5K tokens, la base s'ajuste légèrement. Pour 20K, elle s'ajuste beaucoup plus. L'avantage : au lieu de s'effondrer brutalement au-delà de la longueur d'entraînement, le modèle dégrade **progressivement**. C'est bien plus gracieux.
 
 ## Solution 3 : YaRN (l'approche moderne)
 
-Combinez plusieurs tricks ensemble :
+YaRN combine intelligemment plusieurs techniques en traitant chaque fréquence selon ses besoins :
 
-1. **NTK-aware** : pour les basses fréquences
-2. **Interpolation linéaire** : pour les moyennes fréquences
-3. **Pas d'interp** : pour les hautes fréquences (elles vont bien)
-4. **Correction température** : l'attention devient trop "pointue" sans correction
+1. **Hautes fréquences** (longueur d'onde courte) : pas touchées, elles fonctionnent déja bien
+2. **Fréquences moyennes** : interpolation linéaire progressive
+3. **Basses fréquences** (longueur d'onde longue) : NTK scaling complet
+4. **Correction de température** : sans correction, l'attention devient trop "pointue" (concentrée sur trop peu de tokens) quand la séquence s'allonge. YaRN ajuste l'échelle de l'attention pour compenser.
 
-**Classification des fréquences** :
+C'est comme un equalizer audio : au lieu d'appliquer le même traitement a toutes les fréquences, on ajuste chaque bande indépendamment selon ses besoins.
 
-- Longueur d'onde court (hautes fréquences) : pas touché
-- Longueur d'onde moyen : interpolation progressive
-- Longueur d'onde long (basses fréquences) : NTK scaling complet
-
-<Callout type="tip" title="Résultats YaRN en vrai">
-LLaMA 2 passe de 4K à 64K tokens avec seulement ~400 steps de fine-tuning. La perplexité reste proche de l'original jusqu'à 32x l'extension.
+<Callout type="tip" title="Résultats YaRN en pratique">
+LLaMA 2 passe de 4K a 64K tokens avec seulement ~400 steps de fine-tuning. La perplexité reste proche de l'original jusqu'a 32x l'extension. C'est un ratio effort/résultat remarquable.
 </Callout>
 
 
@@ -85,13 +79,13 @@ LLaMA 2 passe de 4K à 64K tokens avec seulement ~400 steps de fine-tuning. La p
 ## Autres approches
 
 ### LongRoPE
-Recherche automatique des meilleurs facteurs d'interp par dimension. Peut atteindre 2048x l'extension (4K → 8M tokens) mais demande plus de fine-tuning.
+Utilise une recherche automatique pour trouver les meilleurs facteurs d'interpolation par dimension. Peut atteindre 2048x l'extension (de 4K a 8M tokens) mais demande plus de fine-tuning et de compute pour la phase de recherche.
 
 ### Self-Extend
-Pas de fine-tuning ! Combine attention locale et "groupée" (les positions sont divisées par un facteur). S'appuie sur le fait que le modèle gère déjà bien les positions locales.
+Pas de fine-tuning nécessaire ! Combine l'attention locale (positions normales) avec une attention "groupée" (positions divisées par un facteur). S'appuie sur le fait que le modèle gère déja bien les positions locales et n'a besoin que d'une approximation pour les positions lointaines.
 
-### Long Training (la tête dure)
-Ré-entraîner sur de vraies longues séquences avec une base de 500K. Lent mais robuste.
+### Long Training (la méthode brute)
+Ré-entraîner directement sur de longues séquences avec une base RoPE de 500K. C'est lent et coûteux, mais ca donne les meilleurs résultats car le modèle apprend véritablement a gérer les longues distances.
 
 ## Tableau comparatif
 
@@ -105,17 +99,17 @@ Ré-entraîner sur de vraies longues séquences avec une base de 500K. Lent mais
 | Long Training | Oui, massif | Infini | Optimale | Très haut |
 
 <Callout type="info" title="Recommandation pratique">
-Pour 99% des cas : **YaRN**. Facile, rapide, bon résultat. Pour extensions extrêmes : LongRoPE. Pour zéro coût : Dynamic NTK (acceptable pour 2-4x).
+Pour 99% des cas : **YaRN**. Le ratio qualité/effort est imbattable. Pour des extensions extrêmes (millions de tokens) : LongRoPE. Pour un usage zero-shot sans aucun fine-tuning : Dynamic NTK (acceptable pour 2-4x l'extension).
 </Callout>
 
 ## Évaluer une extension de contexte
 
 ### Needle in Haystack
-Insérez une phrase importante aléatoirement dans un long texte. Le modèle peut la retrouver ? Si oui, ça marche. Si non, c'est du bluff.
+Le test classique : insérer une information spécifique a une position aléatoire dans un très long texte, puis demander au modèle de la retrouver. Si le modèle la retrouve quelle que soit la position, l'extension fonctionne. Si non, c'est du bluff : le modèle "accepte" le long contexte mais ne l'exploite pas vraiment.
 
-### RULER et amis
-Tests plus durs : pas juste retrouver l'info, mais raisonner sur elle après l'avoir trouvée. Les extensions par interp simple échouent souvent ici.
+### RULER et benchmarks avancés
+Des tests plus exigeants qui ne se contentent pas de vérifier que le modèle retrouve une information, mais qu'il peut **raisonner** sur des informations dispersées dans un long contexte. Les extensions par simple interpolation échouent souvent a ces tests plus réalistes.
 
 <Callout type="info" title="Conclusion">
-L'extension de contexte est une science et un art. Les techniques sont relativement simples (modifier les paramètres de RoPE) mais le tuning est délicat. YaRN c'est le sweet spot du moment.
+L'extension de contexte est a la fois une science et un art. Les techniques reposent sur des modifications relativement simples des paramètres de RoPE, mais le tuning des hyperparamètres est délicat. YaRN est le sweet spot actuel : minimal en fine-tuning, excellent en résultats.
 </Callout>

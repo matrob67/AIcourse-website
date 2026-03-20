@@ -7,60 +7,75 @@ description: "Le pruning supprime les paramètres les moins importants d'un rés
 
 ## Le problème : les modèles ont des poids inutiles
 
-Imaginez un arbre qui a des branches mortes. Couper ces branches ne nuit pas à sa santé — elle captent toujours le soleil aussi bien. Les réseaux de neurones c'est pareil : beaucoup de poids **ne contribuent presque rien** aux prédictions. Pourquoi les garder ?
+Imaginez un arbre qui a des branches mortes. Couper ces branches ne nuit pas à sa santé — il capte toujours le soleil aussi bien. Les réseaux de neurones c'est pareil : beaucoup de poids **ne contribuent presque rien** aux prédictions. Pourquoi les garder ?
+
+Pour vous donner une idée de l'ampleur du phénomène : dans un modèle comme LLaMA-7B avec ses 7 milliards de paramètres, on estime que **la moitié des poids** pourraient être supprimés sans impact significatif sur les performances. C'est comme si vous transportiez un sac à dos de 7 kg dont 3,5 kg seraient des cailloux inutiles. Le pruning, c'est l'art d'identifier et de retirer ces cailloux.
+
+Pourquoi ces poids inutiles existent-ils ? Pendant l'entraînement, le réseau explore plein de directions. Certains poids se stabilisent à des valeurs quasi nulles — ils ne servent à rien mais coûtent toujours en mémoire et en calcul. D'autres compensent des artefacts de l'entraînement plutôt que de capturer des patterns utiles. Le réseau est **sur-paramétré par conception**, car ça aide à converger pendant l'entraînement, mais c'est du gaspillage en inférence.
 
 <ArxivLink id="2306.11695" title="A Simple and Effective Pruning Approach for Large Language Models (Sun et al., 2023)" />
 
 <Callout type="info" title="La loterie des réseaux">
-L'hypothèse du "billet gagnant" dit que dans tout réseau dense, il existe un **sous-réseau sparse** (un sous-ensemble de poids) qui, entraîné seul, fait aussi bien que le réseau complet. Le pruning cherche juste ce sous-réseau caché.
+L'hypothèse du "billet gagnant" (Lottery Ticket Hypothesis) dit que dans tout réseau dense, il existe un **sous-réseau sparse** (un sous-ensemble de poids) qui, entraîné seul depuis les mêmes conditions initiales, fait aussi bien que le réseau complet. Le pruning cherche juste ce sous-réseau caché. Dit autrement : le "vrai" modèle est plus petit que celui que vous avez entraîné. Il faut juste le trouver à l'intérieur.
 </Callout>
 
 ## Deux stratégies opposées
 
 ### Le scalpel (pruning non structuré)
-Couper des poids individuels au hasard. Résultat : une matrice qui ressemble à du fromage suisse (beaucoup de zéros éparpillés).
 
-**Avantage** : vous pouvez supprimer 70% des poids.
-**Problème** : votre GPU standard n'accélère pas sur du fromage suisse. C'est juste plus léger, pas plus rapide.
+L'idée est simple : parcourir la matrice de poids, identifier les valeurs les plus petites (proches de zéro), et les mettre à zéro individuellement. Résultat : une matrice qui ressemble à du fromage suisse — beaucoup de zéros éparpillés de manière irrégulière.
+
+**Avantage** : une flexibilité chirurgicale. Vous pouvez supprimer 70-90% des poids tout en gardant de bonnes performances, parce que vous ciblez précisément les poids les moins importants.
+
+**Problème** : votre GPU standard n'accélère pas sur du fromage suisse. Les GPU sont conçus pour multiplier des matrices denses (pleines), pas des matrices trouées de partout. La taille en mémoire diminue (si vous utilisez un format sparse), mais la **vitesse d'exécution reste la même** sur du hardware classique. C'est frustrant : votre modèle est techniquement plus léger, mais il ne tourne pas plus vite.
 
 ### La tronçonneuse (pruning structuré)
-Supprimer des **structures entières** : une tête d'attention complète, une couche FFN, une couche de Transformer. Résultat : un modèle plus petit avec une architecture normale.
 
-**Avantage** : ça accélère réellement, sans hardware spécial.
-**Problème** : moins flexible, on ne peut couper que 30-50% au max.
+Supprimer des **structures entières** : une tête d'attention complète, une couche FFN, un neurone entier dans une couche, voire une couche complète du Transformer. Résultat : un modèle architecturalement plus petit mais toujours régulier.
+
+Imaginez un immeuble de 32 étages. Le pruning non structuré enlève des briques individuelles ici et là (le bâtiment a la même taille, mais avec des trous). Le pruning structuré enlève des **étages entiers** — vous avez un immeuble de 24 étages, plus petit, mais parfaitement fonctionnel et standard.
+
+**Avantage** : ça accélère réellement, sans hardware spécial. Un modèle avec 25% de couches en moins tourne réellement 25% plus vite.
+
+**Problème** : moins flexible. Vous ne pouvez couper que 30-50% au max avant de perdre significativement en qualité, parce que chaque structure supprimée a un impact plus brutal qu'un poids individuel.
 
 <Callout type="tip" title="2:4 sparsity sur les GPU NVIDIA récents">
-Il existe un format hybride magique : tous les 4 éléments, vous en laissez 2 activés, 2 inactifs. Les GPU Ampere/Ada supportent ça nativement. Résultat : compression réelle **et** accélération réelle en 2×. C'est le sweet spot.
+Il existe un format hybride magique entre structuré et non structuré : la sparsité **2:4**. Tous les 4 éléments consécutifs, vous en gardez exactement 2 actifs et mettez 2 à zéro. Ce pattern régulier permet aux GPU Ampere/Ada (A100, RTX 4090...) de l'exploiter nativement avec des instructions hardware dédiées. Résultat : 50% de compression **et** accélération réelle ~2x. C'est le sweet spot entre flexibilité et efficacité hardware.
 </Callout>
 
 ## Wanda : la méthode simple qui marche
 
-Le truc chaud en 2023 : **Wanda** (Weights AND Activations). Une seule formule :
+Le truc chaud en 2023 : **Wanda** (Weights AND Activations). L'intuition est brillante de simplicité. Les méthodes classiques suppriment les poids les plus petits en valeur absolue. Mais un "petit" poids connecté à un neurone qui s'active énormément peut être très important. Wanda capture ça avec une seule formule :
 
-```
-Score du poids = |poids| × (norme L2 de ses activations)
-```
+$$\text{Score du poids} = |w| \times \| \text{activations} \|_2$$
 
-Idée simple : un poids important c'est pas juste un gros nombre. C'est un poids qui s'**active beaucoup** connecté à un canal qui bouge beaucoup. Wanda capture cette interaction.
+Un poids important, c'est pas juste un gros nombre. C'est un poids qui a une **forte valeur** connecté à un canal qui **s'active beaucoup**. Pensez-y comme l'influence d'un employé : ce n'est pas juste son titre (la valeur du poids) qui compte, c'est aussi combien de projets passent par lui (les activations).
 
-Résultat : sur LLaMA-7B, supprimer 50% des poids avec Wanda → perplexité quasi identique à l'original. Pas d'entraînement complet : juste un calcul sur 128 exemples. 10 minutes max.
+En pratique, Wanda prend un petit échantillon de données (128 exemples suffisent), fait un forward pass pour mesurer les activations, calcule le score de chaque poids, et supprime ceux avec le score le plus bas.
+
+Résultat : sur LLaMA-7B, supprimer 50% des poids avec Wanda donne une perplexité quasi identique à l'original. Pas d'entraînement complet : juste un calcul sur 128 exemples. 10 minutes max sur un seul GPU.
 
 <Callout type="paper" title="Résultats réels de Wanda">
-Wanda rivalise avec SparseGPT (beaucoup plus complexe) tout en étant aussi rapide qu'un forward pass. L'efficacité est dingue pour la simplicité.
+Wanda rivalise avec SparseGPT (une méthode beaucoup plus complexe qui résout des problèmes d'optimisation couche par couche) tout en étant aussi rapide qu'un simple forward pass. Le ratio efficacité/simplicité est remarquable : une formule d'une ligne fait aussi bien qu'un algorithme sophistiqué.
 </Callout>
 
+## Pipeline de pruning en production
 
-## En production
+En production, vous pouvez combiner les techniques de manière agressive pour une compression maximale :
 
-Vous pouvez combiner les techniques :
-1. **Wanda** : 50% de poids restent
-2. **GPTQ** : quantifier en 4-bit (chaque valeur = 0.5 octet au lieu de 2)
-3. Résultat : 8× plus petit que FP16 originel, 80% de la performance
+1. **Wanda** : supprimez 50% des poids (sparsité non structurée)
+2. **GPTQ/AWQ** : quantifiez les poids restants en 4-bit (chaque valeur = 0.5 octet au lieu de 2)
+3. Résultat : modèle **8x plus petit** que l'original FP16, conservant ~80% de la performance originale
 
-Ou couper des couches entières : certains modèles tolèrent la suppression de 30% de leurs couches.
+Autre approche : couper des couches entières (pruning structuré). Certains modèles comme LLaMA-2-70B tolèrent la suppression de 30% de leurs couches intermédiaires avec un fine-tuning léger pour récupérer la qualité perdue.
+
+Le choix entre ces stratégies dépend de votre contrainte principale :
+- **Contrainte mémoire** (ex: déploiement mobile) → pruning non structuré + quantification
+- **Contrainte latence** (ex: temps réel) → pruning structuré pour accélérer réellement
+- **Les deux** → pruning structuré + quantification, ou format 2:4
 
 <Callout type="warning" title="Pièges du pruning">
-Un modèle avec 50% de sparsité non structurée s'exécute à **la même vitesse** que le modèle original sur du hardware classique. La compression est réelle (économie mémoire), l'accélération demande du hardware spécial ou des kernels optimisés.
+Un modèle avec 50% de sparsité non structurée s'exécute à **la même vitesse** que le modèle original sur du hardware classique. La compression est réelle (économie mémoire), mais l'accélération demande du hardware spécial (GPU avec support sparse) ou des kernels optimisés (comme ceux de DeepSparse). Ne confondez pas "plus petit en mémoire" et "plus rapide à l'exécution" — ce sont deux choses différentes.
 </Callout>
 
-Le pruning c'est pas sexy comme la distillation, mais c'est pragmatique pour **réduire la taille disque/mémoire** d'un modèle sans ré-entraîner. Combiné à la quantification, c'est votre arme secrète pour le déploiement edge.
+Le pruning c'est pas sexy comme la distillation, mais c'est pragmatique pour **réduire la taille disque/mémoire** d'un modèle sans ré-entraîner. Combiné à la quantification, c'est votre arme secrète pour le déploiement edge — faire tourner un LLM sur un téléphone ou un Raspberry Pi, c'est possible grâce à ces techniques combinées.

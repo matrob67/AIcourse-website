@@ -9,88 +9,100 @@ description: "Attention à fenêtre glissante : oubliez les tokens trop vieux, g
 
 Vous générez un token. Puis un autre. Et un autre.
 
-Chaque token nouveau = ses clés et valeurs stockées dans le "KV cache". Après 1000 tokens, votre cache pèse lourd. Après 10K, c'est énorme.
+Chaque token nouveau a besoin que ses clés et valeurs soient stockées dans le "KV cache" pour que les tokens suivants puissent y prêter attention. Après 1000 tokens, votre cache pèse lourd. Après 10K, c'est énorme. Après 100K, votre GPU explose.
 
-C'est un goulot d'étranglement majeur : le cache grandit, l'inférence ralentit.
+Pour être concret : avec un modèle comme LLaMA-7B en FP16, chaque token dans le KV cache occupe environ 1 Mo (toutes couches confondues). Un contexte de 100K tokens = 100 Go de KV cache. C'est plus que la mémoire totale d'un A100 (80 Go). Et ce cache ne fait que grandir au fil de la génération — c'est un goulot d'étranglement majeur pour l'inférence en production.
+
+Le problème n'est pas juste la mémoire : plus le cache est gros, plus chaque opération d'attention est lente (il faut scanner tout le cache). La latence augmente linéairement avec la longueur de la séquence.
 
 ## L'idée de Mistral : oubliez les vieux
 
-**Sliding Window Attention** : chaque token ne regarde que les `W` tokens précédents.
+**Sliding Window Attention** (SWA) est une idée d'une simplicité désarmante : chaque token ne regarde que les `W` tokens précédents, et on oublie le reste.
 
-```
-Token à position i → peut voir tokens [i-W+1, i]
-```
+$$
+\text{Token à position } i \rightarrow \text{peut voir tokens } [i - W + 1, \; i]
+$$
 
-Par exemple, avec `W = 4096`, le token #5000 voit les tokens #1000-5000, pas les tokens #1-1000.
+Par exemple, avec `W = 4096`, le token #5000 voit les tokens #905 à #5000, mais pas les tokens #1 à #904. C'est comme une fenêtre qui glisse le long de la séquence — d'où le nom.
 
-### Évidemment le cache reste petit
+L'intuition derrière cette approche : en pratique, un token n'a besoin que de son **contexte local** pour faire une bonne prédiction. Le mot que vous lisez maintenant dépend surtout des 50-100 mots précédents, pas du premier mot du chapitre. Les dépendances très longue distance existent (pronoms qui réfèrent à un personnage mentionné 3 pages avant), mais elles sont rares comparées aux dépendances locales.
 
-Au lieu d'un cache qui grandit avec les tokens générés (`O(L)`), il reste constant (`O(W)`).
+### Un cache constant
 
-| Approche | Cache après 8K tokens |
-|----------|------|
-| Attention globale | 8K à garder |
-| Sliding Window (W=4K) | 4K à garder |
+Au lieu d'un cache qui grandit indéfiniment avec les tokens générés (`O(L)`), il reste constant à `O(W)` :
 
-<Callout type="info" title="Portée effective plus grande">
-Chaque couche voit seulement une fenêtre. Mais avec 32 couches, l'information peut se propager. Théoriquement, la portée effective est 32 × 4K = 128K tokens. En pratique, ça va bien.
+| Approche | Cache après 8K tokens | Cache après 100K tokens |
+|----------|------|------|
+| Attention globale | 8K entrées | 100K entrées |
+| Sliding Window (W=4K) | 4K entrées | 4K entrées |
+
+Que vous génériez 8K ou 1M de tokens, le cache reste toujours à 4K. La mémoire est **prévisible et bornée**. Pour un système de production qui doit servir des centaines de requêtes en parallèle, c'est crucial : vous pouvez planifier exactement combien de mémoire chaque requête consommera.
+
+<Callout type="info" title="Portée effective plus grande que la fenêtre">
+Chaque couche voit seulement une fenêtre de W tokens. Mais un Transformer a 32 couches empilées. À la couche 1, le token voit W tokens. À la couche 2, il voit les tokens qui, eux-mêmes, ont vu W tokens — donc potentiellement 2W tokens. Théoriquement, avec 32 couches et W=4096, la portée effective est $32 \times 4096 = 131072$ tokens (~128K). En pratique, l'information s'atténue à travers les couches, mais la portée reste largement supérieure à W.
 </Callout>
 
 ## Implémentation : rolling buffer
 
-C'est trivial. Un buffer circular de taille `W`. Quand il est plein, les nouveaux entrées K/V écrasent les plus anciens.
+L'implémentation est d'une simplicité brutale. Un buffer circulaire de taille `W`. Quand il est plein, les nouvelles entrées K/V écrasent les plus anciennes.
 
-```
-position modulo W
-```
+$$
+\text{index} = \text{position} \mod W
+$$
 
-Pas de copie mémoire, pas de malloc/free. Juste un pointeur qui tourne en rond.
+C'est tout. Pas de copie mémoire, pas de malloc/free dynamique. Juste un pointeur qui tourne en rond dans un tableau de taille fixe. En C, c'est littéralement une ligne de code. Cette simplicité d'implémentation est un avantage majeur : moins de code = moins de bugs, moins de latence overhead, plus de fiabilité.
 
 <Callout type="tip" title="Zero overhead">
-L'implémentation est tellement bête simple qu'il y a zéro overhead supplémentaire. Comparé à l'attention globale, c'est même plus rapide.
+L'implémentation est tellement simple qu'il y a littéralement zéro overhead par rapport à l'attention standard. C'est même **plus rapide** que l'attention globale, parce que le cache est plus petit et tient mieux dans les niveaux rapides de la mémoire GPU (SRAM/cache L2). Moins de données à scanner = moins de temps.
 </Callout>
 
 ## Mistral 7B : cas d'école
 
-Fenêtre de 4096 tokens. Aussi utilisé des **têtes d'attention groupées** (GQA) : 8 têtes de clés/valeurs au lieu de 32.
+Mistral 7B, le modèle qui a popularisé SWA, utilise une fenêtre de 4096 tokens combinée à des **têtes d'attention groupées** (GQA) : 8 têtes de clés/valeurs au lieu de 32 (les 32 têtes de query partagent 8 jeux de K/V).
 
-Résultat : KV cache minuscule. Les serveurs peuvent traiter beaucoup plus de requêtes en parallèle.
+L'effet combiné est spectaculaire :
+- SWA réduit la taille du cache (4K au lieu de toute la séquence)
+- GQA réduit le cache par un facteur 4 en plus (8 K/V au lieu de 32)
+- Résultat : KV cache minuscule, permettant aux serveurs de traiter **beaucoup plus de requêtes en parallèle**
+
+En production, ça change tout. Un serveur avec un GPU A100 peut servir 3-4x plus d'utilisateurs simultanés avec Mistral 7B qu'avec un modèle équivalent sans SWA/GQA, simplement parce que le cache mémoire par requête est beaucoup plus petit.
 
 ## Forces et faiblesses
 
 ### Les avantages
-- **KV cache borné** : mémoire prévisible, débit constant
-- **Ultra-compatible** : marche avec Flash Attention, GQA, tout
-- **Efficacité** : une fenêtre contiguë est plus efficace qu'une sélection arbitraire
+- **KV cache borné** : mémoire prévisible, débit constant peu importe la longueur de séquence
+- **Ultra-compatible** : marche avec Flash Attention, GQA, quantification — tout se combine facilement
+- **Efficacité hardware** : une fenêtre contiguë donne des accès mémoire séquentiels, ce que les GPU adorent. Bien plus efficace qu'une sélection arbitraire de tokens
+- **Simplicité** : trivial à implémenter, trivial à debugger, trivial à déployer
 
 ### Les problèmes
-- **Oubli forcé** : les infos au-delà de la fenêtre sont perdues
-- **Tâches à long rappel** : retrouver une info du début est difficile
+- **Oubli forcé** : les informations au-delà de la fenêtre sont irrémédiablement perdues pour une couche donnée
+- **Tâches à long rappel** : retrouver une information spécifique du début d'un long document est difficile
 
-<Callout type="warning" title="Exemple d'échec">
-Un document de 100K mots. La question porte sur la phrase 2. Avec fenêtre 4K, le token de réponse à la position 100K ne voit pas la position 2. L'info doit traverser 96K tokens en couches successives, ce qui attenue l'information.
+<Callout type="warning" title="Exemple d'échec concret">
+Imaginez un document de 100K tokens. La question porte sur la phrase 2 (au tout début). Avec une fenêtre de 4K, le token de réponse à la position 100K ne voit directement que les positions 96K-100K. L'information de la position 2 doit "survivre" en étant propagée de couche en couche à travers 96K tokens. En théorie c'est possible (portée effective = 128K), en pratique l'information s'atténue fortement — c'est le "téléphone arabe" des réseaux de neurones.
 </Callout>
 
 ## Variantes intelligentes
 
-### Sink tokens
-Gardez les premiers tokens quand même (le system prompt, les instructions). Ils reçoivent souvent beaucoup d'attention et sont importants.
+### Sink tokens (Attention Sink)
+Gardez les premiers tokens (le system prompt, les instructions) **en permanence** dans le cache, même quand la fenêtre les aurait oubliés. Observation empirique : les premiers tokens reçoivent souvent une attention disproportionnée (ils servent de "poubelle d'attention"). Les garder stabilise considérablement les performances sur les longues séquences.
 
 ### Attention locale + globale
-Combinez fenêtre locale avec quelques tokens "globaux" visibles partout. Compromise entre efficacité et qualité.
+Combinez une fenêtre locale avec quelques tokens "globaux" visibles par tous. C'est l'approche Longformer/BigBird appliquée au décodage. Compromis entre l'efficacité de SWA et la portée de l'attention globale.
 
 ### Attention diluée
-Au lieu d'une fenêtre contiguë, prenez les `W/2` derniers tokens ET les tokens espacés (tous les 4è token). Couvre une portée plus large.
+Au lieu d'une fenêtre contiguë de W tokens, prenez les `W/2` derniers tokens ET des tokens espacés (tous les 4e token dans une fenêtre plus large). Ça couvre une portée temporelle beaucoup plus grande pour le même budget mémoire.
 
 ## Comparaison avec d'autres approches
 
-| Technique | Complexité | Cache | Rappel global |
-|-----------|-----------|-------|---|
-| Attention classique | O(L²) | O(L) | Parfait |
-| Sliding Window | O(L×W) | O(W) | Via multi-couche |
-| Sparse (Longformer) | O(L×(W+G)) | O(L) | Via tokens globaux |
-| SSM (Mamba) | O(L) | O(1) fixe | Comprimé |
+| Technique | Complexité | Cache | Rappel global | Implémentation |
+|-----------|-----------|-------|---|---|
+| Attention classique | O(L^2) | O(L) | Parfait | Standard |
+| Sliding Window | O(L*W) | O(W) | Via multi-couche | Triviale |
+| Sparse (Longformer) | O(L*(W+G)) | O(L) | Via tokens globaux | Complexe |
+| SSM (Mamba) | O(L) | O(1) fixe | Comprimé dans l'état | Spécialisée |
 
-<Callout type="info" title="Verdict : pragmatique">
-Sliding Window est pas intellectuellement spectaculaire, mais c'est PRAGMATIQUE. Les modèles Mistral prouvent qu'une attention locale bien faite rivalise avec l'attention globale tout en étant plus efficace. C'est pourquoi ça marche en production.
+<Callout type="info" title="Verdict : pragmatique et efficace">
+Sliding Window Attention n'est pas intellectuellement spectaculaire — c'est une idée simple, presque triviale. Mais c'est exactement ça qui en fait sa force. Les modèles Mistral ont prouvé qu'une attention locale bien calibrée rivalise avec l'attention globale sur la grande majorité des tâches, tout en étant plus efficace en mémoire et en latence. En production, simple et fiable bat complexe et théoriquement optimal. C'est pourquoi SWA est devenue un standard de l'industrie.
 </Callout>

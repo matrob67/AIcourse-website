@@ -5,13 +5,13 @@ description: "De SGD à Adam : les optimizers qui s'adaptent à chaque poids. Co
 
 ## Introduction : Pourquoi un optimiseur universel ne suffit pas
 
-Avec SGD classique, **tous** les poids utilisent le même learning rate. Mais ça n'a aucun sens.
+Avec SGD classique, **tous** les poids du reseau utilisent le meme learning rate. Mais quand on y reflechit, ca n'a aucun sens.
 
-Certains poids reçoivent des gradients énormes à chaque étape (utilisés constamment). D'autres reçoivent des gradients minuscules (utilisés rarement, ou spécifiques).
+Dans un reseau de neurones, certains poids sont sollicites en permanence et recoivent des gradients importants a chaque etape d'entrainement. D'autres, au contraire, recoivent des gradients minuscules parce qu'ils sont associes a des features rares ou tres specifiques. Pense a un embedding de mots : le mot "le" apparait dans presque chaque phrase (gradients frequents et gros), tandis que le mot "stethoscope" apparait rarement (gradients rares et petits).
 
-Le même learning rate ne peut pas convenir aux deux. C'est comme donner la même dose de médicament à un enfant de 10 kg et un adulte de 100 kg. Catastrophe.
+Appliquer le meme learning rate a ces deux types de poids est une aberration. Un learning rate assez grand pour faire bouger les poids rares va faire exploser les poids frequents. Un learning rate assez petit pour stabiliser les poids frequents va laisser les poids rares quasiment immobiles.
 
-**Les optimiseurs adaptatifs** résolvent ça : chaque poids reçoit un learning rate personnalisé basé sur son historique.
+**Les optimiseurs adaptatifs** resolvent ce dilemme : chaque poids recoit un learning rate personnalise, ajuste automatiquement en fonction de son historique de gradients.
 
 
 
@@ -21,33 +21,33 @@ Le même learning rate ne peut pas convenir aux deux. C'est comme donner la mêm
 
 <ArxivLink id="1412.6980" title="Adam: A Method for Stochastic Optimization" />
 
-L'idée centrale d'Adam : au lieu d'utiliser le gradient brut d'une étape pour mettre à jour un poids, Adam construit une vue d'ensemble de l'historique de ce poids. Il maintient **deux mémoires** exponentielles pour chaque poids — deux statistiques qui résument le passé récent.
+L'idee centrale d'Adam : au lieu d'utiliser le gradient brut d'une seule etape pour mettre a jour un poids, Adam construit une vue d'ensemble a partir de l'historique recente. Pour chaque poids du reseau, il maintient **deux memoires** exponentielles qui resument ce qui s'est passe lors des etapes precedentes.
 
-### Mémoire 1 : le momentum (m)
+### Memoire 1 : le momentum (m)
 
-Moyenne lissée des anciens gradients.
+C'est la moyenne mobile exponentielle des gradients passes :
 
-```
-m = 0.9 * m + 0.1 * gradient_actuel
-```
+$$
+m_t = \beta_1 \cdot m_{t-1} + (1 - \beta_1) \cdot g_t
+$$
 
-C'est le momentum qu'on connaît. Accumule de l'élan.
+Concretement, m accumule de l'elan dans une direction. Si les gradients pointent dans la meme direction depuis plusieurs etapes, m devient grand dans cette direction et le poids accelere. Si les gradients oscillent (positif, negatif, positif...), m reste proche de zero et le poids ne bouge presque pas. C'est le meme principe qu'une balle qui roule sur une colline : elle prend de la vitesse dans les descentes regulieres et hesite dans les zones chaotiques.
 
-### Mémoire 2 : la volatilité (v)
+### Memoire 2 : la volatilite (v)
 
-Moyenne lissée des **carrés** des gradients.
+C'est la moyenne mobile exponentielle des **carres** des gradients :
 
-```
-v = 0.999 * v + 0.001 * gradient²
-```
+$$
+v_t = \beta_2 \cdot v_{t-1} + (1 - \beta_2) \cdot g_t^2
+$$
 
-Mesure la variabilité des gradients passés. Si v est grand, ce poids reçoit des gradients qui changent beaucoup d'une étape à l'autre — il est "agité" et mérite d'être traité avec prudence.
+En prenant le carre, on mesure l'**amplitude** des gradients, independamment de leur direction. Si v est grand pour un poids donne, cela signifie que ce poids recoit des gradients de forte amplitude, peut-etre erratiques. Il est dans une zone "agitee" de la surface de perte et merite d'etre traite avec prudence. Si v est petit, ce poids recoit des gradients faibles et reguliers : c'est une zone calme ou on peut avancer plus rapidement.
 
 ### La mise à jour
 
-```
-poids = poids - eta * (m / (racine(v) + petit_epsilon))
-```
+$$
+\theta_t = \theta_{t-1} - \eta \cdot \frac{m_t}{\sqrt{v_t} + \epsilon}
+$$
 
 **L'intuition clé** :
 
@@ -62,22 +62,20 @@ Beta_1 = 0.9 (mémoire du momentum)
 Beta_2 = 0.999 (mémoire de la volatilité)
 Learning rate = 0.001 ou 0.0001 généralement
 
-Ces valeurs sont bizarrement bien choisies. Les chercheurs les ont empiriquement trouvées optimales. Utilise-les, pas besoin de les tweaker.
+Ces valeurs par defaut marchent remarquablement bien dans la grande majorite des cas. Beta_1 a 0.9 signifie que le momentum "oublie" environ 10% a chaque etape (memoire courte). Beta_2 a 0.999 signifie que la volatilite a une memoire beaucoup plus longue (oublie seulement 0.1% par etape), ce qui la rend plus stable. En pratique, tu n'as presque jamais besoin de modifier ces valeurs.
 </Callout>
 
 ## Le piège d'Adam : weight decay
 
-La **régularisation L2** (weight decay) c'est dire "garde tes poids petits" pour éviter le surapprentissage. On ajoute une pénalité :
+La **regularisation L2** (weight decay) est une technique classique pour eviter le surapprentissage. L'idee est simple : on ajoute une penalite qui pousse tous les poids a rester petits, en ajoutant le carre des poids a la loss :
 
-```
-erreur_totale = erreur + lambda * somme(poids²)
-```
+$$
+\mathcal{L}_{\text{total}} = \mathcal{L} + \lambda \sum \theta^2
+$$
 
-Avec SGD, ça marche parfaitement. Avec Adam, il y a un problème subtil :
+Avec SGD, ca marche parfaitement : le gradient de la penalite ($2\lambda\theta$) est ajoute au gradient de la loss, et la mise a jour pousse les poids vers zero proportionnellement a leur taille.
 
-Le terme de régularisation se divise aussi par racine(v). Pour les poids très actifs (v grand), la pénalité devient minuscule. La régularisation devient inefficace.
-
-Résultat : tu crois régulariser mais tu ne fais rien.
+Avec Adam, il y a un probleme subtil mais dévastateur. Le gradient de la penalite L2 passe par le meme mecanisme adaptatif que le gradient normal : il est divise par $\sqrt{v}$. Pour les poids tres actifs (qui ont un v grand), cette division rend la penalite de regularisation minuscule. Le reseau "croit" etre regularise, mais en realite, les poids les plus importants ne sont presque pas affectes par la penalite. Tu penses regulariser, mais tu ne fais presque rien.
 
 ### AdamW : la correction simple
 
@@ -85,9 +83,9 @@ Résultat : tu crois régulariser mais tu ne fais rien.
 
 AdamW découple le weight decay. Au lieu d'ajouter la pénalité au gradient (qui se divise par v), tu l'ajoutes **après** la mise à jour Adam :
 
-```
-poids = poids - eta * (m / racine(v)) - lambda * poids
-```
+$$
+\theta_t = \theta_{t-1} - \eta \cdot \frac{m_t}{\sqrt{v_t}} - \lambda \cdot \theta_{t-1}
+$$
 
 Comme ça, la régularisation ne subit pas l'effet de divisé par v. Elle fonctionne comme prévu pour **tous** les poids.
 
@@ -103,9 +101,9 @@ Problème : avec Adam, augmenter la taille du batch au-delà d'un seuil **dégra
 
 **LAMB** (Layer-wise Adaptive Moments Optimizer) normalise chaque couche indépendamment :
 
-```
-poids = poids - eta * (norm(poids) / norm(mise_a_jour)) * mise_a_jour_Adam
-```
+$$
+\theta_t = \theta_{t-1} - \eta \cdot \frac{\|\theta_{t-1}\|}{\|u_t\|} \cdot u_t
+$$
 
 Chaque couche maintient une "échelle" appropriée même avec un batch énorme.
 
@@ -128,16 +126,16 @@ LAMB est conçu pour l'entraînement distribué massif. Si tu entraînes sur 1-4
 
 Peu importe l'optimiseur, tu devrais **varier le learning rate** pendant l'entraînement.
 
-Stratégie courante : **Warmup + Cosine Decay**
+La strategie la plus repandue aujourd'hui est le **Warmup + Cosine Decay** :
 
-```
-Epochs 0-10 (warmup) : learning rate monte de 0 à 0.001
-Epochs 10-100 (cosine) : learning rate redescend progressivement jusqu'à presque 0
-```
+| Phase | Epoques | Learning rate |
+|---|---|---|
+| Warmup | 0-10 | Monte progressivement de 0 a 0.001 |
+| Cosine decay | 10-100 | Redescend doucement en suivant une courbe cosinus jusqu'a ~0 |
 
-Au début tu cherches (pas large), à la fin tu affines (pas petits).
+Pourquoi le warmup ? Au tout debut de l'entrainement, les statistiques m et v d'Adam ne sont pas encore fiables (elles sont initialisees a zero). Monter progressivement le learning rate laisse le temps a ces statistiques de se calibrer avant de faire de grosses mises a jour. Sans warmup, les premieres etapes peuvent envoyer les poids dans des directions catastrophiques.
 
-C'est une petite chose mais elle améliore **presque toujours** la qualité finale du modèle.
+Pourquoi le decay ? A la fin de l'entrainement, le modele est proche d'un bon optimum. Des pas trop grands le feraient osciller autour de cet optimum sans jamais y converger. Reduire progressivement le learning rate permet d'affiner les derniers ajustements. C'est un detail technique qui semble mineur, mais il ameliore **presque toujours** la qualite finale du modele.
 
 ## Détails pratiques
 
@@ -145,14 +143,14 @@ C'est une petite chose mais elle améliore **presque toujours** la qualité fina
 
 Adam stocke deux états supplémentaires (m et v) pour chaque poids. Pour un modèle de 7 milliards de poids, c'est :
 
-```
-Poids : 7B * 4 bytes = 28 Go
-m : 7B * 4 bytes = 28 Go
-v : 7B * 4 bytes = 28 Go
-Total : 84 Go RAM au lieu de 28 Go
-```
+| Composant | Calcul | Mémoire |
+|-----------|--------|---------|
+| Poids | $7B \times 4$ bytes | 28 Go |
+| $m$ (momentum) | $7B \times 4$ bytes | 28 Go |
+| $v$ (variance) | $7B \times 4$ bytes | 28 Go |
+| **Total** | | **84 Go** (au lieu de 28 Go) |
 
-C'est **3x plus de RAM**. Des variantes comme **Adafactor** réduisent ça en ne stockant que des statistiques, pas des états complets. Mais AdamW reste le standard.
+C'est **3x plus de RAM** que de simplement stocker les poids. Pour les tres gros modeles, c'est un vrai probleme : l'optimiseur consomme plus de memoire que le modele lui-meme. Des variantes comme **Adafactor** (utilise par Google pour T5) reduisent cette empreinte en ne stockant que des approximations des statistiques m et v au lieu des etats complets. Mais en termes de performance d'entrainement, AdamW reste le standard de reference.
 
 ## Résumé pratique
 
@@ -163,4 +161,4 @@ Pour 99% de tes projets :
 - Learning rate schedule : warmup linéaire + cosine decay
 - Batch size : 32-256 (ajuste selon ta mémoire GPU)
 
-C'est robuste et tu bats rarement en changeant les optimiseurs.
+C'est une configuration robuste qui donne d'excellents resultats dans la grande majorite des cas. Tu batras rarement cette recette en changeant d'optimiseur : le temps passe a experimenter avec d'autres configurations serait presque toujours mieux investi sur la qualite des donnees ou l'architecture du modele.

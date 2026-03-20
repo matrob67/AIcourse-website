@@ -5,108 +5,108 @@ description: "Techniques de curation des données d'entraînement pour les LLM :
 
 ## Le mantra : "garbage in, garbage out"
 
-Les données d'entraînement sont le facteur le plus déterminant de la qualité d'un LLM. Plus que la taille du modèle, plus que le nombre de tokens.
+Les données d'entraînement sont le facteur le plus déterminant de la qualité d'un LLM. Plus que la taille du modèle. Plus que le nombre de tokens. Plus que l'architecture.
 
-Tu peux avoir un modèle énorme, mais si tu l'entraînes sur du contenu spam, dupliqué et bas de gamme, le résultat sera mauvais. À l'inverse, un modèle plus petit entraîné sur des données soigneusement filtrées peut surperformer.
+L'analogie est simple : tu peux avoir le meilleur chef cuisinier du monde, si tu lui donnes des ingrédients pourris, le plat sera mauvais. Un modèle de 7B paramètres entraîné sur des données soigneusement filtrées peut surperformer un modèle de 70B entraîné sur du contenu spam, dupliqué et bas de gamme. C'est l'un des enseignements les plus contre-intuitifs du domaine.
 
 ## Le pipeline de traitement des données
 
-```
-Données brutes (100 TB)
-  ↓ Extraction (nettoyage, conversion formats)
-  ↓ Filtrage linguistique (détection langue)
-  ↓ Déduplication (30-50% éliminés)
-  ↓ Filtrage qualité (classifier-based)
-  ↓ Filtrage sécurité (toxicité, PII)
-  ↓ Mélange et proportionnement
-  ↓ Données finales (5-15 TB, 5-15T tokens)
-```
+Voici le parcours typique des données brutes jusqu'au dataset final :
 
-Le ratio de réduction est **5-20x**. Cela souligne l'ampleur du filtrage nécessaire.
+1. **Données brutes** (100 TB) --- tout ce qu'on a scrapé du web
+2. **Extraction** (nettoyage HTML, conversion de formats, normalisation)
+3. **Filtrage linguistique** (détection de langue, suppression du contenu non-textuel)
+4. **Déduplication** (30-50% éliminés --- oui, c'est énorme)
+5. **Filtrage qualité** (classifier-based, élimination du contenu de basse qualité)
+6. **Filtrage sécurité** (toxicité, PII, contenu illégal)
+7. **Mélange et proportionnement** (équilibrage des sources)
+8. **Données finales** (5-15 TB, soit 5-15T tokens)
 
-<Callout type="info" title="Échelle du travail">
-Pour un dataset de 5T tokens : tu dois traiter ~100 TB de données brutes à travers ce pipeline. Ça prend des semaines en GPU/CPU massives. C'est pourquoi les datasets publics et bien documentés (FineWeb, DCLM) sont si précieux.
+Le ratio de réduction est **5-20x**. Tu commences avec 100 TB et tu finis avec 5-15 TB. Ça donne une idée de l'ampleur du nettoyage nécessaire : la majorité d'internet n'est tout simplement pas assez bonne pour entraîner un LLM de qualité.
+
+<Callout type="info" title="L'échelle du travail de curation">
+Pour un dataset de 5T tokens, tu dois traiter environ 100 TB de données brutes à travers ce pipeline. Ça prend des semaines de calcul sur des clusters massifs. C'est pourquoi les datasets publics et bien documentés (FineWeb, DCLM) sont si précieux : ils épargnent des mois de travail et des millions en infrastructure.
 </Callout>
 
 
 
-## Déduplication : 30-50% des données sont dupliquées
+## Déduplication : 30-50% des données web sont dupliquées
 
-### Pourquoi c'est important
+### Pourquoi c'est critique
 
-Les données web contiennent énormément de contenu dupliqué : articles repris par multiple sites, templates récurrents, boilerplate HTML répété, etc.
+Le web est un océan de contenus dupliqués : articles repris par des dizaines de sites d'agrégation, templates de sites récurrents (mentions légales, CGU), boilerplate HTML copié-collé, articles de presse syndiqués.
 
-Conséquences de la non-déduplication :
-- **Mémorisation** : le modèle mémorise le contenu dupliqué au lieu d'apprendre des patterns généralisables
-- **Surreprésentation** : certains contenus polluent disproportionnément les gradients
-- **Contamination des benchmarks** : les données de test finissent dans les données d'entraînement
+Ne pas dédupliquer a trois conséquences graves :
+- **Mémorisation au lieu de généralisation** : le modèle mémorise les contenus dupliqués mot pour mot au lieu d'apprendre les patterns sous-jacents. C'est comme un étudiant qui apprend ses fiches par coeur sans comprendre les concepts.
+- **Biais de surreprésentation** : les contenus les plus dupliqués polluent disproportionnément les gradients, biaisant le modèle vers certains types de texte.
+- **Contamination des benchmarks** : si les données de test se retrouvent dans les données d'entraînement (via des articles qui citent les benchmarks), les scores d'évaluation sont artificiellement gonflés et ne reflètent plus les vraies capacités du modèle.
 
 ### Technique 1 : Déduplication exacte (hashing)
 
-Compute une signature cryptographique (MD5, SHA-256) de chaque document. Les documents identiques ont la même signature.
+On calcule une empreinte cryptographique (MD5, SHA-256) de chaque document. Deux documents identiques produisent la même empreinte et sont détectés comme doublons.
 
-**Rapide**, mais ne capture que les duplications exactes.
+**Rapide** et simple à implémenter, mais ne capture que les duplications **exactes** --- si un seul caractère change, les documents sont considérés comme différents.
 
 ### Technique 2 : Déduplication approximative (fuzzy)
 
-Détecte les documents similaires mais non-identiques.
+Détecte les documents similaires mais non-identiques : même article légèrement reformulé, même contenu avec une introduction différente, etc.
 
-**MinHash + LSH** : signature Jaccard de chaque document (ensemble de n-grams). Documents avec similarité > 80% sont détectés comme dupliqués.
+**MinHash + LSH** (Locality Sensitive Hashing) : on représente chaque document par ses n-grams (groupes de mots consécutifs), on calcule une signature compacte (MinHash), puis on utilise LSH pour regrouper efficacement les documents dont la similarité de Jaccard dépasse un seuil (typiquement 80%).
 
-**Efficacité** : capture les documents très similaires (même article légèrement modifié).
+C'est beaucoup plus puissant que le hashing exact, mais aussi plus coûteux en calcul. En pratique, les deux techniques sont utilisées en séquence : hashing exact d'abord (rapide, élimine les copies parfaites), puis fuzzy dedup (plus lent, élimine les quasi-copies).
 
 <Callout type="paper" title="Impact mesuré de la déduplication">
-Études montrent que la déduplication améliore les performances de 10% en perplexité et gains mesurables sur les benchmarks. L'effet est plus grand que l'ajout du même volume de données nouvelles non-filtrées.
+Les études montrent que la déduplication améliore les performances d'environ 10% en perplexité et apporte des gains mesurables sur les benchmarks. Fait remarquable : cet effet est plus important que l'ajout du même volume de données nouvelles non-filtrées. Autrement dit, il vaut mieux nettoyer tes données que d'en ajouter davantage.
 </Callout>
 
 ## Filtrage de qualité : classifier-based
 
-### Approche heuristique simple
+### Approche heuristique (le premier filtre)
 
-Des règles basiques éliminent les documents de basse qualité :
-- **Longueur minimale** : < 50 mots = rejeté
-- **Ratio alphabétique** : trop de symboles/chiffres = suspect
-- **Répétition** : trop de n-grams répétés = contenu généré automatiquement
-- **Mots courants** : trop de stop words = contenu faible
+Des règles simples éliminent les cas les plus flagrants :
+- **Longueur minimale** : moins de 50 mots = rejeté (pages quasi-vides, menus de navigation)
+- **Ratio alphabétique** : trop de symboles ou de chiffres = suspect (pages de données brutes, logs)
+- **Répétition** : trop de n-grams répétés = contenu généré automatiquement ou boilerplate
+- **Distribution de stop words** : trop de stop words sans contenu substantiel = texte de remplissage
 
-Rapide, élimine les pires cas, mais laisse beaucoup de contenu médiocre.
+C'est rapide et ça élimine les pires cas, mais ça laisse passer beaucoup de contenu médiocre qui passe sous le radar de ces règles simples.
 
-### Approche moderne : classificateur neural
+### Approche moderne : le classificateur neural
 
-Entraîne un modèle binaire pour distinguer le contenu "haut de gamme" du contenu "bas de gamme" :
+On entraîne un modèle binaire (souvent un petit BERT ou fastText) pour distinguer le contenu de haute qualité du contenu de basse qualité :
 
-- **Exemples positifs** : Wikipedia, livres, articles peer-reviewed
-- **Exemples négatifs** : web aléatoire, spam, contenu auto-généré
+- **Exemples positifs** : Wikipédia, livres publiés, articles peer-reviewed, documentation technique de qualité
+- **Exemples négatifs** : web aléatoire, spam, contenu auto-généré, pages de référencement SEO
 
-Le classificateur score chaque document de 0 à 1. Tu filtres au seuil (ex: garder seulement > 0.7).
+Le classificateur score chaque document de 0 à 1. On filtre ensuite selon un seuil (par exemple, garder seulement les documents scorés au-dessus de 0.7).
 
-**Utilisé par** : GPT-3, LLaMA, Qwen, la majorité des LLM modernes.
+**Utilisé par** : GPT-3, LLaMA, Qwen, et la majorité des LLM modernes. C'est devenu un standard de l'industrie.
 
-<Callout type="tip" title="Ranking > hard filtering">
-Au lieu de filtrer dur (garder/rejeter), attribue un score 0-1 à chaque document et sur-échantillonne les hauts scores. Ça évite de rejeter des documents utiles qui sont juste sous le seuil.
+<Callout type="tip" title="Ranking plutôt que hard filtering">
+Au lieu de filtrer de manière binaire (garder/rejeter), une approche plus sophistiquée consiste à attribuer un score de qualité à chaque document et à sur-échantillonner les hauts scores lors de l'entraînement. Ça évite de perdre des documents potentiellement utiles qui tombent juste sous le seuil de coupure. Les données ne sont pas noires ou blanches --- elles existent sur un spectre de qualité.
 </Callout>
 
 ## Filtrage de sécurité
 
 ### Détoxification
 
-Réduction (pas élimination complète) des contenus toxiques :
+L'objectif est de réduire (pas éliminer complètement) les contenus toxiques dans les données d'entraînement :
 
-- **Classificateurs de toxicité** : entraînés sur des datasets de toxicité
-- **Listes de mots** : filtrage rapide (mais brutal)
-- **Stratégie** : viser un taux cible de toxicité (ex: < 0.5%) au lieu de zéro
+- **Classificateurs de toxicité** : modèles entraînés sur des datasets étiquetés de toxicité (Perspective API, Detoxify)
+- **Listes de mots** : filtrage rapide par mots-clés (brutal mais efficace comme premier filtre)
+- **Stratégie de seuil** : viser un taux cible de toxicité raisonnable (par ex: < 0.5%) plutôt que zéro
 
-Un filtrage zéro élimine trop de données légitimes (discussions nuancées sur des sujets sensibles, documentation légale, contenu médical, etc.).
+Pourquoi pas zéro ? Parce qu'un filtrage trop agressif élimine du contenu légitime : discussions nuancées sur des sujets sensibles, documentation médicale (qui contient des termes anatomiques), littérature juridique (qui décrit des crimes), articles d'histoire, etc. Un modèle entraîné sans aucun contenu potentiellement sensible devient ignorant de ces sujets.
 
 ### Informations personnelles (PII)
 
-Suppression ou anonymisation :
-- Numéros de téléphone, emails, adresses
-- Noms de personnes privées
-- Numéros d'identification (SSN, cartes d'identité)
+Suppression ou anonymisation systématique de :
+- Numéros de téléphone, emails, adresses postales
+- Noms de personnes privées (pas les personnalités publiques)
+- Numéros d'identification (SSN, cartes d'identité, numéros de sécurité sociale)
 
-<Callout type="warning" title="Compromis filtrage/qualité">
-Un filtrage trop agressif dégrade la qualité. Par exemple, filtrer tous les contenus mentionnant des termes médicaux ou juridiques potentiellement sensibles élimine les connaissances légitimes dans ces domaines. Le filtrage de sécurité doit être calibré, pas excessif.
+<Callout type="warning" title="Le compromis filtrage vs qualité">
+Un filtrage trop agressif dégrade la qualité du modèle. Par exemple, filtrer tous les contenus mentionnant des termes médicaux ou juridiques potentiellement sensibles élimine des connaissances légitimes et précieuses dans ces domaines. Le filtrage de sécurité doit être calibré avec soin : assez strict pour réduire les risques, assez permissif pour préserver les connaissances. C'est un équilibre délicat.
 </Callout>
 
 ## Mélange des données : proportionnement des sources
@@ -115,39 +115,39 @@ Un filtrage trop agressif dégrade la qualité. Par exemple, filtrer tous les co
 
 | Source | Proportion | Qualité | Notes |
 |--------|-----------|---------|--------|
-| Web (Common Crawl) | 60-80% | Variable | Volume massif |
-| Code (GitHub) | 5-15% | Haute | Vérifiable |
-| Livres | 3-8% | Très haute | Peu accessible |
+| Web (Common Crawl) | 60-80% | Variable | Volume massif, backbone du dataset |
+| Code (GitHub) | 5-15% | Haute | Améliore le raisonnement logique |
+| Livres | 3-8% | Très haute | Accès limité (copyright) |
 | Articles scientifiques | 2-5% | Très haute | PubMed, arXiv |
-| Wikipedia | 2-5% | Haute | Couvrir varié |
-| Conversations | 1-3% | Variable | Reddit, Discord |
-| Données multilingues | Variable | Variable | Dépend objectif |
+| Wikipédia | 2-5% | Haute | Couverture factuelle diverse |
+| Conversations | 1-3% | Variable | Reddit, Discord --- apporte le style conversationnel |
+| Données multilingues | Variable | Variable | Dépend de l'objectif de couverture linguistique |
 
 ### Optimisation du mélange
 
-Le choix des proportions est critique. Approches :
+Le choix des proportions est critique et non-trivial. Trois approches :
 
-1. **Heuristique** : basé sur l'expérience et l'intuition
-2. **Scaling law-guided** : faire des expériences sur des petits modèles pour optimiser
-3. **DoReMi** : algorithme qui optimise les proportions en fonction de la loss sur une validation set diversifiée
+1. **Heuristique** : basé sur l'expérience et l'intuition ("plus de code = mieux pour le raisonnement"). Rapide mais subjectif.
+2. **Scaling law-guided** : faire des expériences sur des petits modèles (1-3B) avec différents mélanges et extrapoler les résultats aux grands modèles. Plus rigoureux.
+3. **DoReMi** : algorithme qui optimise automatiquement les proportions en fonction de la loss sur un set de validation diversifié. Le plus sophistiqué.
 
-<Callout type="info" title="Transparence accrue">
-La communauté open-source pousse vers plus de transparence. Les datasets publics comme FineWeb (HuggingFace), DCLM (AI2) documentent exactement leurs pipelines de filtrage, proportions, sources. Ça améliore la reproductibilité et la collaboration.
+<Callout type="info" title="Transparence croissante de la communauté">
+La communauté open-source pousse vers plus de transparence dans la curation des données. Les datasets publics comme FineWeb (HuggingFace, 15T tokens), DCLM (AI2) documentent exactement leurs pipelines de filtrage, proportions et sources. Ça permet à d'autres équipes de reproduire, améliorer et auditer le processus. C'est un progrès majeur par rapport à l'opacité des datasets propriétaires.
 </Callout>
 
 ## Datasets publics de référence
 
-- **The Pile** : 800 GB, 22 sources diversifiées
-- **RedPajama** : reproduit l'entraînement de LLaMA
-- **FineWeb** (HuggingFace) : 15T tokens de données web filtrées
-- **DCLM** (AI2) : dataset curé avec documentation complète
+- **The Pile** : 800 GB, 22 sources diversifiées --- le pionnier des datasets ouverts et documentés
+- **RedPajama** : reproduit le pipeline de données de LLaMA en open-source
+- **FineWeb** (HuggingFace) : 15T tokens de données web filtrées avec un pipeline documenté en détail
+- **DCLM** (AI2) : dataset curé avec documentation complète et benchmarks de qualité
 
 ## Résumé
 
-La qualité des données est le multiplicateur principal de performance. Les trois pilliers :
+La qualité des données est le multiplicateur principal de performance des LLM. Les trois piliers :
 
-1. **Déduplication** : élimine 30-50% des données dupliquées (gain significatif)
-2. **Filtrage de qualité** : classifier-based, élimine les bas de gamme
-3. **Mélange optimisé** : proportions des sources
+1. **Déduplication** : élimine 30-50% des données dupliquées. Le gain est significatif et immédiat.
+2. **Filtrage de qualité** : un classificateur neural sépare le bon grain de l'ivraie. Standard de l'industrie.
+3. **Mélange optimisé** : les bonnes proportions entre sources maximisent les capacités du modèle.
 
-Investir dans un pipeline de données robuste apporte plus de retour qu'augmenter la taille du modèle ou le volume de données brutes. C'est le travail invisible mais crucial pour les LLM de pointe.
+Investir dans un pipeline de données robuste apporte plus de retour sur investissement qu'augmenter la taille du modèle ou le volume de données brutes. C'est le travail invisible, ingrat, et absolument crucial derrière chaque LLM de pointe.

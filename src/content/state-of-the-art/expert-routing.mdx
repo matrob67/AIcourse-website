@@ -3,74 +3,72 @@ title: "Expert Choice vs Token Choice Routing"
 description: "Analyse approfondie des stratégies de routage dans les modèles MoE : routage par choix du token, choix de l'expert, et approches hybrides pour un balancement optimal."
 ---
 
-## Qui choisit qui ?
+## Qui choisit qui ? Le dilemme fondamental du routage MoE
 
-Voici le dilemme fondamental du routage MoE : dans un cabinet médical avec 8 spécialistes, qui décide qui traite quoi ?
+Reprenons notre cabinet médical avec 8 spécialistes. Tous les patients arrivent en salle d'attente. La question cruciale : **qui décide qui traite qui ?**
 
-**Option A** — Le patient (le token) choisit ses médecins préférés. Il regarde les 8 spécialistes et sélectionne les 2 qui lui semblent les plus pertinents pour son problème. C'est le **Token Choice**.
+**Option A --- Token Choice** : le patient (le token) regarde les 8 spécialistes disponibles et choisit les 2 qui lui semblent les plus pertinents pour son problème. "J'ai mal au coeur, je veux le cardiologue et l'interniste."
 
-**Option B** — Les médecins (les experts) choisissent leurs patients. Chaque spécialiste regarde toute la salle d'attente et sélectionne les cas qui correspondent le mieux à son expertise. C'est l'**Expert Choice**.
+**Option B --- Expert Choice** : les médecins (les experts) examinent toute la salle d'attente et chacun sélectionne les cas qui correspondent le mieux à son expertise. Le cardiologue prend les 5 patients qui ont l'air d'avoir des problèmes cardiaques. Le dermatologue prend les 5 patients avec des symptômes cutanés.
 
-Ces deux philosophies ont des implications très différentes sur la qualité du modèle, l'équilibre de charge et l'efficacité computationnelle.
+Ces deux philosophies ont des implications profondes sur la qualité du modèle, l'équilibre de charge entre les experts, et l'efficacité computationnelle. Comprendre leurs compromis respectifs est essentiel pour concevoir (ou simplement comprendre) les architectures MoE modernes.
 
 
 
-## Token Choice Routing : le patient choisit
+## Token Choice Routing : le patient choisit ses médecins
 
 ### Comment ça marche
 
-C'est l'approche originale, celle de Mixtral, Switch Transformer, Grok. Pour chaque token, le *gating network* calcule un score pour chaque expert, puis sélectionne les K meilleurs :
+C'est l'approche historique, celle utilisée par Mixtral, Switch Transformer et Grok. Pour chaque token, le *gating network* (un petit réseau de neurones dédié au routage) calcule un score d'affinité avec chaque expert, puis sélectionne les K meilleurs :
 
-```
-RouterScore(x) = Softmax( W_r * x )
-SelectedExperts(x) = TopK( RouterScore(x), k )
-```
+$$\text{RouterScore}(x) = \text{Softmax}(W_r \cdot x)$$
 
-Simple à implémenter, bien compris, et chaque token obtient exactement K experts — un coût computationnel prévisible.
+$$\text{SelectedExperts}(x) = \text{TopK}\!\big(\text{RouterScore}(x),\; k\big)$$
 
-### Le grand problème : le déséquilibre de charge
+L'implémentation est simple et bien comprise. Chaque token obtient exactement K experts --- ni plus, ni moins. Le coût computationnel par token est donc parfaitement prévisible, ce qui simplifie l'optimisation matérielle.
 
-Sans régulation, le routeur tend à envoyer une majorité de tokens vers les mêmes 2-3 experts "populaires". Les autres experts ne reçoivent presque rien et gaspillent leurs ressources. On appelle ça le **routing collapse** (effondrement du routage).
+### Le grand problème : le routing collapse
 
-<Callout type="warning" title="Le routing collapse en pratique">
-Sans mécanisme de régulation, un modèle MoE peut converger vers une situation où 2 experts reçoivent 80% de tous les tokens et les 6 autres se partagent les miettes. La loss de balancement auxiliaire atténue ce problème, mais elle crée un compromis : forcer le balancement dégrade légèrement la qualité car le routeur ne peut plus toujours envoyer le token à l'expert vraiment le plus pertinent.
+Sans mécanisme de régulation, le routeur converge naturellement vers une solution paresseuse : il envoie la grande majorité des tokens vers les mêmes 2-3 experts "favoris". Les autres experts, sous-utilisés, ne s'améliorent jamais --- ce qui renforce encore le biais du routeur vers les experts populaires. C'est un cercle vicieux appelé **routing collapse** (effondrement du routage).
+
+<Callout type="warning" title="Le routing collapse en chiffres">
+Sans loss de balancement, un modèle MoE peut facilement converger vers une situation où 2 experts reçoivent 80% de tous les tokens et les 6 autres se partagent les miettes. C'est catastrophique : 75% des paramètres du modèle deviennent essentiellement inutiles. La loss de balancement auxiliaire atténue ce problème, mais elle crée son propre compromis --- forcer le balancement signifie parfois envoyer un token à un expert moins pertinent, ce qui dégrade légèrement la qualité.
 </Callout>
 
-### Le Token Dropping : quand un expert est surchargé
+### Le Token Dropping : quand un expert est saturé
 
-Quand un expert très populaire dépasse son *capacity factor* (quota maximum de tokens), les tokens excédentaires sont soit abandonnés (*dropped*), soit traités par une couche résiduelle sans passer par un expert. Ce phénomène peut nuire aux performances — surtout si les tokens droppés sont des tokens clés du contexte.
+Quand un expert très populaire dépasse son *capacity factor* (le quota maximum de tokens qu'il peut traiter dans un batch), les tokens excédentaires sont soit abandonnés (*dropped*), soit routés via une couche résiduelle sans passer par un expert. C'est problématique parce que le modèle n'a aucune garantie que les tokens droppés soient les moins importants. Un verbe clé ou un chiffre décisif peut être droppé, dégradant silencieusement la qualité.
 
-## Expert Choice Routing : les experts choisissent
+## Expert Choice Routing : les médecins choisissent leurs patients
 
 ### L'inversion de perspective
 
 <ArxivLink id="2202.09368" title="Mixture-of-Experts with Expert Choice Routing" />
 
-Introduit par Zhou et al. chez Google, l'Expert Choice inverse la logique. Chaque expert examine **l'ensemble des tokens du batch** et sélectionne les K tokens qu'il veut traiter :
+Introduit par Zhou et al. chez Google, l'Expert Choice **inverse complètement la logique**. Au lieu que chaque token choisisse ses experts, chaque expert examine **l'ensemble des tokens du batch** et sélectionne les K tokens qu'il veut traiter :
 
-```
-Scores_e = W_e * X_transposé
-SelectedTokens_e = TopK( Scores_e, k )
-```
+$$\text{Scores}_e = W_e \cdot X^T$$
 
-Le résultat : **chaque expert traite exactement le même nombre de tokens** — le balancement est parfait par construction, sans aucune loss auxiliaire nécessaire.
+$$\text{SelectedTokens}_e = \text{TopK}(\text{Scores}_e,\; k)$$
 
-### Avantages de l'Expert Choice
+Le résultat est élégant : **chaque expert traite exactement le même nombre de tokens**. Le balancement est parfait par construction mathématique, sans avoir besoin d'aucune loss auxiliaire.
 
-- **Balancement parfait** : chaque expert traite exactement son quota, aucun n'est surchargé ni sous-utilisé
-- **Pas de token dropping** : tous les tokens sont traités (certains par plus d'experts, d'autres par moins)
-- **Pas de loss auxiliaire** : simplifie l'entraînement et élimine le compromis qualité/balancement
+### Les avantages concrets de l'Expert Choice
 
-<Callout type="info" title="Le calcul adaptatif comme bonus">
-En Expert Choice, un token peut être sélectionné par 0, 1, ou plusieurs experts. Les tokens simples et fréquents (articles, prépositions) tendent à recevoir moins d'experts, tandis que les tokens complexes (termes techniques rares, noms propres inhabituels) en reçoivent davantage. Le modèle alloue naturellement plus de calcul aux cas difficiles.
+- **Balancement garanti** : chaque expert traite exactement son quota. Pas de surcharge, pas de sous-utilisation. Le problème numéro un des MoE est résolu par design
+- **Zéro token dropping** : tous les tokens sont traités (certains par plus d'experts que d'autres, mais aucun n'est abandonné)
+- **Pas de loss auxiliaire** : l'entraînement est simplifié et le compromis qualité/balancement disparaît
+
+<Callout type="info" title="Le calcul adaptatif : un bonus inattendu">
+En Expert Choice, un token peut être sélectionné par 0, 1, 2, ou plusieurs experts. Les tokens simples et fréquents (articles, prépositions, mots courants) tendent à recevoir moins d'attention d'experts, tandis que les tokens complexes (termes techniques rares, noms propres inhabituels, structures grammaticales ambiguës) en reçoivent davantage. Le modèle alloue naturellement **plus de calcul aux cas difficiles** --- c'est une forme de calcul adaptatif qui émerge sans être programmée explicitement.
 </Callout>
 
-### Le gros problème : l'inférence autorégressif
+### Le défaut rédhibitoire : l'inférence autorégressif
 
-L'Expert Choice a un défaut rédhibitoire pour les LLM génératifs. Lors de la génération token par token (un token à la fois, comme dans ChatGPT), il n'y a qu'**un seul token** dans le batch. Comment un expert peut-il "choisir parmi plusieurs tokens" s'il n'y en a qu'un ? Le problème devient dégénéré.
+L'Expert Choice a un problème majeur pour les LLM génératifs. Lors de la génération token par token (comme dans ChatGPT), il n'y a qu'**un seul token** dans le batch à chaque étape de décodage. Comment un expert peut-il "choisir parmi les tokens du batch" s'il n'y en a qu'un seul ? Le mécanisme de sélection dégénère complètement.
 
-<Callout type="warning" title="Incompatibilité avec la génération autorégressif">
-L'Expert Choice est excellent pour l'entraînement (on traite des séquences entières en parallèle) et pour l'encodage de prompts longs, mais ne fonctionne pas directement pour la génération token par token. Des adaptations sont nécessaires : routage hybride, retour au Token Choice à l'inférence, ou traitement par chunks de tokens.
+<Callout type="warning" title="Expert Choice et génération : incompatibles directement">
+L'Expert Choice est excellent pour l'entraînement (on traite des séquences entières en parallèle) et pour l'encodage de prompts longs (prefill), mais il ne fonctionne pas tel quel pour la génération autorégressif token par token. Des adaptations sont nécessaires : routage hybride (Expert Choice pendant le prefill, Token Choice pendant la génération), traitement par chunks de tokens, ou retour pur et simple au Token Choice à l'inférence.
 </Callout>
 
 ## Comparaison directe
@@ -78,38 +76,40 @@ L'Expert Choice est excellent pour l'entraînement (on traite des séquences ent
 | Aspect | Token Choice | Expert Choice |
 |--------|-------------|---------------|
 | Balancement | Nécessite une loss auxiliaire | Garanti par design |
-| Token dropping | Possible | Impossible |
-| FLOP par token | Fixe (K experts) | Variable (0 à N experts) |
-| Implémentation GPU | Simple | Plus complexe |
-| Compatible autorégressif | Oui | Non directement |
+| Token dropping | Possible (tokens perdus) | Impossible |
+| FLOP par token | Fixe (exactement K experts) | Variable (0 à N experts) |
+| Implémentation GPU | Simple et optimisée | Plus complexe (indexation irrégulière) |
+| Compatible autorégressif | Oui, naturellement | Non, nécessite des adaptations |
 
-## Approches alternatives et hybrides
+## Les approches alternatives et hybrides
+
+La recherche n'est pas restée figée sur ces deux options. Plusieurs approches tentent de combiner les avantages des deux, ou d'explorer des directions radicalement nouvelles.
 
 ### Le balancement sans loss auxiliaire de DeepSeek
 
-DeepSeek-V3 a trouvé une solution élégante. Chaque expert reçoit un **biais dynamique** qui s'ajuste automatiquement pendant l'entraînement : si un expert est trop sollicité, son biais diminue (il devient moins attractif dans le routage), et inversement. C'est du Token Choice, mais avec un mécanisme de régulation qui n'introduit pas de compromis qualité comme le ferait une loss auxiliaire.
+DeepSeek-V3 a trouvé une solution particulièrement élégante. Chaque expert reçoit un **biais dynamique** qui s'ajuste automatiquement pendant l'entraînement : quand un expert est trop sollicité, son biais diminue (il devient moins attractif dans les scores de routage) ; quand il est sous-utilisé, son biais augmente. C'est du Token Choice pur, mais avec un thermostat intégré qui maintient l'équilibre sans le compromis qualité inhérent aux losses auxiliaires.
 
 ### Soft MoE (Google)
 
-Le **Soft MoE** remplace le routage discret (0 ou 1 par expert) par un routage continu. Les tokens sont fusionnés en "slots" via des poids appris, et chaque expert traite un nombre fixe de slots. On évite le routage binaire tout en maintenant la sparsité. Plus facile à différencier, mais plus complexe conceptuellement.
+Le **Soft MoE** élimine le routage discret (envoyer un token à un expert : oui ou non) et le remplace par un routage **continu**. Les tokens sont combinés en "slots" via des poids appris avant d'être envoyés aux experts. Chaque expert traite un nombre fixe de slots, chaque slot étant un mélange pondéré de plusieurs tokens. On évite la discontinuité du routage binaire tout en maintenant la sparsité. Plus facile à différencier pour les gradients, mais conceptuellement plus complexe.
 
-### Hash Routing
+### Hash Routing : la simplicité radicale
 
-L'approche la plus radicale : assigner les tokens aux experts via un **hash déterministe** (une fonction mathématique fixe basée sur le token). Pas de réseau de routage appris, balancement parfait garanti, mais aucune adaptabilité. L'expert assigné par le hash n'est pas nécessairement le plus pertinent pour ce token.
+L'approche la plus minimaliste : assigner les tokens aux experts via une **fonction de hash déterministe**. Pas de réseau de routage appris, pas de paramètres à entraîner, balancement parfait garanti par les propriétés statistiques du hash. L'inconvénient est évident : l'expert assigné par le hash n'est pas nécessairement le plus compétent pour ce token. C'est un compromis extrême entre simplicité et qualité.
 
 ### Routage hiérarchique
 
-Pour les architectures avec un très grand nombre d'experts (256, 512...), le routage à deux niveaux devient attractif : d'abord choisir un groupe d'experts (parmi 16 groupes par exemple), puis choisir l'expert au sein du groupe. Cela réduit le coût de calcul du routage lui-même.
+Pour les architectures avec un très grand nombre d'experts (256, 512 ou plus), le routage en un seul niveau devient coûteux en calcul (il faut scorer chaque expert). Le routage à deux niveaux résout ce problème : d'abord choisir un **groupe** d'experts (parmi 16 groupes, par exemple), puis choisir l'expert au sein du groupe sélectionné. Le coût passe de O(N) à O(sqrt(N)), ce qui devient significatif avec des centaines d'experts.
 
-<Callout type="tip" title="Recommandation pratique">
-Pour un LLM génératif standard (type GPT, Llama), le Token Choice avec Top-2 et un mécanisme de balancement dynamique (à la DeepSeek) est le meilleur compromis. Pour des tâches d'encodage ou des modèles encodeur-décodeur, l'Expert Choice offre des avantages significatifs. L'essentiel est d'éviter la loss auxiliaire classique dès que possible — elle crée systématiquement un compromis qualité/balancement.
+<Callout type="tip" title="Quelle approche choisir en pratique ?">
+Pour un **LLM génératif** (type GPT, LLaMA, Mistral), le Token Choice avec Top-2 et un mécanisme de balancement dynamique à la DeepSeek est le meilleur compromis actuel. Pour des tâches d'**encodage** pur (embeddings, classification, résumé sans génération), l'Expert Choice offre des avantages significatifs. La règle d'or : évitez la loss auxiliaire classique dès que possible --- elle crée systématiquement un compromis qualité/balancement que les approches modernes savent contourner.
 </Callout>
 
 ## Impact sur la spécialisation des experts
 
-Le type de routage influence comment les experts se spécialisent au fil de l'entraînement :
+Le type de routage influence directement comment les experts se spécialisent pendant l'entraînement :
 
-- Avec le **Token Choice**, les experts tendent à se spécialiser par **domaine sémantique** : un expert pour la médecine, un pour le code, un pour le français, etc.
-- Avec l'**Expert Choice**, la spécialisation se fait plutôt par **niveau de difficulté** : certains experts traitent les tokens faciles (mots courants, structure grammaticale de base), d'autres les tokens complexes et rares.
+- Avec le **Token Choice**, les experts tendent à se spécialiser par **domaine sémantique** : un expert devient bon en médecine, un autre en code, un autre en français littéraire. La spécialisation suit le contenu
+- Avec l'**Expert Choice**, la spécialisation se fait plutôt par **niveau de difficulté** ou **type syntaxique** : certains experts se spécialisent sur les tokens faciles (mots courants, structure grammaticale de base), d'autres sur les tokens complexes et rares
 
-Ces deux formes de spécialisation sont utiles, mais pour des raisons différentes. La recherche sur le routage n'est pas encore terminée — c'est un domaine actif où de nouvelles approches émergent régulièrement.
+Ces deux formes de spécialisation sont utiles, mais pour des raisons différentes. Le Token Choice produit des experts interprétables (on peut dire "cet expert est le spécialiste du code"), tandis que l'Expert Choice produit une allocation de calcul plus efficiente. La recherche sur le routage optimal est un domaine très actif --- de nouvelles approches continuent d'émerger régulièrement.

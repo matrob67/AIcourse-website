@@ -5,13 +5,13 @@ description: "Exploration de Mamba-2 et Jamba, les architectures hybrides combin
 
 ## Le constat : chaque architecture a ses forces
 
-Après Mamba, la communauté a réalisé quelque chose : ni les SSM purs ni les Transformers purs ne sont optimaux.
+Après Mamba, la communauté a fait un constat lucide : ni les SSM purs ni les Transformers purs ne sont optimaux pour toutes les tâches. Chacun excelle sur un aspect et souffre sur l'autre.
 
-Les **Transformers** sont excellents pour le recall précis (retrouver une information exacte dans le contexte) et le few-shot learning (apprendre d'exemples donnés dans le prompt). Mais leur KV cache explose avec la longueur du contexte.
+Les **Transformers** sont imbattables pour le recall précis — retrouver un nom, une date, un chiffre exact mentionné des milliers de tokens plus tôt — et pour le few-shot learning, où quelques exemples dans le prompt suffisent pour que le modèle comprenne une nouvelle tâche. Mais leur KV cache explose avec la longueur du contexte, rendant les longues séquences coûteuses et énergivores.
 
-Les **SSM** (comme Mamba) offrent une inférence à coût constant, quelle que soit la longueur. Mais ils compriment l'historique avec perte — difficile de retrouver une info précise vue 10 000 tokens plus tôt.
+Les **SSM** (comme Mamba) offrent une inférence à coût constant, quelle que soit la longueur de la séquence. Mais ils compriment toute l'histoire dans un état de taille fixe — impossible de retrouver un détail précis noyé dans un résumé compressé de 50 000 tokens.
 
-Et si on combinait les deux ? C'est la direction que prennent Mamba-2 et Jamba.
+La question naturelle : et si on mettait les deux dans le même modèle, chacun à sa place ?
 
 ## Mamba-2 : une théorie unifiée
 
@@ -19,84 +19,82 @@ Et si on combinait les deux ? C'est la direction que prennent Mamba-2 et Jamba.
 
 ### La révélation théorique : SSM et attention sont la même chose
 
-La contribution la plus surprenante de Mamba-2 n'est pas une amélioration de performance — c'est une découverte théorique. Les auteurs démontrent que les SSM structurés et l'**attention linéaire** sont fondamentalement équivalents.
+La contribution la plus marquante de Mamba-2 n'est pas un gain de vitesse — c'est une découverte théorique profonde. Les auteurs démontrent que les SSM structurés et l'**attention linéaire** sont fondamentalement deux façons d'écrire la même opération mathématique.
 
 <Callout type="paper" title="Structured State Space Duality (SSD)">
-Le framework SSD montre qu'un SSM avec matrice d'état diagonale scalaire est **mathématiquement équivalent** à une forme d'attention linéaire avec une matrice de masquage structurée. SSM et attention ne sont pas deux familles opposées — ce sont des points différents sur un même continuum. Cette unification théorique ouvre la voie à des algorithmes hybrides qui exploitent les deux représentations.
+Le framework SSD établit qu'un SSM avec matrice d'état diagonale scalaire est **mathématiquement équivalent** à une forme d'attention linéaire avec une matrice de masquage structurée. Autrement dit, SSM et attention ne sont pas deux familles rivales — ce sont des points différents sur un même spectre continu. La récurrence SSM et la multiplication matricielle de l'attention sont deux façons de calculer exactement le même résultat, chacune optimale dans un contexte différent (inférence vs entraînement).
 </Callout>
 
-En termes concrets : on peut écrire la même opération soit comme une récurrence SSM (efficace pour l'inférence), soit comme une multiplication matricielle type attention (efficace pour l'entraînement). Ce sont les deux faces de la même pièce.
+Concrètement, cela signifie qu'on peut écrire la même opération soit comme une récurrence SSM (rapide pour l'inférence token par token), soit comme une multiplication matricielle de type attention (rapide pour l'entraînement parallèle). Ce sont les deux faces de la même pièce — pas un compromis, une équivalence.
 
 ### Simplifications de Mamba-2
 
-Forte de cette équivalence, Mamba-2 simplifie l'architecture de Mamba-1 de façon significative :
+Forte de cette unification théorique, Mamba-2 simplifie l'architecture de Mamba-1 de façon significative :
 
-**Matrice A scalaire par tête** : dans Mamba-1, A était une matrice diagonale. Dans Mamba-2, A est réduit à un simple scalaire par tête d'attention. Beaucoup moins de paramètres, même expressivité.
+**Matrice A scalaire par tête** : dans Mamba-1, A était une matrice diagonale complète avec N paramètres par tête. Dans Mamba-2, A est réduit à un simple scalaire par tête — un seul nombre qui contrôle le taux de décroissance. Moins de paramètres, mais la même expressivité en pratique, parce que B et C (qui restent des vecteurs complets) portent l'essentiel de la richesse du modèle.
 
-**Multi-head SSM** : Mamba-2 introduit plusieurs "têtes", comme le Multi-Head Attention, avec des paramètres B et C potentiellement distincts par tête.
+**Multi-head SSM** : Mamba-2 organise le SSM en plusieurs "têtes" distinctes, exactement comme le Multi-Head Attention organise l'attention. Chaque tête a ses propres paramètres B et C, lui permettant de capturer des aspects différents de la séquence — une tête peut se spécialiser sur la syntaxe, une autre sur la sémantique.
 
-**État plus grand possible** : grâce aux simplifications, on peut augmenter la dimension de l'état sans surcoût prohibitif, ce qui améliore la capacité de mémorisation.
+**État plus grand sans surcoût** : grâce aux simplifications algorithmiques, on peut augmenter la dimension de l'état N sans que le coût computationnel n'explose. Plus d'état = plus de capacité de mémorisation, ce qui aide sur les tâches de recall.
 
 ### L'algorithme SSD : plus rapide grâce aux matmul
 
-L'algorithme SSD exploite la structure bloc-diagonale pour calculer le SSM via une décomposition en **chunks** (morceaux de séquence) :
+L'algorithme SSD exploite la structure bloc-diagonale de l'opération pour la calculer via une décomposition en **chunks** (morceaux de séquence) :
 
-1. **Intra-chunk** : au sein de chaque morceau, le calcul est une multiplication matricielle pure (matmul) — très bien optimisée sur GPU
+1. **Intra-chunk** : au sein de chaque morceau, le calcul se réduit à une multiplication matricielle pure (matmul) — l'opération la mieux optimisée qui existe sur GPU
 2. **Inter-chunk** : entre morceaux, on propage l'état via la récurrence SSM classique
 
 <Callout type="info" title="Gains de performance concrets">
-Mamba-2 est 2 à 8 fois plus rapide que Mamba-1 à l'entraînement. La raison : le scan associatif de Mamba-1 n'est pas aussi bien optimisé sur GPU que les matmul. En reformulant l'opération pour utiliser des matmul structurés, on exploite le matériel tel qu'il est conçu. Les performances en modélisation du langage sont comparables ou légèrement supérieures.
+Mamba-2 est 2 à 8 fois plus rapide que Mamba-1 à l'entraînement. La raison est matérielle autant que mathématique : le scan associatif de Mamba-1 n'exploite pas bien les tensor cores des GPU modernes, conçus pour des multiplications matricielles. En reformulant l'opération pour utiliser des matmul structurés, Mamba-2 exploite le hardware comme il a été conçu. Les performances en modélisation du langage sont comparables ou légèrement supérieures.
 </Callout>
 
 
 ## Jamba : le premier hybride SSM+Attention à l'échelle de production
 
-AI21 Labs a pris une décision pragmatique : ne pas choisir entre SSM et attention, mais **les combiner dans le même modèle**.
+AI21 Labs a pris une décision pragmatique plutôt qu'idéologique : ne pas choisir entre SSM et attention, mais **les combiner dans le même modèle**, chacun jouant le rôle où il excelle.
 
 ### L'architecture de Jamba
 
 Jamba organise ses couches en blocs hybrides avec un ratio fixe :
 
-```
-Mamba → Mamba → Mamba → [Attention + MoE] → Mamba → Mamba → Mamba → [Attention + MoE]
-```
+**Mamba** $\rightarrow$ **Mamba** $\rightarrow$ **Mamba** $\rightarrow$ **\[Attention + MoE\]** $\rightarrow$ **Mamba** $\rightarrow$ **Mamba** $\rightarrow$ **Mamba** $\rightarrow$ **\[Attention + MoE\]**
 
-**7 couches Mamba pour 1 couche d'attention**. La couche d'attention incorpore aussi des Mixture of Experts pour encore plus d'efficacité.
+**7 couches Mamba pour 1 couche d'attention**. Et la couche d'attention intègre aussi des Mixture of Experts pour maximiser la capacité sans augmenter le coût par token.
 
 <Callout type="tip" title="Pourquoi ce ratio 7:1 ?">
-Les couches d'attention sont les plus coûteuses en mémoire (elles contribuent au KV cache) et en calcul quadratique. En les utilisant seulement 1 fois sur 8, Jamba préserve les capacités de recall et de few-shot learning de l'attention tout en bénéficiant de l'efficacité des couches Mamba pour 7/8 du traitement. C'est le minimum d'attention pour le maximum de bénéfice.
+Les couches d'attention sont les plus coûteuses du modèle : elles contribuent au KV cache (mémoire) et effectuent des calculs quadratiques en la longueur du contexte. En les utilisant seulement 1 fois sur 8, Jamba préserve les capacités uniques de l'attention — le recall précis et le few-shot learning — tout en bénéficiant de l'efficacité de Mamba pour les 7/8 restants du traitement. C'est le minimum d'attention nécessaire pour le maximum de bénéfice.
 </Callout>
 
 
 ### Les résultats de Jamba
 
-Jamba 52B (avec 12B paramètres actifs via MoE) obtient :
+Jamba 52B (avec 12B paramètres actifs via MoE) obtient des résultats qui valident l'approche hybride :
 
 - **Performances** : comparables aux Transformers MoE de taille similaire sur les benchmarks standard
-- **Contexte** : traite efficacement des séquences de **256 000 tokens**
-- **KV cache** : réduit de ~80% par rapport à un Transformer pur (seules les couches d'attention contribuent au KV cache)
-- **Débit** : supérieur aux Transformers purs, surtout sur les longues séquences
+- **Contexte** : traite efficacement des séquences de **256 000 tokens** — bien au-delà de la plupart des Transformers
+- **KV cache** : réduit de ~80% par rapport à un Transformer pur (seules les couches d'attention, soit 1/8, contribuent au KV cache)
+- **Débit** : supérieur aux Transformers purs, l'avantage grandissant avec la longueur du contexte
 
-Le gain de 80% sur le KV cache est énorme en pratique. Sur un contexte de 256K tokens avec un gros modèle, le KV cache d'un Transformer pur peut atteindre plusieurs centaines de GB. Jamba réduit ça à quelques dizaines de GB.
+La réduction de 80% du KV cache est transformatrice en pratique. Sur un contexte de 256K tokens, le KV cache d'un Transformer pur peut atteindre plusieurs centaines de GB. Jamba ramène ça à quelques dizaines de GB — la différence entre un cluster de GPU et une seule machine.
 
 ## D'autres architectures hybrides
 
 ### Zamba (Zyphra)
 
-Zamba adopte une approche différente : davantage de couches d'attention, mais les couches d'attention **partagent leurs poids** entre elles. Cela réduit l'empreinte mémoire des paramètres tout en maintenant les capacités de recall. Les couches Mamba sont placées stratégiquement entre les couches d'attention partagées.
+Zamba adopte une approche astucieuse : davantage de couches d'attention que Jamba, mais les couches d'attention **partagent leurs poids**. Une seule matrice d'attention est réutilisée à plusieurs endroits dans le réseau. Chaque passage à travers cette couche partagée voit des représentations différentes (transformées par les couches Mamba intercalées), donc le traitement n'est pas redondant. Résultat : une excellente efficacité paramétrique, particulièrement adaptée aux modèles de petite taille.
 
 ### Griffin et RecurrentGemma (Google)
 
-Griffin combine des **gates récurrentes linéaires** (une version simplifiée des SSM, appelée RG-LRU) avec de l'**attention locale** (fenêtre limitée à 2 048 tokens). L'idée : l'attention n'a pas besoin d'être globale si un mécanisme récurrent capture les dépendances long-terme.
+Griffin combine des **gates récurrentes linéaires** (RG-LRU — une version volontairement simplifiée des SSM) avec de l'**attention locale** limitée à une fenêtre de 2 048 tokens. L'insight : quand un mécanisme récurrent gère les dépendances long-terme, l'attention n'a pas besoin d'être globale — elle peut se concentrer sur les interactions fines entre tokens proches, là où elle apporte le plus de valeur.
 
-RecurrentGemma est l'instanciation de cette architecture en modèles de 2B et 9B paramètres, publiés en open-source par Google.
+RecurrentGemma instancie cette architecture en modèles de 2B et 9B paramètres, publiés en open-source par Google.
 
 ### StripedHyena (Together AI)
 
-StripedHyena alterne des couches Hyena (convolutions longues) avec des couches d'attention — montrant que le principe hybride s'étend au-delà des SSM stricto sensu. Compétitif à 7B paramètres.
+StripedHyena alterne des couches Hyena (convolutions longues via FFT) avec des couches d'attention — démontrant que le principe hybride s'étend au-delà des SSM. N'importe quel mécanisme sous-quadratique peut jouer le rôle de "couche efficace" dans un hybride. Compétitif à 7B paramètres.
 
 <Callout type="info" title="La tendance commune à tous les hybrides">
-Toutes ces architectures convergent vers le même principe : utiliser des mécanismes récurrents ou convolutionnels efficaces pour **la majorité des couches**, complétés par quelques couches d'attention pour les capacités qu'on ne peut pas déléguer — le recall précis et le few-shot learning.
+Toutes ces architectures convergent vers le même principe fondamental : utiliser des mécanismes récurrents ou convolutionnels efficaces pour **la majorité des couches** (80-90% du réseau), complétés par quelques couches d'attention stratégiquement placées pour les capacités qu'on ne peut pas déléguer — le recall précis d'information exacte et l'apprentissage à partir d'exemples dans le contexte.
 </Callout>
 
 ## Tableau comparatif des architectures
@@ -112,11 +110,11 @@ Toutes ces architectures convergent vers le même principe : utiliser des mécan
 ### Le compromis fondamental
 
 <Callout type="warning" title="Compression versus accès exact">
-C'est la tension centrale : les SSM **compriment** toute l'histoire dans un état de taille fixe — c'est efficace mais avec perte d'information, comme un résumé d'un livre. L'attention maintient un **accès exact** à tout l'historique via le KV cache — mais à un coût croissant avec la longueur. Les architectures hybrides cherchent le point d'équilibre : assez d'accès exact pour les décisions critiques, assez de compression pour les passages ordinaires.
+C'est la tension architecturale centrale de cette génération de modèles. Les SSM **compriment** toute l'histoire dans un état de taille fixe — efficace mais avec perte, comme un résumé de livre. L'attention maintient un **accès exact** à tout l'historique via le KV cache — fidèle mais coûteux, comme avoir le livre entier sous les yeux. Les architectures hybrides cherchent le point d'équilibre optimal : assez d'accès exact (via les couches d'attention) pour les décisions critiques qui nécessitent des détails précis, assez de compression (via les couches SSM) pour traiter efficacement les passages courants.
 </Callout>
 
 ## Les perspectives
 
-La question de recherche la plus active : quel est le **ratio optimal** couches SSM / couches attention ? 7:1 de Jamba est-il optimal ? Faut-il mettre les couches d'attention au début, au milieu, à la fin ? Des études empiriques commencent à converger vers des réponses, mais rien n'est définitivement établi.
+La question de recherche la plus brûlante : quel est le **ratio optimal** entre couches SSM et couches attention ? Le 7:1 de Jamba est-il le bon choix, ou peut-on faire mieux ? Faut-il concentrer les couches d'attention au début du réseau (pour former de bonnes représentations), au milieu (pour le raisonnement), ou à la fin (pour les décisions de sortie) ? Des études empiriques commencent à converger vers des réponses, mais le terrain est encore largement inexploré.
 
-Plus fondamentalement, le framework SSD de Mamba-2 suggère que SSM et attention ne sont pas vraiment opposés — ce sont des instances d'une opération plus générale. Les architectures futures pourraient exploiter un **mécanisme unifié** qui s'adapte dynamiquement entre comportement SSM et comportement attentionnel selon la nature du contexte. Ce serait la vraie synthèse.
+Plus fondamentalement, le framework SSD de Mamba-2 suggère que SSM et attention ne sont pas vraiment des architectures rivales — ce sont des instances d'une opération mathématique plus générale. Les architectures futures pourraient exploiter un **mécanisme unifié** qui s'adapte dynamiquement entre comportement SSM (compressif, efficace) et comportement attentionnel (exact, coûteux) selon la nature du contexte à chaque position. Ce serait la vraie synthèse.

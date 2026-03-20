@@ -19,11 +19,7 @@ Cas réels:
 
 Idée simple: tu demandes à BERT de comparer deux phrases en les mettant ensemble:
 
-```
-[CLS] Phrase A [SEP] Phrase B [SEP]
-
-BERT encode ça → utilise [CLS] token pour la similarité
-```
+**[CLS]** Phrase A **[SEP]** Phrase B **[SEP]** → BERT encode le tout → utilise le token **[CLS]** pour la similarité
 
 Problème: **pour chaque comparaison, BERT doit faire un forward pass complet**. Comparer requête vs 1 million de documents = 1 million de forward passes = 65 heures de GPU.
 
@@ -35,9 +31,9 @@ Et pire: les embeddings BERT nuls (sans fine-tuning) produisent des similarités
 
 Comparaison naïve: pour n documents, tu dois traiter n × (n-1) / 2 paires. Pour 10 000 docs?
 
-```
-10,000 × 9,999 / 2 = 50 million paires
-```
+$$
+\frac{10\,000 \times 9\,999}{2} = 50 \text{ millions de paires}
+$$
 
 À 1ms par paire: 50 000 secondes = 14 heures. Pour une requête. Inacceptable.
 
@@ -55,29 +51,33 @@ Beaucoup de systèmes NLP échouent non pas sur l'algorithme, mais sur la latenc
 
 Au lieu de passer deux phrases ensemble dans BERT, SBERT passe **chaque phrase indépendamment**:
 
-```
-Phrase A → BERT-base → Mean Pooling → vecteur a (768 dimensions)
-Phrase B → BERT-base → Mean Pooling → vecteur b (768 dimensions)
+- **Phrase A** → BERT-base → Mean Pooling → vecteur **a** (768 dimensions)
+- **Phrase B** → BERT-base → Mean Pooling → vecteur **b** (768 dimensions)
 
-Similarité = cosine(a, b) = (a · b) / (||a|| × ||b||)
-```
+$$
+\text{Similarité} = \cos(\vec{a}, \vec{b}) = \frac{\vec{a} \cdot \vec{b}}{\|\vec{a}\| \times \|\vec{b}\|}
+$$
 
 Les deux BERT utilisent **exactement les mêmes poids** (architecture siamoise). Chaque phrase est encodée **une fois** et stockée.
 
 ### La magie: pre-compute et recherche ultra-rapide
 
-```
-Jour 1: Encoder les 1 million de documents
-  Pour chaque doc: 1 forward pass de BERT = ~100ms
-  Total: 100,000 secondes = 28 heures (une fois)
-  Résultat: 1M vecteurs stockés sur disque
+**Jour 1 : Encoder les 1 million de documents (offline, une seule fois)**
 
-Jour 2: Un utilisateur tape une requête
-  Encoder la requête: 1 forward pass = 100ms
-  Comparer requête vs 1M vecteurs: 1M cosinus = 500ms (sur CPU!)
-  Retourner top-10: instant
-  Temps total: <1 seconde
-```
+| Etape | Temps |
+|---|---|
+| Forward pass BERT par doc | ~100 ms |
+| Total pour 1M docs | ~28 heures |
+| Resultat | 1M vecteurs stockes sur disque |
+
+**Jour 2 : Un utilisateur tape une requete (runtime)**
+
+| Etape | Temps |
+|---|---|
+| Encoder la requete (1 forward pass) | ~100 ms |
+| Comparer requete vs 1M vecteurs (cosinus) | ~500 ms (CPU) |
+| Retourner top-10 | instant |
+| **Temps total** | **< 1 seconde** |
 
 C'est la différence entre impraticable et temps réel.
 
@@ -110,9 +110,9 @@ Les datasets NLI (SNLI, MultiNLI) contiennent 500k+ paires avec labels discrets.
 
 La métrique d'or pour comparer des vecteurs d'embeddings:
 
-```
-cosine(a, b) = (a · b) / (||a|| × ||b||)
-```
+$$
+\cos(\vec{a}, \vec{b}) = \frac{\vec{a} \cdot \vec{b}}{\|\vec{a}\| \times \|\vec{b}\|}
+$$
 
 Où:
 - `a · b` = produit scalaire (somme des produits élément par élément)
@@ -124,21 +124,21 @@ Où:
 - -1 = opposés
 
 **En pratique pour des textes**:
-```
-Cosinus > 0.9:   Quasi-identical (paraphrase, copie)
-Cosinus 0.7-0.9: Très similaires (même sujet)
-Cosinus 0.5-0.7: Similaires (contexte relate)
-Cosinus 0.3-0.5: Faiblement relates
-Cosinus < 0.3:   Sans rapport
-```
+| Cosinus | Interpretation |
+|---|---|
+| > 0.9 | Quasi-identique (paraphrase, copie) |
+| 0.7 - 0.9 | Tres similaires (meme sujet) |
+| 0.5 - 0.7 | Similaires (contexte relie) |
+| 0.3 - 0.5 | Faiblement relies |
+| < 0.3 | Sans rapport |
 
 ### L'optimisation cachée: normalisation
 
 Les embeddings modernes sont souvent **normalisés** (norme = 1). Dans ce cas:
 
-```
-cosine(a, b) = a · b  (simple produit scalaire!)
-```
+$$
+\cos(\vec{a}, \vec{b}) = \vec{a} \cdot \vec{b} \quad \text{(simple produit scalaire !)}
+$$
 
 Pourquoi? Deux raisons:
 1. **Plus rapide à calculer** (pas de division, pas de sqrt)
@@ -188,28 +188,17 @@ Pour millions de vecteurs: utilise **ANN** (Approximate Nearest Neighbors) — F
 
 ### Pourquoi RAG fonctionne si bien
 
-Sans RAG:
-```
-Utilisateur: Comment faire X?
-LLM: ...invente une réponse plausible mais peut-être fausse...
-```
+**Sans RAG** : Utilisateur demande "Comment faire X ?" → Le LLM invente une reponse plausible mais potentiellement fausse.
 
-Avec RAG:
-```
-Utilisateur: Comment faire X?
-Documents pertinents retrouvés: [Doc1, Doc3, Doc5 qui décrivent réellement X]
-LLM: Voici comment faire X (basé sur les docs): ...réponse précise...
-```
+**Avec RAG** : Utilisateur demande "Comment faire X ?" → Documents pertinents retrouves (Doc1, Doc3, Doc5) → Le LLM genere une reponse precise basee sur les docs.
 
 La différence est **dramatique**. RAG transforme un LLM en assistant fiable pour les domaines spécifiques.
 
 <Callout type="warning" title="Le goulot: qualité de retrieval">
 RAG est aussi bon que sa bonne retrieval. Si SBERT ne retrouve pas les bons passages, le LLM ne peut pas répondre juste:
 
-```
-Bonne retrieval: Utilisateur → SBERT → Documents pertinents → LLM génère réponse juste
-Mauvaise retrieval: Utilisateur → SBERT → Documents irrelevants → LLM génère réponse fausse
-```
+- **Bonne retrieval** : Utilisateur → SBERT → Documents pertinents → LLM genere une reponse juste
+- **Mauvaise retrieval** : Utilisateur → SBERT → Documents irrelevants → LLM genere une reponse fausse
 
 **Résultat**: choisir et fine-tuner le modèle d'embedding est **critique**.
 </Callout>
@@ -235,11 +224,9 @@ En production, on ne fait jamais "just cosinus et return results". Il y a une te
 
 SBERT-base: ultra-rapide.
 
-```
-Requête → SBERT → vecteur q
-100,000 docs pre-encoded
-Recherche ANN: top-100 similaires = ~50ms
-```
+- Requete → SBERT → vecteur **q**
+- 100 000 docs pre-encodes
+- Recherche ANN : top-100 similaires en ~50 ms
 
 Récupère top-100 passages candidats.
 
@@ -247,13 +234,8 @@ Récupère top-100 passages candidats.
 
 Pour les top-100, utilise un **cross-encoder** (modèle différent) qui encode la paire (requête, doc) ensemble:
 
-```
-Pour chaque doc dans top-100:
-  (requête + doc) → Cross-encoder → score de pertinence précis
-
-Trier par score
-Retourner top-5
-```
+- Pour chaque doc dans le top-100 : (requete + doc) → Cross-encoder → score de pertinence precis
+- Trier par score → Retourner top-5
 
 Cross-encoder est plus lent (un forward par paire), mais plus précis. C'est ok car on l'applique qu'aux top-100.
 

@@ -5,18 +5,18 @@ description: "Comprendre les fondements des modèles Mixture of Experts : gating
 
 ## Le problème : comment construire un modèle géant sans le payer à chaque fois ?
 
-Imaginez un cabinet médical avec 100 spécialistes. La plupart du temps, quand vous arrivez avec un rhume, vous n'avez pas besoin des 100 médecins — juste du généraliste. Mais si vous avez un problème cardiaque rare, le cardiologue devient indispensable.
+Imaginez un cabinet médical avec 100 spécialistes. Quand vous arrivez avec un rhume, vous n'avez pas besoin des 100 médecins --- juste du généraliste et peut-être d'un ORL. Mais si vous avez un problème cardiaque rare, le cardiologue et le chirurgien deviennent indispensables. Le cabinet a une **capacité** de 100 médecins, mais chaque patient n'en mobilise que 2 ou 3.
 
-C'est exactement l'idée derrière les **Mixture of Experts (MoE)** : construire un réseau de neurones avec des centaines de milliards de paramètres, mais n'en activer qu'une petite fraction à chaque calcul. Résultat : la puissance d'un modèle géant, au prix d'un modèle moyen.
+C'est exactement l'idée derrière les **Mixture of Experts (MoE)** : construire un réseau de neurones avec des centaines de milliards de paramètres, mais n'en activer qu'une petite fraction à chaque calcul. Résultat : la puissance d'un modèle géant, au coût computationnel d'un modèle moyen.
 
 ## La sparsité conditionnelle : le concept central
 
-Dans un **Transformer dense** classique (comme les premiers GPT), chaque token de texte traverse la totalité du réseau. Toutes les couches, tous les neurones, à chaque fois.
+Dans un **Transformer dense** classique (comme les premiers GPT ou LLaMA), chaque token traverse la totalité du réseau. Toutes les couches, tous les neurones, à chaque fois. C'est simple, mais c'est coûteux : doubler la taille du modèle double le coût de chaque requête.
 
-Un modèle MoE remplace les couches **feed-forward** (les couches "de réflexion" qui constituent ~2/3 du calcul) par un ensemble de **N experts** — des sous-réseaux identiques en architecture, mais avec des poids différents, donc spécialisés différemment. Un mécanisme de **routage** (le *gating network*) décide quels experts traiter pour chaque token.
+Un modèle MoE change la donne en remplaçant les couches **feed-forward** --- les couches "de réflexion" qui constituent environ deux tiers du calcul d'un Transformer --- par un ensemble de **N experts**. Ces experts sont des sous-réseaux identiques en architecture (même nombre de couches, mêmes dimensions), mais avec des poids différents. Chacun s'est spécialisé différemment au cours de l'entraînement. Un mécanisme de **routage** (le *gating network*) décide, pour chaque token, quels experts activer.
 
 <Callout type="info" title="Ce que ça change concrètement">
-Un modèle MoE de 100 milliards de paramètres avec 8 experts dont seulement 2 actifs par token n'utilise effectivement que ~25% de ses paramètres à chaque calcul. On obtient la capacité d'un modèle de 100B avec le coût d'un modèle de ~25B. C'est le coeur de l'efficacité MoE.
+Un modèle MoE de 100 milliards de paramètres avec 8 experts dont seulement 2 actifs par token n'utilise effectivement que ~25% de ses paramètres à chaque calcul. On obtient la capacité de stockage de connaissances d'un modèle de 100B avec le coût computationnel d'un modèle de ~25B. C'est le coeur de l'efficacité MoE : découpler la capacité (nombre total de paramètres) du coût (nombre de paramètres activés).
 </Callout>
 
 
@@ -25,23 +25,19 @@ Un modèle MoE de 100 milliards de paramètres avec 8 experts dont seulement 2 a
 
 ### Le gating de Shazeer (l'original)
 
-Noam Shazeer (le même qui a inventé l'attention multi-têtes) a posé les bases. Pour chaque token, le *gating network* calcule un score de pertinence pour chaque expert :
+Noam Shazeer --- le même chercheur qui a co-inventé l'attention multi-têtes dans le paper "Attention Is All You Need" --- a posé les bases du routage moderne. Pour chaque token, le *gating network* calcule un score de pertinence pour chaque expert :
 
-```
-G(x) = Softmax( TopK( x * W_g ) )
-```
+$$G(x) = \text{Softmax}(\text{TopK}(x \cdot W_g))$$
 
-Où `W_g` est une matrice de paramètres appris, et `TopK` garde seulement les K meilleurs scores. Tous les autres experts reçoivent un score de zéro — ils ne sont pas activés. C'est la **sparsité**.
+Où `W_g` est une matrice de paramètres appris (le routeur s'entraîne en même temps que le reste du modèle), et `TopK` ne conserve que les K meilleurs scores. Tous les autres experts reçoivent un score de zéro --- ils ne sont tout simplement pas activés. C'est la **sparsité** : la majorité du réseau reste éteinte pour chaque token.
 
-### Le routage Top-K : concrètement
+### Le routage Top-K en détail
 
-Avec **Top-2** (le cas le plus courant), chaque token est envoyé aux 2 experts avec les meilleurs scores. La sortie finale combine leurs réponses proportionnellement à leurs scores :
+Avec **Top-2** (le cas le plus courant en pratique), chaque token est envoyé simultanément aux 2 experts ayant obtenu les meilleurs scores. La sortie finale est une combinaison pondérée de leurs réponses :
 
-```
-y = G1(x) * Expert1(x) + G2(x) * Expert2(x)
-```
+$$y = G_1(x) \cdot \text{Expert}_1(x) + G_2(x) \cdot \text{Expert}_2(x)$$
 
-Les poids `G1` et `G2` somment à 1 (grâce au Softmax) et expriment la "confiance" du routeur envers chaque expert.
+Les poids $G_1$ et $G_2$ somment à 1 (grâce au Softmax) et expriment la "confiance" du routeur envers chaque expert. Si le routeur donne 0.9 à l'expert 3 et 0.1 à l'expert 7, la réponse sera très fortement influencée par l'expert 3. C'est une façon élégante de combiner les avis de plusieurs spécialistes avec une pondération par compétence.
 
 ## Le Switch Transformer : simplifier encore plus
 
@@ -49,62 +45,62 @@ Les poids `G1` et `G2` somment à 1 (grâce au Softmax) et expriment la "confian
 
 En 2021, l'équipe de Google a eu une idée radicale : et si on n'utilisait qu'**un seul expert** par token (Top-1) ? C'est le **Switch Transformer**.
 
-Moins coûteux, plus simple à implémenter, et les performances restent compétitives. La clé est de gérer correctement deux problèmes nouveaux.
+L'intuition est contre-intuitive : utiliser moins d'experts par token permet de scaler le nombre total d'experts beaucoup plus loin (des centaines, voire des milliers). Chaque expert reçoit moins de tokens mais se spécialise plus finement. Et c'est moins coûteux en calcul, plus simple à implémenter, tout en restant compétitif en performance.
+
+Mais cette simplification crée deux problèmes qu'il faut gérer avec soin.
 
 ### Le Capacity Factor : éviter les embouteillages
 
-Si 80% des tokens veulent aller chez le même expert, il y a un embouteillage. Le **capacity factor** limite le nombre maximum de tokens qu'un expert peut traiter. Les tokens en excès sont ignorés (on dit qu'ils sont *droppés*) ou renvoyés directement sans traitement.
+Si 80% des tokens veulent aller chez le même expert, c'est l'embouteillage garanti. Le **capacity factor** impose une limite : chaque expert ne peut traiter qu'un nombre maximum de tokens par batch. Les tokens excédentaires sont soit ignorés (*droppés*), soit passés directement à la couche suivante sans traitement par un expert. C'est un compromis nécessaire pour garder le système stable.
 
 ### La Loss de Balancement : forcer la diversité
 
-Sans contrainte, le routeur tend vers une solution paresseuse : envoyer presque tout au même expert ("winner-take-all"). Pour éviter ça, on ajoute une **perte auxiliaire de balancement** durant l'entraînement :
+Sans contrainte, le routeur converge vers une solution paresseuse : il envoie presque tout au même expert favori. C'est le syndrome du "winner-take-all" --- un ou deux experts monopolisent le travail tandis que les autres dépérissent. Pour contrer ça, on ajoute une **perte auxiliaire de balancement** durant l'entraînement :
 
-```
-L_balance = alpha * N * sum_i( f_i * P_i )
-```
+$$L_{\text{balance}} = \alpha \cdot N \cdot \sum_i f_i \cdot P_i$$
 
-Ici `f_i` est la fraction de tokens envoyés à l'expert `i`, et `P_i` la probabilité moyenne de routage vers cet expert. Cette perte pénalise les déséquilibres et encourage une distribution uniforme.
+Ici, $f_i$ est la fraction de tokens effectivement envoyés à l'expert $i$, et $P_i$ la probabilité moyenne de routage vers cet expert. Cette perte pénalise les déséquilibres : si un expert reçoit beaucoup plus que sa part, le produit $f_i \cdot P_i$ augmente et la perte grimpe. L'entraînement pousse alors le routeur vers une distribution plus uniforme.
 
 <Callout type="paper" title="Résultats du Switch Transformer">
-Le Switch Transformer atteint des gains de vitesse de 4x à 7x en pré-entraînement par rapport au modèle dense T5 de référence, avec des performances similaires ou supérieures sur les benchmarks. Un résultat qui a lancé la course aux MoE dans l'industrie.
+Le Switch Transformer atteint des gains de vitesse de 4x à 7x en pré-entraînement par rapport au modèle dense T5 de référence, avec des performances similaires ou supérieures sur les benchmarks. Ce résultat a déclenché la course aux architectures MoE dans l'industrie --- prouvant que la sparsité conditionnelle n'était pas juste une curiosité académique.
 </Callout>
 
 ## Les trois problèmes fondamentaux des MoE
 
 ### 1. Le Load Balancing (déséquilibre de charge)
 
-C'est le défi numéro un. Sans régularisation, le routeur converge vers quelques experts favoris et ignore les autres — exactement le problème d'une classe scolaire où seuls 3 élèves répondent aux questions.
+C'est le défi numéro un, celui qui a occupé le plus de chercheurs. Sans régularisation, le routeur converge vers quelques experts favoris et ignore les autres. C'est le même phénomène qu'une classe scolaire où seuls 3 élèves répondent à toutes les questions : les autres finissent par décrocher complètement. Dans un MoE, les experts ignorés ne s'améliorent jamais, ce qui renforce le biais du routeur vers les mêmes experts --- un cercle vicieux.
 
 ### 2. Le Token Dropping (perte de tokens)
 
-Quand un expert est surchargé et que son quota est atteint, les tokens supplémentaires sont abandonnés. C'est problématique : ces tokens ne sont pas traités correctement, ce qui dégrade la qualité — surtout si ce sont des tokens importants (un verbe clé, un nom propre).
+Quand un expert est surchargé et que son quota (capacity factor) est atteint, les tokens supplémentaires sont purement et simplement abandonnés --- ils ne reçoivent aucun traitement expert. C'est problématique parce que rien ne garantit que les tokens droppés sont les moins importants. Un verbe clé, un nom propre critique, ou un chiffre décisif dans un raisonnement mathématique pourrait être droppé, dégradant silencieusement la qualité de la réponse.
 
 ### 3. L'instabilité d'entraînement
 
-Les modèles MoE sont notoirement difficiles à entraîner. Le problème vient du **routage discret** : la décision "aller à l'expert 3 et pas l'expert 7" est binaire et ne se différencie pas bien. Les gradients deviennent discontinus, ce qui peut provoquer des oscillations ou des divergences.
+Les modèles MoE sont notoirement capricieux à entraîner. Le problème fondamental vient du **routage discret** : la décision "activer l'expert 3 et pas l'expert 7" est une opération binaire, discontinue, qui ne se différencie pas bien. Les gradients deviennent bruyants et discontinus, ce qui peut provoquer des oscillations, des divergences, ou des experts qui "meurent" (ne reçoivent plus jamais de tokens).
 
-Des techniques comme la **Router z-loss** ou l'entraînement en **précision mixte** (FP16/BF16) sont souvent nécessaires pour stabiliser l'entraînement.
+Des techniques comme la **Router z-loss** (qui régularise la magnitude des logits du routeur) et l'entraînement en **précision mixte** BF16 sont souvent nécessaires pour stabiliser le processus.
 
-<Callout type="warning" title="Le paradoxe de la mémoire">
-Les MoE réduisent le calcul, mais pas la mémoire ! Un modèle MoE de 100B paramètres occupe autant de RAM GPU qu'un dense de 100B — car tous les experts doivent rester chargés, même inactifs. C'est pourquoi les MoE nécessitent du parallélisme multi-GPU spécifique.
+<Callout type="warning" title="Le paradoxe de la mémoire MoE">
+Les MoE réduisent le calcul, mais **pas la mémoire** ! Un modèle MoE de 100B paramètres occupe autant de RAM GPU qu'un modèle dense de 100B --- car tous les experts doivent rester chargés en mémoire, même quand ils sont inactifs. C'est pourquoi les MoE nécessitent du parallélisme multi-GPU spécifique (*expert parallelism*) et des techniques comme l'offloading vers le CPU pour les experts rarement utilisés.
 </Callout>
 
 ## Avantages et limitations en résumé
 
 **Ce que les MoE font bien :**
-- Multiplier la capacité du modèle sans coût proportionnel en calcul
-- Permettre une spécialisation naturelle des experts par domaine ou type de token
-- Offrir un meilleur ratio performance/FLOP que les modèles denses équivalents
+- Multiplier la capacité du modèle (connaissances stockées) sans multiplier proportionnellement le coût en calcul
+- Permettre une spécialisation naturelle : certains experts deviennent experts en code, d'autres en médecine, d'autres en langues rares
+- Offrir un meilleur ratio performance/FLOP que les modèles denses équivalents --- c'est le critère qui compte pour les coûts de serving
 
 **Ce qu'ils font moins bien :**
-- La mémoire reste identique à un modèle dense de même taille
-- Le routage inter-GPU sur plusieurs machines ajoute de la latence de communication
-- Le fine-tuning est plus délicat : les MoE ont tendance à sur-apprendre plus vite
+- La mémoire reste identique à un modèle dense de même taille totale
+- Le routage entre GPU sur un cluster multi-machines ajoute de la latence de communication
+- Le fine-tuning est plus délicat : les MoE ont tendance à sur-apprendre plus vite car chaque expert ne voit qu'un sous-ensemble des données
 
-<Callout type="tip" title="L'état de l'art en 2026">
-Les MoE sont devenus le standard pour les grands modèles. Mixtral, DeepSeek-V3, Grok — et probablement GPT-4 — utilisent tous des variantes MoE. La sparsité conditionnelle n'est plus une curiosité de recherche : c'est la voie dominante pour scaler les LLM.
+<Callout type="tip" title="L'état de l'art en 2025-2026">
+Les MoE sont devenus le standard de facto pour les grands modèles. Mixtral, DeepSeek-V3, Grok --- et très probablement GPT-4 --- utilisent tous des variantes MoE. La sparsité conditionnelle n'est plus une curiosité de recherche : c'est la voie dominante pour construire des LLM toujours plus puissants sans exploser les coûts.
 </Callout>
 
 ## Conclusion
 
-Les Mixture of Experts résolvent un problème fondamental : comment construire des modèles avec des milliers de milliards de paramètres sans que chaque requête coûte une fortune en calcul. En activant sélectivement des sous-réseaux spécialisés selon le token traité, ils offrent la capacité d'un géant au prix d'un modèle bien plus petit. La compréhension de ces principes est la clé pour comprendre pourquoi les grands modèles modernes sont si puissants — et si efficaces.
+Les Mixture of Experts résolvent un problème fondamental : comment stocker des milliers de milliards de paramètres de connaissances sans que chaque requête coûte une fortune en calcul. En activant sélectivement des sous-réseaux spécialisés selon le token traité, ils offrent la capacité d'un géant au prix d'un modèle bien plus modeste. Comprendre ces principes, c'est comprendre pourquoi les grands modèles modernes sont à la fois si puissants et si étonnamment efficaces.

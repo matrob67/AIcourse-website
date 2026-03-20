@@ -5,77 +5,104 @@ description: "Juin 2017. Google. Une seule idée : l'attention seul suffit. Pas 
 
 
 
-## Le paper qui a gagné
+## Le paper qui a tout changé
 
-2017. Google Brain. L'idée : abandon les RNNs. Oubliez séquentiel. Utilisez attention partout.
+Juin 2017. Google Brain. Huit chercheurs publient un article avec un titre accrocheur : "Attention Is All You Need". L'idée est audacieuse : **abandonner complètement les réseaux récurrents** (RNNs/LSTMs) qui dominaient le traitement du langage depuis des années, et les remplacer par un mécanisme unique, l'attention.
 
-Résultat : **Transformer**. Tous les modèles modernes descendent de ça. GPT, Claude, Gemini, LLaMA, DALL-E, Stable Diffusion, Sora, AlphaFold. Tous.
+Le résultat : le **Transformer**. L'architecture dont descendent tous les modèles d'IA modernes. GPT, Claude, Gemini, LLaMA, DALL-E, Stable Diffusion, Sora, AlphaFold. **Tous** sont des Transformers ou des variantes.
 
-130 000 citations. Le paper le plus influent peut-être.
+Avec plus de 130 000 citations, c'est probablement le paper le plus influent de la décennie en informatique, et peut-être de l'histoire de l'intelligence artificielle.
 
-<Callout type="info" title="Pourquoi révolutionnaire">
-Avant : RNNs. Séquentiel. Lent. Pas parallélisable. Long-range dépendances : dégradées. Transformer : tout parallèle. Chaque token voit chaque token. Training 10-100x plus rapide.
+<Callout type="info" title="Pourquoi c'est révolutionnaire">
+Avant le Transformer, les réseaux récurrents (RNNs/LSTMs) traitaient les mots un par un, séquentiellement. Mot 1, puis mot 2, puis mot 3. C'était lent et les dépendances à longue distance (comprendre qu'un mot au début de la phrase est lié à un mot à la fin) se dégradaient. Le Transformer traite tous les mots **en parallèle**. Chaque mot "voit" directement tous les autres. L'entraînement est devenu 10 à 100x plus rapide, et la compréhension des relations à longue distance s'est considérablement améliorée.
 </Callout>
 
-## Contexte et motivation
+## Le contexte : pourquoi les RNNs ne suffisaient plus
 
-En 2017, le NLP reposait sur les RNN/LSTM pour le traitement séquentiel. Le problème fondamental : le **traitement séquentiel** empêche la parallélisation et les dépendances à longue distance se dégradent malgré les mécanismes de gating.
+En 2017, le NLP (Natural Language Processing) reposait sur les réseaux récurrents : RNNs, LSTMs, GRUs. Ces architectures avaient deux problèmes fondamentaux :
 
-## Contributions clés
+**Le traitement séquentiel empêche la parallélisation.** Un LSTM traite le mot 5 uniquement après avoir traité les mots 1, 2, 3 et 4. Sur un GPU avec des milliers de coeurs de calcul, la plupart restent inactifs. C'est un gaspillage massif de puissance.
+
+**Les dépendances à longue distance se dégradent.** Malgré les portes d'oubli des LSTMs (conçues précisément pour ce problème), l'information se dégrade quand elle doit traverser des dizaines ou des centaines de pas de temps. Dans une phrase de 100 mots, le modèle a du mal à relier le mot 3 au mot 97.
+
+Le Transformer résout les deux problèmes d'un coup.
+
+## Les contributions clés du paper
 
 ### 1. Architecture encoder-decoder sans récurrence
 
-Le Transformer traite tous les tokens en parallèle via l'attention, éliminant la séquentialité. L'encoder encode la séquence d'entrée, le decoder génère la sortie autoregressivement.
+Le Transformer élimine toute récurrence. Il traite **tous les tokens en parallèle** via le mécanisme d'attention. L'architecture originale se divise en deux parties : un **encoder** qui encode la séquence d'entrée en représentations internes, et un **decoder** qui génère la séquence de sortie de manière autorégressive (token par token).
+
+L'analogie : imagine un traducteur humain. L'encoder lit et comprend toute la phrase source d'un coup. Le decoder produit la traduction mot par mot, en consultant sa compréhension de la phrase source.
 
 ### 2. Scaled Dot-Product Attention
 
-La formule fondamentale : Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) V. Le scaling par sqrt(d_k) stabilise les gradients pour les grandes dimensions.
+Le coeur du Transformer. La formule d'attention :
+
+$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right) V$$
+
+En termes intuitifs : chaque token (via sa **Query**) "demande" aux autres tokens (via leurs **Keys**) "à quel point tu es pertinent pour moi ?" Les réponses sont pondérées, et les informations utiles (les **Values**) sont agrégées en conséquence.
+
+Le facteur de scaling $\sqrt{d_k}$ est crucial : sans lui, les produits scalaires deviennent très grands pour de grandes dimensions, ce qui rend le softmax trop "pointu" (un token domine les autres) et déstabilise les gradients.
 
 ### 3. Multi-Head Attention
 
-Au lieu d'une seule attention, le modèle utilise h têtes en parallèle, chacune avec ses propres projections. Cela permet de capturer différents types de relations simultanément.
+Au lieu d'un seul mécanisme d'attention, le modèle utilise **h têtes en parallèle** (8 dans le paper original), chacune avec ses propres projections linéaires pour Q, K et V.
+
+Pourquoi ? Parce qu'un mot peut être relié à d'autres mots de différentes manières. "Le chat dort sur le tapis" : une tête peut capturer la relation sujet-verbe (chat-dort), une autre la relation spatiale (dort-sur-tapis), une troisième les relations grammaticales. Chaque tête se spécialise dans un type de relation différent.
 
 ### 4. Positional Encoding
 
-Sans récurrence, le modèle n'a pas de notion d'ordre. Des encodages sinusoïdaux ajoutés aux embeddings encodent la position de chaque token.
+Sans récurrence, le modèle n'a aucune notion d'ordre. Les mots "le chat mange la souris" et "la souris mange le chat" produiraient les mêmes représentations. Pour résoudre ça, des **encodages positionnels sinusoïdaux** sont ajoutés aux embeddings de chaque token, encodant sa position dans la séquence.
+
+Les fonctions sinus et cosinus à différentes fréquences permettent au modèle de distinguer les positions absolues et d'apprendre des relations de distance relative entre tokens.
 
 ### 5. Feed-Forward Networks et Residual Connections
 
-Chaque couche contient un FFN (deux couches linéaires avec ReLU) et des connexions résiduelles + layer normalization autour de chaque sous-couche.
+Chaque couche du Transformer contient, en plus de l'attention, un **réseau feed-forward** (FFN) : deux couches linéaires avec une activation ReLU entre les deux. Ce FFN est appliqué indépendamment à chaque position et c'est là que le modèle stocke une grande partie de ses "connaissances".
 
-<Callout type="tip" title="La recette magique">
-La combinaison attention + résidual connections + layer norm + FFN est la recette qui a permis le scaling à des milliards de paramètres. Chaque composant est simple individuellement, mais leur combinaison crée une architecture remarquablement scalable et stable à l'entraînement.
+Des **connexions résiduelles** (l'input est ajouté à l'output de chaque sous-couche) et une **Layer Normalization** entourent chaque sous-couche. Ces mécanismes sont essentiels pour la stabilité de l'entraînement, surtout quand on empile de nombreuses couches.
+
+<Callout type="tip" title="La recette magique du scaling">
+La combinaison attention + connexions résiduelles + layer normalization + FFN est la recette qui a permis le scaling à des milliards de paramètres. Chaque composant est simple individuellement. Mais leur combinaison crée une architecture remarquablement **scalable** et **stable à l'entraînement**. C'est ce qui distingue le Transformer des architectures précédentes qui devenaient instables au-delà de quelques dizaines de couches.
 </Callout>
 
 ## Résultats du paper original
 
-Le Transformer original a été évalué sur la traduction automatique :
-- **WMT 2014 EN-DE** : 28.4 BLEU (meilleur score, +2 BLEU sur l'état de l'art)
-- **WMT 2014 EN-FR** : 41.8 BLEU (meilleur score avec un coût d'entraînement réduit)
-- Entraînement sur 8 GPU P100 pendant 3.5 jours (modèle de base)
+Le Transformer original a été évalué sur la traduction automatique (c'était un modèle de traduction, pas un chatbot) :
 
-## L'héritage
+- **WMT 2014 anglais-allemand** (WMT = Workshop on Machine Translation, la compétition de référence en traduction) : 28.4 BLEU (BLEU = Bilingual Evaluation Understudy, une métrique qui compare les n-grammes de la traduction à ceux de la référence) — meilleur score, +2.0 BLEU sur l'état de l'art
+- **WMT 2014 anglais-français** : 41.8 BLEU (meilleur score avec un coût d'entraînement réduit)
+- Entraînement sur **8 GPU P100** pendant **3.5 jours** pour le modèle de base
 
-### Trois familles de modèles
+Par les standards actuels (des milliers de GPU pendant des mois), c'est minuscule. Mais les résultats étaient les meilleurs jamais obtenus sur ces tâches.
 
-Le Transformer a engendré trois familles architecturales :
-- **Encoder-only** (BERT) : pour la compréhension (classification, NER)
-- **Decoder-only** (GPT) : pour la génération (devenu dominant)
-- **Encoder-decoder** (T5, BART) : pour la traduction et le résumé
+## L'héritage : trois familles architecturales
 
-### Au-delà du NLP
+Le Transformer a engendré trois familles de modèles, chacune utilisant une partie différente de l'architecture :
 
-Le Transformer s'est étendu à presque tous les domaines :
-- **Vision** : ViT, DINO, SAM
-- **Audio** : Whisper, MusicGen
-- **Vidéo** : Sora, VideoGPT
-- **Biologie** : AlphaFold (Evoformer)
-- **Robotique** : RT-2, VLA models
+- **Encoder-only** (BERT, RoBERTa) : pour la **compréhension** du texte. Classification, extraction d'entités, analyse de sentiment. Utilise l'attention bidirectionnelle.
+- **Decoder-only** (GPT, Claude, LLaMA) : pour la **génération** de texte. C'est la famille dominante aujourd'hui. Utilise l'attention causale (masquée).
+- **Encoder-decoder** (T5, BART, le Transformer original) : pour les tâches de **transformation** (traduction, résumé). Moins utilisés aujourd'hui.
 
-<Callout type="paper" title="Les 8 auteurs">
-Les 8 auteurs du paper — Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez, Kaiser et Polosukhin — sont devenus des figures majeures de l'IA. Plusieurs ont fondé des entreprises : Noam Shazeer (Character.AI, puis retour chez Google), Aidan Gomez (Cohere), Illia Polosukhin (NEAR Protocol).
+La victoire du decoder-only n'était pas évidente en 2017. C'est le scaling (GPT-2, GPT-3) qui a montré que la génération autorégressive était le paradigme le plus prometteur.
+
+## Au-delà du NLP : le Transformer conquiert tout
+
+L'aspect le plus remarquable du Transformer est son **universalité**. L'architecture s'est étendue à presque tous les domaines de l'IA :
+
+- **Vision** : ViT (Vision Transformer), DINO, SAM (Segment Anything). Les images sont découpées en "patches" traités comme des tokens.
+- **Audio** : Whisper (reconnaissance vocale), MusicGen. Le son est tokenisé et traité comme du texte.
+- **Vidéo** : Sora (OpenAI), VideoGPT. Les patches spatio-temporels remplacent les tokens textuels.
+- **Biologie** : AlphaFold (Evoformer). Les séquences de protéines sont des tokens, et l'attention capture les relations structurelles 3D.
+- **Robotique** : RT-2, VLA models. Les actions robotiques deviennent des tokens dans un vocabulaire d'actions.
+
+Le Transformer est devenu l'architecture "universelle" de l'IA, une sorte de moteur à combustion interne de l'intelligence artificielle.
+
+<Callout type="paper" title="Les 8 auteurs : des destins remarquables">
+Les 8 auteurs du paper sont devenus des figures majeures de l'IA. Plusieurs ont fondé des entreprises : **Noam Shazeer** a cofondé Character.AI (puis est retourné chez Google pour un montant record), **Aidan Gomez** a cofondé Cohere (spécialisé dans l'IA d'entreprise), **Illia Polosukhin** a cofondé NEAR Protocol (blockchain). Les autres sont restés dans la recherche chez Google ou ont rejoint d'autres labos de pointe.
 </Callout>
 
 <Callout type="warning" title="Ce que le paper ne prédit pas">
-Le paper original se concentre sur la traduction et ne mentionne pas le potentiel du Transformer pour la génération de texte à grande échelle, la multimodalité ou le raisonnement. L'explosion des capacités émergentes avec le scaling n'était pas anticipée par les auteurs eux-mêmes.
+Le paper original se concentre sur la traduction automatique. Il ne mentionne ni le potentiel du Transformer pour la génération de texte à grande échelle, ni la multimodalité, ni le raisonnement, ni les capacités émergentes. L'explosion des capacités avec le scaling (GPT-3 et au-delà) n'était pas anticipée par les auteurs eux-mêmes. Le Transformer a été conçu comme un meilleur modèle de traduction. Il est devenu la fondation de toute l'IA moderne.
 </Callout>

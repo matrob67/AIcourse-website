@@ -5,47 +5,48 @@ description: "Étude du curriculum learning appliqué à l'entraînement des LLM
 
 ## L'analogie simple : comment on apprend vraiment
 
-Un enfant apprend les maths en commençant par compter (1, 2, 3), puis l'addition (1+1=2), puis la multiplication, puis l'algèbre. Pas en commençant par les intégrales.
+Un enfant apprend les maths en commençant par compter (1, 2, 3), puis l'addition (1+1=2), puis la multiplication, puis l'algèbre. Personne ne commence par les intégrales triples.
 
-Pourquoi ? Parce que les concepts simples sont des fondations pour les concepts complexes. Maîtriser l'addition avant l'algèbre signifie que quand tu arrives à l'algèbre, tu as des outils mentaux prêts.
+Pourquoi cet ordre fonctionne ? Parce que chaque concept simple sert de **fondation** pour le suivant. Quand tu arrives à l'algèbre, tu as déjà des outils mentaux solides : tu sais additionner, multiplier, manipuler des nombres. L'algèbre devient alors une extension naturelle de ce que tu connais, pas un saut dans le vide.
 
-Le curriculum learning applique cette idée à l'entraînement des LLM : présente les données dans un ordre progressif (simples → complexes) au lieu d'ordre aléatoire.
+Le curriculum learning applique exactement cette idée à l'entraînement des LLM : au lieu de présenter les données dans un ordre complètement aléatoire (le défaut), on organise la progression du simple vers le complexe. Le modèle construit ses "fondations" d'abord, puis raffine.
 
 ## Les bénéfices empiriques
 
-Les trois bénéfices principaux :
-1. **Convergence plus rapide** : surtout au début (10-30% plus rapide dans les 20% premiers tokens)
-2. **Meilleure qualité finale** : modeste (1-3% sur les benchmarks)
-3. **Efficacité de données** : certains ordres utilisent les données plus efficacement
+Les trois bénéfices principaux observés en pratique :
+
+1. **Convergence plus rapide** : surtout au début de l'entraînement (10-30% plus rapide dans les 20% premiers tokens). Le modèle atteint un niveau de performance donné plus vite.
+2. **Meilleure qualité finale** : modeste mais mesurable (1-3% sur les benchmarks). Ce n'est pas spectaculaire, mais c'est gratuit une fois le pipeline en place.
+3. **Efficacité de données** : certains ordres de présentation permettent au modèle d'extraire plus de "signal" de chaque exemple, réduisant le gaspillage computationnel.
 
 <Callout type="info" title="Pas révolutionnaire, mais utile">
-Le curriculum learning n'est pas un game-changer. C'est un optimiseur supplémentaire. Combiné avec d'autres techniques (data annealing, data quality), ça apporte des gains mesurables.
+Le curriculum learning n'est pas un game-changer qui va doubler les performances de ton modèle. C'est un optimiseur supplémentaire, une cerise sur le gâteau. Mais combiné avec d'autres techniques (data annealing, filtrage de qualité), les gains s'accumulent et deviennent significatifs. En entraînement de LLM, chaque pourcent compte quand on dépense des millions en GPU.
 </Callout>
 
 ## Curriculum par longueur de séquence
 
 ### Idée : commence court, augmente progressivement
 
-Entraîne d'abord sur des séquences courtes (2K tokens), puis 4K, puis 8K, puis 16K. L'avantage : les séquences courtes sont **beaucoup plus rapides** (attention est O(L²)).
+Entraîne d'abord sur des séquences courtes (2K tokens), puis 4K, puis 8K, puis 16K. L'avantage est double : les séquences courtes sont **beaucoup plus rapides** à traiter (l'attention a une complexité en O(L²)), et elles permettent au modèle d'apprendre les patterns linguistiques de base avant de s'attaquer aux dépendances longue distance.
 
-### Économies computationnelles
+### Économies computationnelles concrètes
 
-Une séquence de 2K tokens est 16x plus rapide qu'une séquence de 8K (attention : 4M vs 64M opérations).
+Une séquence de 2K tokens est environ 16x plus rapide qu'une séquence de 8K pour le mécanisme d'attention (4M vs 64M opérations). Ça fait une différence énorme à l'échelle de milliards de tokens.
 
-**Stratégie typique pour cible 8K** :
-- 50% des tokens en 2K (16x rapide)
-- 30% des tokens en 4K (4x rapide)
-- 20% des tokens en 8K (1x)
+**Stratégie typique pour une cible de 8K tokens** :
+- 50% des tokens en séquences de 2K (16x plus rapide)
+- 30% des tokens en séquences de 4K (4x plus rapide)
+- 20% des tokens en séquences de 8K (vitesse de référence)
 
-**Résultat** : ~30% de réduction du temps de calcul total tout en atteignant les performances 8K.
+**Résultat** : environ 30% de réduction du temps de calcul total, tout en atteignant les mêmes performances sur du contexte 8K. C'est un gain substantiel quand un entraînement prend des semaines.
 
-<Callout type="tip" title="Pratique standard">
-Curriculum par longueur est utilisé dans **LLaMA, Mistral, Qwen**, la plupart des modèles modernes. C'est une des rares techniques qui donnent un gain clair et une reduction de coût computational.
+<Callout type="tip" title="Pratique standard dans l'industrie">
+Le curriculum par longueur est utilisé dans **LLaMA, Mistral, Qwen** et la plupart des modèles modernes. C'est l'une des rares techniques qui offrent à la fois un gain de qualité et une réduction du coût computationnel --- un win-win rare en deep learning.
 </Callout>
 
-### Le défi : transition abrupte
+### Le défi : la transition abrupte
 
-Si tu passe de 2K à 8K d'un coup, le modèle peut avoir du mal à s'adapter. Un warm-up progressif de la longueur (2K → 2.5K → 3K → ...) est préférable.
+Si tu passes de 2K à 8K d'un coup, le modèle peut avoir du mal à s'adapter. C'est comme passer d'un sprint de 100m à un marathon sans transition. Un warmup progressif de la longueur (2K -> 2.5K -> 3K -> ... -> 8K) est nettement préférable. Les modèles qui font des sauts brusques montrent souvent un pic de loss temporaire à chaque transition.
 
 
 
@@ -53,54 +54,58 @@ Si tu passe de 2K à 8K d'un coup, le modèle peut avoir du mal à s'adapter. Un
 
 ### Data annealing : la phase finale critique
 
-Au lieu de mélanger les données uniformément, utilise un curriculum de qualité :
+Au lieu de mélanger toutes les données uniformément pendant tout l'entraînement, on utilise un curriculum de qualité croissante :
 
-1. **Phase 1 (50% des tokens)** : données web filtrées (bonne qualité)
-2. **Phase 2 (30% des tokens)** : mélange web + spécialisées
-3. **Phase 3 (20% des tokens)** : **Annealing** : données de très haute qualité uniquement (livres, articles, code premium)
+1. **Phase 1 (50% des tokens)** : données web filtrées de bonne qualité --- le modèle apprend la structure du langage, le vocabulaire large, les connaissances générales
+2. **Phase 2 (30% des tokens)** : mélange web + données spécialisées --- le modèle commence à développer des compétences dans des domaines ciblés
+3. **Phase 3 (20% des tokens)** : **Annealing** --- données de très haute qualité uniquement (livres, articles scientifiques, code premium, manuels)
 
-<Callout type="paper" title="Data annealing = réelle amélioration">
-La phase d'annealing (données curatées de haute qualité) en fin d'entraînement améliore significativement les benchmarks. Même juste 5-10% des tokens en annealing peut améliorer la qualité finale de 1-2%. C'est disproportionné par rapport au coût.
+L'analogie culinaire : phase 1 c'est les ingrédients de base (farine, eau), phase 2 c'est les bons ingrédients (beurre, oeufs frais), phase 3 c'est la touche du chef (truffe, safran). C'est la dernière phase qui fait toute la différence au goût final.
+
+<Callout type="paper" title="Data annealing = amélioration réelle et mesurable">
+La phase d'annealing en fin d'entraînement améliore significativement les benchmarks. Même juste 5-10% des tokens en annealing peut améliorer la qualité finale de 1-2%. C'est disproportionné par rapport au coût : un petit investissement en données de haute qualité à la fin rapporte gros. L'explication probable : les dernières données vues par le modèle ont un impact disproportionné sur ses comportements finaux (le LR est bas, les mises à jour sont petites et précises).
 </Callout>
 
 ### Exemples industriels
 
-- **LLaMA 3** : augmente la proportion de données mathématiques et code
-- **Qwen** : curriculum multi-étapes avec changement de mélange
-- **DeepSeek** : phase d'annealing explicite avec données curatées
+- **LLaMA 3** : augmente la proportion de données mathématiques et code dans les phases finales
+- **Qwen** : curriculum multi-étapes avec changement dynamique du mélange de données
+- **DeepSeek** : phase d'annealing explicite avec un dataset curé de haute qualité
 
 ## Curriculum par domaine
 
 ### Ordre multi-domaine
 
-Au lieu de mélanger tous les domaines ensemble, entraîne progressivement :
+Au lieu de mélanger tous les domaines ensemble dès le début, on entraîne progressivement :
 
-1. **Texte général** : web, encyclopédies (fondations)
-2. **Domaines structurés** : code, mathématiques (raisonnement)
-3. **Domaines spécialisés** : science, médecine, droit (spécialisation)
+1. **Texte général** : web, encyclopédies (les fondations linguistiques)
+2. **Domaines structurés** : code, mathématiques (le raisonnement formel)
+3. **Domaines spécialisés** : science, médecine, droit (la spécialisation)
 
-L'idée : la connaissance générale aide le modèle à apprendre les domaines spécialisés plus facilement.
+L'idée est que la connaissance générale du langage aide le modèle à mieux absorber les domaines spécialisés. Un modèle qui comprend déjà la syntaxe, la grammaire et les concepts de base apprendra plus vite le jargon médical qu'un modèle qui découvre tout en même temps.
 
 ### Le risque : oubli catastrophique
 
 <Callout type="warning" title="Catastrophic forgetting">
-Si tu passe à un nouveau domaine, le modèle peut oublier les domaines précédents. Solution : maintenir un "replay buffer" des domaines précédents (10-20% du budget). Continuer à entraîner légèrement sur le web general même quand tu es en phase de spécialisation.
+Attention au piège : si tu passes à un nouveau domaine en abandonnant complètement les précédents, le modèle risque d'**oublier** ce qu'il a appris avant. C'est le catastrophic forgetting. La solution : maintenir un "replay buffer" --- continue à injecter 10-20% de données des domaines précédents même pendant la phase de spécialisation. Ça permet au modèle de ne pas "désapprendre" ses connaissances générales.
 </Callout>
 
-## Curriculum par difficulté (théorique mais compliqué)
+## Curriculum par difficulté (théoriquement séduisant, pratiquement compliqué)
 
 ### Mesures de difficulté possibles
 
-- **Perplexité** : documentée par un modèle de référence
-- **Longueur des phrases** : proxy de complexité syntaxique
-- **Rareté du vocabulaire** : proportion de tokens rares
-- **Loss du modèle** : exemples avec loss élevée = plus difficiles
+Comment définir qu'un exemple est "difficile" ? Plusieurs proxys existent :
+
+- **Perplexité** : mesurée par un modèle de référence --- un document à haute perplexité est surprenant et donc potentiellement plus complexe
+- **Longueur des phrases** : proxy de complexité syntaxique (corrélation imparfaite)
+- **Rareté du vocabulaire** : proportion de tokens rares --- plus il y en a, plus le texte est spécialisé
+- **Loss du modèle** : les exemples sur lesquels le modèle a une loss élevée sont ceux qu'il ne maîtrise pas encore
 
 ### Self-paced learning
 
-Le modèle lui-même détermine la difficulté : documents avec loss élevée sont introduits progressivement au lieu de tout de suite.
+Le modèle lui-même détermine la difficulté : les documents avec une loss élevée sont introduits progressivement, au fur et à mesure que le modèle devient capable de les digérer.
 
-Théoriquement intéressant, mais peu utilisé en pratique (coûteux à implémenter).
+Théoriquement très élégant. En pratique, peu utilisé pour les LLM car il faut constamment réévaluer la difficulté de chaque document pendant l'entraînement, ce qui est coûteux et complexe à paralléliser.
 
 ## Résultats empiriques réels
 
@@ -111,20 +116,20 @@ Théoriquement intéressant, mais peu utilisé en pratique (coûteux à impléme
 | Curriculum par domaine | Variable | ~0.5% | Modéré |
 | Self-paced (difficulté) | +5-10% | ~0.5% | Rare |
 
-## En pratique
+## En pratique : que faut-il activer ?
 
-**Curriculum par longueur** : activé dans 70% des projets modernes. Gain computationnel clair.
+**Curriculum par longueur** : activé dans environ 70% des projets modernes. Le gain computationnel est clair et facile à implémenter. Si tu entraînes un modèle avec du long contexte, c'est presque obligatoire.
 
-**Data annealing** : activé dans 80% des projets. Bénéfice empirique démontré.
+**Data annealing** : activé dans environ 80% des projets. Le bénéfice empirique est démontré et le coût d'implémentation est minimal --- il suffit de changer le mélange de données en fin d'entraînement.
 
-**Curriculum par domaine** : activé dans 20% des projets. Bénéfice moins clair, plus complexe.
+**Curriculum par domaine** : activé dans environ 20% des projets. Le bénéfice est moins clair et la mise en oeuvre est plus complexe (il faut gérer le replay buffer, décider des transitions).
 
-**Self-paced** : activé dans <5% des projets. Trop coûteux pour le gain.
+**Self-paced** : activé dans moins de 5% des projets. Le surcoût computationnel dépasse généralement le gain.
 
-<Callout type="info" title="Consensus">
-Le curriculum learning n'est pas une panacée, mais c'est un outil complémentaire utile. Utilise le curriculum par longueur pour l'efficacité computationnelle et le data annealing pour la qualité finale. Les autres sont bonus.
+<Callout type="info" title="Consensus de la communauté">
+Le curriculum learning n'est pas une panacée, mais c'est un outil complémentaire précieux. La recommandation pratique : active le curriculum par longueur pour l'efficacité computationnelle et le data annealing pour la qualité finale. Ces deux techniques sont bien établies et faciles à intégrer. Les autres approches sont du bonus pour les équipes qui ont le temps d'expérimenter.
 </Callout>
 
 ## Résumé
 
-Le curriculum learning applique la pédagogie humaine (simple → complexe) à l'entraînement des LLM. Les deux applications principales claires : **longueur de séquence** (gain computationnel) et **qualité des données / data annealing** (gain de qualité). Les autres approches (domaine, difficulté) sont théoriquement intéressantes mais peu systématiquement utilisées en pratique.
+Le curriculum learning applique la pédagogie humaine (simple vers complexe) à l'entraînement des LLM. Les deux applications claires et éprouvées : le **curriculum par longueur de séquence** (gain computationnel de 30%) et la **qualité des données / data annealing** (gain de qualité de 1-2% en fin d'entraînement). Les autres approches (domaine, difficulté) sont théoriquement intéressantes mais pas encore systématiquement adoptées en pratique.

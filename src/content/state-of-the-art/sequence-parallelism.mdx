@@ -7,82 +7,85 @@ description: "Étude du Sequence Parallelism et du Context Parallelism, techniqu
 
 ## Le problème : des opérations se répètent inutilement
 
-Avec le Tensor Parallelism, tu partitionnes les opérations matricielles (les grosses multiplications) entre GPU. Mais certaines opérations comme la normalisation de couche (LayerNorm), le dropout et l'addition résiduelle ne sont pas partitionnées—elles se font sur chaque GPU, de manière identique.
+Tu utilises déjà le Tensor Parallelism pour partitionner les grosses multiplications matricielles (les couches d'attention et les MLP) entre tes GPU. Tout va bien pour ces opérations. Mais il y a un hic : certaines opérations du Transformer ne sont **pas** partitionnées par le TP. La normalisation de couche (LayerNorm), le dropout, et l'addition résiduelle se font indépendamment sur chaque GPU, de manière identique.
 
-Imaginez 8 GPU identiques tous en train de faire les mêmes calculs de normalisation. C'est de la duplication inutile : tu fais 8 fois le même travail et tu stockes 8 fois les mêmes activations.
+Résultat : si tu as 8 GPU, ils font tous les 8 exactement le même calcul de normalisation sur les mêmes données. C'est comme si 8 comptables recalculaient indépendamment la même facture. Tu gaspilles 7/8 du calcul ET tu stockes 8 copies identiques des mêmes activations en mémoire.
 
-Le Sequence Parallelism dit : partitionne aussi ces opérations, mais le long de la dimension temporelle (la séquence). GPU 0 traite les tokens 0-500, GPU 1 traite les tokens 500-1000, etc. Chacun fait le travail une seule fois.
+Le **Sequence Parallelism** dit : au lieu de dupliquer ces opérations, partitionnons-les le long de la **dimension séquentielle** (la dimension des tokens). GPU 0 normalise les tokens 0-500, GPU 1 les tokens 501-1000, etc. Chacun fait une fraction du travail, une seule fois.
 
-## Sequence Parallelism : la théorie simple
+## Sequence Parallelism : le principe
 
-Au lieu de répliquer le tenseur complet [batch, longueur, dimension] sur tous les GPU, tu le divises en P fragments : [batch, longueur/P, dimension]. Chaque GPU reçoit un morceau de la séquence.
+Le tenseur complet d'activations a la forme [batch, longueur, dimension]. Sans SP, chaque GPU stocke et traite le tenseur entier pour les opérations non-TP. Avec SP, le tenseur est découpé en P fragments : [batch, longueur/P, dimension]. Chaque GPU reçoit un morceau de la séquence.
 
-Les transitions entre les opérations Tensor Parallelism et Sequence Parallelism utilisent des communications spécialisées :
-- **TP → SP** : reduce-scatter (réduis les résultats TP puis distribue le long de la séquence)
-- **SP → TP** : all-gather (rassemble les fragments de séquence)
+Les transitions entre opérations TP et opérations SP nécessitent des communications :
+- **TP vers SP** : reduce-scatter (réduit les résultats du TP puis distribue les fragments le long de la séquence)
+- **SP vers TP** : all-gather (rassemble les fragments de séquence pour reconstituer le tenseur complet avant l'opération TP)
 
-<Callout type="tip" title="Pas de communication supplémentaire">
-Ce qui est magique : le SP ne crée pas de communication en plus. Il remplace les all-reduce du TP par reduce-scatter + all-gather qui ont exactement le même volume de données. Tu gagnes de la mémoire gratuitement.
+<Callout type="tip" title="Pas de communication supplémentaire !">
+C'est l'aspect le plus élégant du SP : il ne crée **aucune** communication en plus. Le TP classique utilise des all-reduce pour synchroniser les résultats entre GPU. Le SP remplace ces all-reduce par des reduce-scatter + all-gather, qui transportent exactement le même volume de données. Tu gagnes de la mémoire sans payer en communication. C'est un free lunch.
 </Callout>
 
-### Impact mémoire en chiffres
+### Impact mémoire concret
 
-Avec TP=8, les opérations non-GEMM (normalisations, etc.) occupent environ 12.5% (1/8e) de la mémoire totale des activations quand c'est répliqué. Le SP élimine 87.5% de cette mémoire.
+Avec TP=8, les opérations non-TP (normalisations, dropout, résidus) consomment environ 1/8e de la mémoire totale des activations quand elles sont répliquées. Le SP élimine cette redondance : au lieu de 8 copies, une seule subsiste.
 
-Pour un modèle 70B avec une séquence de 4K tokens en BF16 : ça peut facilement te faire économiser 20-30 GB par GPU.
+Pour un modèle 70B avec une séquence de 4K tokens en BF16 : le SP peut facilement économiser 20-30 GB de VRAM par GPU. Ca ne semble peut-être pas énorme sur un GPU de 80 GB, mais c'est précisément cette marge qui te permet d'augmenter le batch size ou la longueur de séquence.
 
 ## Context Parallelism : pour les très longues séquences
 
-Si tu veux entraîner sur des séquences de 128K tokens, même avec Flash Attention, les activations de l'attention sont énormes. Un seul GPU ne peut pas les stocker.
+Le SP règle le problème des opérations non-TP, mais il y a un autre obstacle quand tu veux entraîner sur des séquences très longues (128K tokens et plus) : les **activations de l'attention** elles-mêmes deviennent trop volumineuses pour un seul GPU. Même avec Flash Attention (qui réduit la complexité mémoire de quadratique à linéaire), stocker les états intermédiaires de l'attention sur 128K tokens reste colossal.
 
-Le Context Parallelism partitionne l'attention elle-même entre GPU. Chaque GPU a un fragment de 32K tokens, et ils coordonnent pour calculer l'attention complète.
+Le **Context Parallelism (CP)** partitionne le mécanisme d'attention lui-même entre GPU. Chaque GPU possède un fragment de la séquence (par exemple 32K tokens sur chacun des 4 GPU), et ils coordonnent pour calculer l'attention complète à travers les fragments.
 
-C'est similaire au Ring Attention (une technique académique populaire), mais intégré directement dans des frameworks comme Megatron-LM avec des optimisations :
-- Communications fusionnées avec les calculs
-- Support du masquage causal (attention causale)
-- Compatibilité native avec TP et PP
+C'est conceptuellement proche du Ring Attention (une technique académique populaire), mais intégré directement dans les frameworks comme Megatron-LM avec des optimisations pratiques :
+- Communications fusionnées avec les calculs (pendant qu'un GPU calcule, un autre envoie ses K/V)
+- Support natif du masquage causal (attention causale)
+- Compatibilité avec TP et PP dans un système de parallélisme multi-dimensionnel
 
-## Combiner SP et CP : la hiérarchie complète
+## SP + CP : la hiérarchie complète
 
-Le SP optimise les opérations non-attention (normalisation, dropout).
-Le CP optimise l'attention elle-même.
+SP et CP sont complémentaires. Ils ciblent des parties différentes du Transformer :
+- **SP** optimise les opérations **hors attention** (normalisation, dropout, résidus)
+- **CP** optimise le calcul de l'**attention** elle-même
 
-Tu peux les utiliser ensemble. Pour un modèle avec 128K tokens sur 64 GPU :
+Tu peux (et tu dois, pour les très longues séquences) les utiliser ensemble. Voici un exemple de configuration pour un modèle entraîné sur 128K tokens avec 64 GPU :
 
 | Parallélisme | Degré | Scope |
 |-------------|-------|--------|
-| Tensor Parallelism | 8 | Intra-noeud |
-| Sequence Parallelism | 8 | Couplé au TP |
-| Context Parallelism | 4 | Pour l'attention sur 4 GPU |
-| Data Parallelism | 2 | 2 répliques |
-| **Total** | **8 × 4 × 2 = 64** | |
+| Tensor Parallelism | 8 | Intra-noeud (NVLink) |
+| Sequence Parallelism | 8 | Couplé au TP (mêmes GPU) |
+| Context Parallelism | 4 | Attention distribuée sur 4 groupes |
+| Data Parallelism | 2 | 2 répliques du tout |
+| **Total** | **8 x 4 x 2 = 64** | |
+
+Note que le SP est toujours couplé au TP (même degré, mêmes GPU), car il intervient dans les transitions entre opérations TP et non-TP. Le CP, lui, est une dimension indépendante.
 
 <Callout type="warning" title="CP n'est pas gratuit">
-Le Context Parallelism ajoute une communication significative (échange de clés et valeurs K/V entre GPU). Sur de petites séquences (moins de 32K), cet overhead peut être plus coûteux que le bénéfice. CP se justifie vraiment à partir de 64K-128K tokens.
+Le Context Parallelism ajoute une communication significative : les GPU doivent s'échanger les clés et valeurs K/V pour que chaque fragment puisse calculer l'attention par rapport au contexte complet. Sur de petites séquences (moins de 32K tokens), cet overhead de communication peut coûter plus cher que le bénéfice mémoire. Le CP se justifie vraiment à partir de 64K-128K tokens.
 </Callout>
 
-## Ulysses : une approche alternative pour le SP
+## Ulysses : l'approche alternative de DeepSpeed
 
-DeepSpeed propose "Ulysses", une stratégie alternative qui réorganise les calculs d'attention :
+Microsoft a proposé "Ulysses", une stratégie différente pour paralléliser l'attention :
 
 1. Partitionne Q, K, V le long de la séquence (chaque GPU a L/P tokens)
-2. All-to-all pour redistribuer par tête d'attention
-3. Calcule l'attention localement (chaque GPU gère ses propres têtes)
-4. All-to-all inverse
+2. **All-to-all** pour redistribuer par tête d'attention (chaque GPU reçoit toutes les positions mais seulement certaines têtes)
+3. Calcule l'attention localement (chaque GPU gère la totalité de la séquence pour ses propres têtes)
+4. All-to-all inverse pour revenir à la partition par séquence
 
-**Ulysses vs CP** : Ulysses fait deux all-to-all massifs au début et à la fin. CP fait des échanges K/V continus. Ulysses est meilleur si tu as une topologie all-to-all ultra-rapide (comme NVSwitch). CP est plus adapté aux topologies réseau classiques.
+La différence fondamentale avec CP : Ulysses fait deux opérations all-to-all massives (redistribution complète des données), tandis que CP fait des échanges K/V continus pendant le calcul. **Ulysses** est plus efficace si tu as une topologie réseau ultra-rapide en all-to-all (comme NVSwitch). **CP** est plus adapté aux topologies hiérarchiques classiques (NVLink intra-noeud, InfiniBand inter-noeud).
 
-## Économies concrètes
+## Economies concrètes
 
-Pour un modèle 70B, contexte 128K, BF16 :
+Pour un modèle 70B, contexte 128K tokens, BF16 :
 
 - **Activations attention sans CP** : ~120 GB
 - **Avec CP=4** : ~30 GB par GPU (réduction de 4x)
-- **Activations non-attention sans SP** : ~60 GB
+- **Activations non-attention sans SP** : ~60 GB (répliquées)
 - **Avec SP=8** : ~7.5 GB par GPU (réduction de 8x)
 
-Résumé : **SP réduit les activations non-attention d'un facteur TP, CP réduit les activations d'attention d'un facteur CP. Ensemble, tu peux diviser la mémoire de 30x sur du matériel moderne.**
+**SP réduit les activations non-attention d'un facteur TP. CP réduit les activations d'attention d'un facteur CP. Ensemble, tu peux diviser la mémoire d'activations totale par 30x ou plus sur du matériel moderne.** C'est ce qui rend possible l'entraînement sur des contextes de 128K+ tokens.
 
-<Callout type="info" title="État de l'art">
-Le Sequence Parallelism et le Context Parallelism sont devenus indispensables pour l'entraînement de modèles à long contexte. Les modèles open-source comme Mistral et les modèles propriétaires comme Claude utilisent ces techniques pour supporter des contextes de 100K+ tokens.
+<Callout type="info" title="Etat de l'art">
+Le Sequence Parallelism et le Context Parallelism sont devenus indispensables pour l'entraînement de modèles à long contexte. Les modèles open-source comme LLaMA 3 et Mistral, ainsi que les modèles propriétaires comme Claude et GPT-4, utilisent ces techniques pour supporter des contextes de 100K+ tokens tout en maintenant une utilisation efficace du matériel.
 </Callout>

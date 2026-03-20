@@ -29,7 +29,8 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Split into blocks (paragraphs) by double newlines
+  // Normalize line endings and split into blocks by double newlines
+  content = content.replace(/\r\n/g, "\n");
   const rawBlocks = content.split(/\n{2,}/);
   const blocks = rawBlocks.map((b, i) => ({
     index: i,

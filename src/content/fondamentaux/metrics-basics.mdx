@@ -5,151 +5,159 @@ description: "Comment vraiment évaluer un classifieur. Pourquoi l'accuracy ment
 
 ## Introduction : La bonne métrique change tout
 
-Entraîner un modèle, c'est facile. Savoir s'il est **vraiment bon**, c'est dur.
+Entraîner un modèle, c'est facile. Savoir s'il est **vraiment bon**, c'est une autre histoire.
 
-Le choix de la métrique encode tes vraies priorités : qu'est-ce qui compte dans **ton contexte** ? Une fausse alarme en santé (diagnostic faux positif = inquiétude inutile) vs un cas manqué (diagnostic faux négatif = quelqu'un meurt).
+Le choix de la métrique n'est jamais anodin : il encode tes **vraies priorités**. Qu'est-ce qui compte le plus dans **ton contexte** ? Prenons deux scénarios médicaux pour bien comprendre. Une fausse alarme en santé (un diagnostic faux positif), ça provoque de l'inquiétude inutile et des examens supplémentaires. Un cas manqué (un diagnostic faux négatif), c'est potentiellement quelqu'un qui meurt. Le coût des erreurs n'est pas symétrique, et ta métrique doit refléter cette asymétrie.
 
-Deux contextes différents = deux métriques différentes.
+Deux contextes différents = deux métriques différentes. Il n'existe pas de "meilleure métrique universelle". C'est pour ça qu'il faut comprendre chacune en profondeur.
 
 
 
 ## Accuracy : la métrique trompeuse
 
-L'**accuracy** est intuitive : le pourcentage de prédictions correctes.
+L'**accuracy** est la métrique la plus intuitive : c'est simplement le pourcentage de prédictions correctes sur l'ensemble des prédictions.
 
-```
-Accuracy = (prédictions correctes) / (total)
-```
+$$
+\text{Accuracy} = \frac{\text{prédictions correctes}}{\text{total}}
+$$
 
-Exemple : 95% des tes données sont classe A, 5% classe B. Un modèle qui **prédit toujours A** a une accuracy de 95%.
+Elle répond à la question : "sur l'ensemble de mes exemples, combien de fois mon modèle a-t-il eu raison ?" Ça paraît raisonnable. Le problème, c'est que cette question est souvent la mauvaise question à poser.
 
-Paraît bon. Est complètement inutile. Ne détecte **aucune** classe B.
+Exemple concret : imagine que 95% de tes données sont de classe A et 5% de classe B. Un modèle qui **prédit toujours A** -- sans même regarder les données -- obtient une accuracy de 95%. Ça paraît excellent sur le papier. En réalité, ce modèle est complètement inutile : il ne détecte **aucun** exemple de classe B.
 
-<Callout type="warning" title="Pièges classiques">
-Détection de fraude : 99.9% de transactions légitimes. Un modèle "pas fraude" a 99.9% d'accuracy mais détecte 0% des fraudes.
+<Callout type="warning" title="Pièges classiques de l'accuracy">
+**Détection de fraude** : 99.9% des transactions sont légitimes. Un modèle qui répond systématiquement "pas de fraude" atteint 99.9% d'accuracy mais détecte exactement 0% des fraudes. Ton patron sera impressionné par le chiffre, mais les fraudeurs aussi.
 
-Diagnostic de cancer : 99% de gens sains. Un modèle "pas de cancer" a 99% d'accuracy et tue les gens qui développent un cancer.
+**Diagnostic de cancer** : 99% des patients sont sains. Un modèle "pas de cancer" atteint 99% d'accuracy et passe à côté de chaque patient malade. L'accuracy ment quand les classes sont déséquilibrées.
 </Callout>
 
-**Utilise l'accuracy SEULEMENT si** tes classes sont équilibrées (50-50 ou proche) ET tu te soucies pas des erreurs spécifiques.
+**Règle pratique** : utilise l'accuracy SEULEMENT si tes classes sont relativement équilibrées (50-50 ou proche) ET que tu ne te soucies pas du type d'erreur commise. Dès que les classes sont déséquilibrées ou qu'un type d'erreur coûte plus cher que l'autre, passe aux métriques suivantes.
 
 
 
 ## Les quatre résultats fondamentaux
 
-En classification binaire, quatre résultats possibles :
+Avant de parler de precision et recall, il faut comprendre les quatre types de résultats possibles en classification binaire. Imagine un détecteur de spam :
 
-**Vrai Positif (TP)** : tu dis oui, c'était oui. Exemple : tu detectes un spam, c'était spam. Bon travail.
+**Vrai Positif (TP)** : le modèle dit "spam", et c'était effectivement du spam. Bravo, bonne détection.
 
-**Faux Positif (FP)** : tu dis oui, c'était non. Exemple : email légitime marqué spam. Fausse alarme.
+**Faux Positif (FP)** : le modèle dit "spam", mais c'était un email légitime. C'est une **fausse alarme**. Ton ami perd un email important dans ses spams.
 
-**Vrai Négatif (TN)** : tu dis non, c'était non. Email légitime ignoré. Bon travail.
+**Vrai Négatif (TN)** : le modèle dit "pas spam", et c'était effectivement légitime. Bonne décision, l'email arrive normalement.
 
-**Faux Négatif (FN)** : tu dis non, c'était oui. Spam qui passe. Cas manqué. Mauvais.
+**Faux Négatif (FN)** : le modèle dit "pas spam", mais c'était du spam. C'est un **cas manqué**. Le spam atterrit dans ta boîte de réception.
 
-Résumé : TP et TN = bon. FP et FN = mauvais.
+Pour retenir : le premier mot (Vrai/Faux) dit si le modèle a eu raison ou tort. Le deuxième mot (Positif/Négatif) dit ce que le modèle a prédit. Donc "Faux Positif" = le modèle s'est trompé en disant positif.
+
+TP et TN = le modèle a raison. FP et FN = le modèle se trompe. Mais les deux types d'erreurs (FP et FN) n'ont pas le même coût selon le contexte. C'est là que precision et recall entrent en jeu.
 
 ## Precision : quand tu dis oui, as-tu raison ?
 
-Parmi tous tes "oui", combien sont vraiment "oui" ?
+La precision répond à une question très précise : **parmi toutes les fois où le modèle a dit "oui" (positif), combien de fois avait-il raison ?**
 
-```
-Precision = TP / (TP + FP)
-```
+$$
+\text{Precision} = \frac{TP}{TP + FP}
+$$
 
-Exemple : tu dis "spam" 100 fois. 80 fois c'était spam, 20 fois c'était légitime.
-Precision = 80/100 = 80%.
+Le dénominateur, c'est l'ensemble des prédictions positives (TP + FP). On regarde la qualité des alertes émises par le modèle.
 
-**Haute precision** = peu de fausses alarmes. Quand tu recommandes quelque chose, c'est fiable.
+Exemple : ton filtre anti-spam marque 100 emails comme "spam". Parmi eux, 80 étaient vraiment du spam et 20 étaient des emails légitimes.
+Precision = 80/100 = 80%. Autrement dit, 20% de tes alertes sont des fausses alarmes.
 
-**Quand c'est critique** : recommander une chirurgie inutile est grave. Tu veux precision élevée : seules les recommandations vraiment solides.
+**Haute precision** = peu de fausses alarmes. Quand le modèle dit "oui", tu peux lui faire confiance.
+
+**Quand c'est critique** : recommander une chirurgie à un patient sain est grave. Envoyer un mail important dans les spams est problématique. Tu veux une precision élevée quand **les faux positifs coûtent cher** : chaque "oui" doit être fiable.
 
 ## Recall : combien de cas positifs trouves-tu ?
 
-Parmi tous les vrais positifs (toutes les choses qui **devaient** être trouvées), combien tu les trouves ?
+Le recall pose la question inverse : **parmi tous les exemples qui étaient réellement positifs, combien le modèle a-t-il trouvés ?**
 
-```
-Recall = TP / (TP + FN)
-```
+$$
+\text{Recall} = \frac{TP}{TP + FN}
+$$
 
-Exemple : il y a 1000 vrais spams. Tu en detectes 800.
-Recall = 800/1000 = 80%.
+Le dénominateur ici, c'est l'ensemble des vrais positifs dans les données (TP + FN). On regarde la couverture : combien de cas réels on attrape.
 
-**Haut recall** = peu de faux négatifs. Tu trouves la majorité des cas vrais.
+Exemple : il y a 1000 vrais spams dans ta boîte. Ton filtre en détecte 800, et en laisse passer 200.
+Recall = 800/1000 = 80%. Tu rates 20% des spams.
 
-**Quand c'est critique** : diagnostic de cancer. Manquer un vrai cas est catastrophique. Tu veux recall élevé : détecter **tous** les malades, même au prix de fausses alarmes.
+**Haut recall** = peu de faux négatifs. Le modèle trouve la grande majorité des cas réels.
 
-<Callout type="info" title="Le compromis fondamental">
-Precision et recall sont souvent en opposition. Tu peux augmenter la precision en levant ton seuil de décision (prédis "oui" moins souvent) mais tu réduis le recall (tu rates plus de cas vrais). Et vice versa. Le contexte détermine le bon équilibre.
+**Quand c'est critique** : diagnostic de cancer, détection de terrorisme, identification de défauts dans une chaîne de production. Manquer un vrai cas peut être catastrophique. Tu veux un recall élevé : détecter **tous** les vrais positifs, même au prix de quelques fausses alarmes.
+
+<Callout type="info" title="Le compromis fondamental precision-recall">
+Precision et recall sont souvent en **tension**. Imagine un curseur de seuil de décision. Si tu le montes (tu exiges plus de certitude avant de dire "oui"), tu améliores ta precision (moins de fausses alarmes) mais tu réduis ton recall (tu rates plus de cas vrais, car tu es trop exigeant). Si tu le baisses, c'est l'inverse : tu attrapes plus de cas (meilleur recall) mais avec plus de fausses alarmes (precision plus basse). Le bon équilibre dépend entièrement de ton contexte métier.
 </Callout>
 
 ## F1-score : la moyenne intelligente
 
-Le **F1** est la **moyenne harmonique** de precision et recall :
+Le **F1-score** est la **moyenne harmonique** de precision et recall :
 
-```
-F1 = 2 * (Precision * Recall) / (Precision + Recall)
-```
+$$
+F1 = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}
+$$
 
-Pourquoi la moyenne harmonique ? Parce qu'elle pénalise les valeurs extrêmes. Un modèle avec Precision=1.0 (parfait) mais Recall=0.01 (détecte presque rien) a une moyenne arithmétique de 0.505. Paraît acceptable. Mais F1 = 0.02. Catastrophe.
+Pourquoi la moyenne harmonique et pas la moyenne arithmétique classique ? Parce qu'elle **pénalise sévèrement les valeurs extrêmes**. Prenons un exemple : un modèle avec Precision = 1.0 (parfait, aucune fausse alarme) mais Recall = 0.01 (détecte presque rien, rate 99% des cas). La moyenne arithmétique donne (1.0 + 0.01) / 2 = 0.505. Ça paraît acceptable. Mais le F1 = 2 * (1.0 * 0.01) / (1.0 + 0.01) = 0.02. Catastrophe, comme il se doit : un modèle qui ne détecte rien ne mérite pas un score de 50%.
 
-F1 est utile quand tu n'as pas de préférence forte entre precision et recall, ou avec des classes déséquilibrées.
+Le F1 est particulièrement utile quand tu n'as pas de préférence forte entre precision et recall, ou quand tes classes sont déséquilibrées et que l'accuracy seule est trompeuse.
 
-**Variantes** :
-- **F0.5** : donne 2x plus de poids à la precision (si les faux positifs coûtent cher)
-- **F2** : donne 2x plus de poids au recall (si les faux négatifs coûtent cher)
+**Variantes du F-score** :
+- **F0.5** : donne 2 fois plus de poids à la precision (si les faux positifs coûtent cher, par exemple une recommandation de chirurgie)
+- **F2** : donne 2 fois plus de poids au recall (si les faux négatifs coûtent cher, par exemple un diagnostic manqué)
 
 ## Extension au multi-classe (3+ classes)
 
-Avec 3, 5, 10 classes, tu calcules d'abord la métrique pour chaque classe, puis tu agrèges.
+Quand tu as 3, 5, ou 10 classes au lieu de 2, tu ne peux pas calculer directement "la" precision du modèle. Tu calcules d'abord la métrique pour chaque classe individuellement (en traitant chaque classe comme "positif" vs "tout le reste"), puis tu agrèges les résultats. Trois stratégies existent :
 
 ### Macro-averaging
 
-Moyenne simple sur toutes les classes. Chaque classe a le même poids.
+Moyenne simple de la métrique sur toutes les classes. Chaque classe a exactement le même poids, qu'elle contienne 10 ou 10 000 exemples.
 
-```
-Macro-F1 = (F1_classe1 + F1_classe2 + ...) / K
-```
+$$
+\text{Macro-F1} = \frac{F1_{\text{classe1}} + F1_{\text{classe2}} + \cdots}{K}
+$$
 
-Utilise quand toutes les classes comptent également, même les rares.
+Utilise le macro-averaging quand toutes les classes comptent également, **même les rares**. Si tu as une classe avec 5 exemples et une avec 5000, le macro donne autant d'importance aux deux. C'est un choix éthique autant que technique.
 
 ### Micro-averaging
 
-Tu agrèges les TP, FP, FN d'abord, puis tu calcules la métrique sur les totaux.
+Tu agrèges d'abord tous les TP, FP, FN de toutes les classes, puis tu calcules la métrique sur ces totaux globaux.
 
-```
-Micro-Precision = total_TP / (total_TP + total_FP)
-```
+$$
+\text{Micro-Precision} = \frac{\text{total}_{TP}}{\text{total}_{TP} + \text{total}_{FP}}
+$$
 
-Utilise quand les classes fréquentes importent plus.
+Résultat : les classes fréquentes dominent le score. Si 90% de tes données sont de classe A, c'est la performance sur A qui détermine le micro-score. Utilise-le quand les classes fréquentes importent réellement plus.
 
 ### Weighted-averaging
 
-Chaque classe pondérée par sa fréquence. Défaut souvent utilisé.
+Chaque classe est pondérée par sa fréquence dans les données. C'est un compromis entre macro et micro, et c'est souvent le défaut dans les librairies comme scikit-learn.
 
-<Callout type="tip" title="Quel averaging ?">
-Macro : si les classes rares comptent. Micro : si les classes fréquentes dominent. Weighted : par défaut.
+<Callout type="tip" title="Quel averaging choisir ?">
+**Macro** : quand les classes rares comptent autant que les fréquentes (diagnostic de maladies rares). **Micro** : quand les classes fréquentes sont les plus importantes. **Weighted** : valeur par défaut raisonnable quand tu ne sais pas.
 </Callout>
 
-## Exemple concret
+## Exemple concret : le diagnostic médical
 
-Diagnostic avec 1000 patients : 950 sains, 50 malades. Objectif : détecter tous les malades.
+Mettons tout ça ensemble. Diagnostic avec 1000 patients : 950 sains, 50 malades. Objectif : détecter tous les malades.
 
-**Modèle A** : prédit 40 malades, dont 30 vrais.
-- Accuracy = (30+910)/1000 = 94%
-- Precision = 30/40 = 75%
-- Recall = 30/50 = 60%
-- F1 = 67%
+**Modèle A** (prudent) : prédit 40 malades, dont 30 sont vraiment malades.
+- Accuracy = (30 + 910) / 1000 = **94%**
+- Precision = 30 / 40 = **75%** (quand il dit "malade", il a raison 3 fois sur 4)
+- Recall = 30 / 50 = **60%** (il rate 20 malades sur 50)
+- F1 = **67%**
 
-**Modèle B** : prédit 200 malades, dont 45 vrais.
-- Accuracy = (45+795)/1000 = 84%
-- Precision = 45/200 = 22.5%
-- Recall = 45/50 = 90%
-- F1 = 36%
+**Modèle B** (alarmiste) : prédit 200 malades, dont 45 sont vraiment malades.
+- Accuracy = (45 + 795) / 1000 = **84%**
+- Precision = 45 / 200 = **22.5%** (beaucoup de fausses alarmes)
+- Recall = 45 / 50 = **90%** (il ne rate que 5 malades sur 50)
+- F1 = **36%**
 
-Modèle A a meilleure accuracy et meilleur F1. Mais modèle B détecte 90% des malades vs 60%.
+Modèle A a une meilleure accuracy et un meilleur F1. Sur le papier, il "gagne". Mais modèle B détecte **90%** des malades contre seulement 60% pour A.
 
-**En médecine, tu choisirais B** malgré les métriques pires. Un malade non détecté meurt. Une fausse alarme : juste vérification supplémentaire.
+**En médecine, tu choisirais B** malgré ses métriques globalement inférieures. Pourquoi ? Un malade non détecté peut mourir. Une fausse alarme engendre juste un examen supplémentaire. Le coût asymétrique des erreurs dicte le choix, pas les chiffres bruts.
+
+C'est exactement pour ça que comprendre ces métriques en profondeur est indispensable : les chiffres seuls ne racontent pas toute l'histoire.
 
 
 
@@ -163,8 +171,8 @@ Modèle A a meilleure accuracy et meilleur F1. Mais modèle B détecte 90% des m
 | F1 | Équilibre global | Classes déséquilibrées, pas de préférence |
 | Macro-F1 | Fair pour les petites classes | Toutes les classes comptent |
 
-Le choix de la métrique n'est **pas technique**, c'est **métier**. Ça encode tes vrais objectifs et ce que les erreurs coûtent vraiment.
+Le choix de la métrique n'est **pas technique**, c'est **métier**. Il encode tes vrais objectifs et ce que les erreurs coûtent réellement dans ton domaine d'application.
 
 ## Pourquoi c'est important
 
-Une métrique biaisée = un modèle biaisé. Tu optimises ce que tu mesures. Mesure la mauvaise chose = modèle inutile en production.
+Une métrique mal choisie produit un modèle biaisé. Tu optimises ce que tu mesures. Si tu mesures la mauvaise chose, ton modèle sera excellent sur un critère inutile et catastrophique sur ce qui compte vraiment. En production, cette erreur peut avoir des conséquences humaines et financières réelles. Prends le temps de réfléchir à ta métrique avant d'écrire la moindre ligne de code d'entraînement.

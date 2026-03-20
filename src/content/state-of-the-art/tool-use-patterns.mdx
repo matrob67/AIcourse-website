@@ -5,69 +5,67 @@ description: "Les patterns avancés de tool use pour les agents LLM : sélection
 
 
 
-## Au-delà du simple "appel-réponse"
+## Au-dela du simple "appel-réponse"
 
-Appeler un outil, obtenir un résultat, et c'est fini — c'est basique et ça couvre environ 5% des cas réels. Les agents en production doivent gérer la complexité : choisir le bon outil parmi 50 options, chaîner 5 outils pour une tâche complexe, gérer les erreurs avec élégance.
+Appeler un outil, recevoir un résultat, et passer a autre chose — c'est le cas de base, et ça couvre a peine 5% des situations réelles. En production, un agent doit gérer une complexité bien supérieure : choisir le bon outil parmi 50 options, enchaîner 5 appels pour accomplir une tache, gérer les erreurs avec élégance, et protéger l'utilisateur des actions irréversibles.
 
-<Callout type="info" title="Les patterns sont les briques de base">
-Les patterns de tool use sont les composants élémentaires des agents sophistiqués. Un agent puissant combine plusieurs patterns : du routing pour sélectionner le bon outil, du chaînage pour des workflows multi-étapes, du retry pour la robustesse, et de la validation pour la sécurité.
+Les patterns qu'on va voir sont les **briques de construction** de tout agent sérieux. Comprendre ces patterns, c'est comprendre comment construire des agents qui fonctionnent dans le monde réel, pas juste dans une démo.
+
+<Callout type="info" title="Les patterns sont les fondations des agents">
+Un agent sophistiqué n'est pas un seul algorithme brillant — c'est une combinaison intelligente de patterns élémentaires : du routing pour aiguiller vers le bon outil, du chaînage pour les workflows multi-étapes, du retry pour la robustesse, et de la validation pour la sécurité. Maîtrisez ces patterns et vous pouvez construire n'importe quel agent.
 </Callout>
 
-## Pattern 1 : Routing — choisir le bon outil
+## Pattern 1 : Routing — aiguiller vers le bon outil
 
-### Comment ça marche
+### Le problème
 
-Le LLM reçoit une question et doit décider quel outil utiliser parmi plusieurs options. C'est comme un standard téléphonique : l'appel arrive, et il faut l'aiguiller vers le bon département.
+Le LLM reçoit une requête et doit décider quel outil utiliser parmi plusieurs options. C'est exactement comme un standard téléphonique : l'appel arrive, et il faut l'aiguiller vers le bon département sans se tromper.
 
-```
-Question sur la météo → appeler weather_api
-Question sur le code → appeler code_search
-Question de calcul → appeler calculator
-Question générale → appeler web_search
-```
+| Question de l'utilisateur | Outil approprié |
+|---|---|
+| "Quel temps fait-il ?" | `weather_api` |
+| "Trouve la fonction handleLogin" | `code_search` |
+| "Calcule 15% de 340" | `calculator` |
+| "Qui a inventé le téléphone ?" | `web_search` |
 
-### Deux approches
+### Deux approches de routing
 
-**Implicite** : le LLM choisit via function calling (le modèle est libre de choisir). C'est simple mais moins fiable avec 20+ outils car l'attention du modèle se fragmente.
+**Routing implicite** : le LLM choisit librement via le function calling natif. C'est simple a implémenter, mais la fiabilité se dégrade avec le nombre d'outils. Au-dela de 15-20 outils, l'attention du modèle se fragmente et il commence a choisir des outils inappropriés.
 
-**Explicite** : un classifieur dédié route d'abord la requête vers la bonne catégorie, puis on sélectionne l'outil spécifique. C'est plus robuste.
+**Routing explicite** : un classifieur dédié (ou un prompt spécialisé) analyse d'abord la requête pour déterminer la catégorie, puis sélectionne l'outil spécifique dans cette catégorie. Plus robuste, mais plus complexe a maintenir.
 
 <Callout type="tip" title="Routing hiérarchique pour les systèmes complexes">
-Avec 20+ outils, organisez-les en hiérarchie. Niveau 1 : "est-ce une question de données, de communication, ou de calcul ?". Niveau 2 : "dans les données, c'est PostgreSQL ou MongoDB ?". Cela réduit l'incertitude à chaque étape.
+Avec 20+ outils, organisez-les en hiérarchie a deux niveaux. Niveau 1 : "est-ce une question de données, de communication, ou de calcul ?". Niveau 2 : "dans les données, c'est PostgreSQL, MongoDB, ou Elasticsearch ?". Chaque niveau réduit l'espace de choix, rendant la décision plus fiable a chaque étape.
 </Callout>
 
 ## Pattern 2 : Chaînage séquentiel
 
-### Une tâche complexe en étapes
+### Découper une tache complexe en étapes
 
-Le résultat d'un outil alimente l'entrée du suivant, comme une chaîne de montage :
+Le résultat d'un outil alimente l'entrée du suivant, comme une chaîne de montage industrielle. Chaque maillon produit ce dont le suivant a besoin :
 
-```
-1. search_user("Marie Dupont") → {id: 456}
-2. get_orders(user_id=456) → [{order_id: 789, ...}]
-3. get_order_details(order_id=789) → {product: "Laptop", status: "livré"}
-```
+1. `search_user("Marie Dupont")` &rarr; `{id: 456}`
+2. `get_orders(user_id=456)` &rarr; `[{order_id: 789, ...}]`
+3. `get_order_details(order_id=789)` &rarr; `{product: "Laptop", status: "livré"}`
 
-Le LLM orchestre naturellement ce chaînage via le pattern ReAct (Reasoning-Acting) : il raison, décide d'appeler un outil, observe le résultat, raison à nouveau, etc.
+Le LLM orchestre naturellement ce chaînage via le pattern **ReAct** (Reasoning-Acting) : il raisonne sur la situation, décide d'appeler un outil, observe le résultat, raisonne a nouveau, et ainsi de suite jusqu'a avoir toutes les informations nécessaires. C'est une boucle penser-agir-observer qui s'adapte dynamiquement.
 
 ## Pattern 3 : Appels parallèles
 
-### Économiser du temps
+### Gagner du temps quand les appels sont indépendants
 
-Quand les appels sont indépendants (ne se dépendent pas les uns des autres), les exécuter en parallèle au lieu de séquentiellement :
+Quand plusieurs appels d'outils n'ont aucune dépendance entre eux (le résultat de l'un n'est pas nécessaire pour l'autre), les exécuter en parallèle divise la latence :
 
-```
-Utilisateur : "Compare la météo à Paris, Londres et Tokyo"
-LLM → [weather("Paris"), weather("London"), weather("Tokyo")]  // tous en parallèle
-```
+> **Utilisateur :** "Compare la météo a Paris, Londres et Tokyo"
+> **LLM** &rarr; `[weather("Paris"), weather("London"), weather("Tokyo")]` — les trois en parallèle
 
-Les modèles modernes supportent les **parallel tool calls**, ce qui réduit la latence. Au lieu de 3 secondes (3 appels séquentiels), vous obtenez 1 seconde.
+Les modèles modernes supportent nativement les **parallel tool calls**. Au lieu de 3 secondes (3 appels séquentiels d'1 seconde chacun), vous obtenez la réponse en 1 seconde. Pour l'utilisateur, c'est transparent. Pour la latence, c'est transformateur.
 
 ## Pattern 4 : Outils composites
 
-### Encapsuler la complexité
+### Encapsuler la complexité derrière une interface simple
 
-Combinez des outils simples en un outil plus haut-niveau :
+Combinez plusieurs outils simples en un outil de plus haut niveau :
 
 ```python
 # Outil composite : chercher et résumer
@@ -77,64 +75,64 @@ def search_and_summarize(query: str) -> str:
     return summary
 ```
 
-Du point de vue du LLM, c'est un seul outil. Mais en interne, c'est une pipeline. Avantages :
+Du point de vue du LLM, c'est un seul outil avec une interface claire. Mais en interne, c'est un pipeline complet. Les avantages sont triples :
 
-- **Simplicité** : l'interface qu'on donne au LLM est claire
-- **Encapsulation** : la complexité est cachée
-- **Efficacité** : le composite peut optimiser l'exécution
+- **Simplicité** : le LLM voit un outil au lieu de deux, ce qui simplifie son choix
+- **Encapsulation** : la logique de coordination est cachée dans l'outil, pas déléguée au LLM
+- **Fiabilité** : le composite gère les détails (pagination, formatage) sans impliquer le LLM
 
 ## Pattern 5 : Retry et fallback
 
 ### Quand ça échoue, réessayer intelligemment
 
-#### Retry avec message d'erreur
+Les outils échouent. C'est normal. Ce qui compte, c'est comment l'agent réagit.
 
-```
-LLM → weather_api("Paris, France") → Erreur: "Ville non trouvée"
-Système → "L'outil a renvoyé une erreur. Essayez sans le pays."
-LLM → weather_api("Paris") → Succès: {temp: 18, ...}
-```
+#### Retry avec feedback d'erreur
 
-Le message d'erreur est feedback pour que le LLM corrige son appel. Pas de perte — on a appris.
+> **LLM** &rarr; `weather_api("Paris, France")` &rarr; Erreur : "Ville non trouvée"
+> **Système** &rarr; "L'outil a renvoyé une erreur : ville non trouvée. Reformulez."
+> **LLM** &rarr; `weather_api("Paris")` &rarr; Succès : `{temp: 18, ...}`
+
+Le message d'erreur descriptif donne au LLM les informations nécessaires pour corriger son appel. C'est la clé : un bon message d'erreur transforme un échec en apprentissage en temps réel.
 
 #### Fallback vers un outil alternatif
 
-```
-LLM → internal_search(query) → "Aucun résultat trouvé"
-Système → "Essayez une recherche web"
-LLM → web_search(query) → [résultats pertinents]
-```
+> **LLM** &rarr; `internal_search(query)` &rarr; "Aucun résultat trouvé"
+> **Système** &rarr; "La base interne n'a rien trouvé. Essayez une source externe."
+> **LLM** &rarr; `web_search(query)` &rarr; [résultats pertinents]
 
-C'est comme : "ce service n'a pas la réponse, demande à quelqu'un d'autre".
+Quand un outil ne peut pas répondre, un autre prend le relais. C'est la robustesse par la redondance.
 
 <Callout type="warning" title="Attention aux boucles infinies de retry">
-Définissez un nombre maximal de retries (2-3). Si un outil échoue systématiquement 3 fois, le LLM doit accepter l'échec et proposer une alternative au lieu de réessayer indéfiniment. Sinon vous dépensez du temps/argent pour rien.
+Définissez toujours un nombre maximal de tentatives (2-3 max). Si un outil échoue systématiquement après 3 essais, le LLM doit accepter l'échec et proposer une alternative a l'utilisateur. Sinon, vous dépensez du temps et des tokens pour rien dans une boucle sans fin.
 </Callout>
 
 ## Pattern 6 : Confirmation humaine
 
-### Pour les actions qui comptent vraiment
+### Demander avant d'agir quand les enjeux sont élevés
 
-Pour les actions à haut impact, demander confirmation :
+Certaines actions sont irréversibles ou a fort impact. Pour celles-la, l'agent doit demander confirmation :
 
-```
-LLM : "Je vais envoyer un email à 500 clients avec cette promotion. Confirmez-vous ?"
-Utilisateur : "Oui"
-LLM → send_email(recipients=500, template="promo_spring")
-```
+> **LLM :** "Je vais envoyer un email a 500 clients avec cette promotion. Confirmez-vous ?"
+> **Utilisateur :** "Oui"
+> **LLM** &rarr; `send_email(recipients=500, template="promo_spring")`
 
-### Catégoriser par risque
+### Catégoriser les actions par niveau de risque
 
-| Niveau | Exemples | Confirmation |
+| Niveau | Exemples | Confirmation requise |
 |---|---|---|
-| Lecture seule | Recherche, lecture de fichier | Jamais |
-| Bas impact | Créer un brouillon, calculer quelque chose | Rarement |
+| Lecture seule | Recherche, consultation de fichier | Jamais |
+| Bas impact | Créer un brouillon, faire un calcul | Rarement |
 | Impact moyen | Envoyer un message, modifier un document | Parfois |
-| Haut impact | Supprimer, faire un paiement, email massif | Toujours |
+| Haut impact | Supprimer des données, paiement, email massif | Toujours |
+
+Cette classification doit être définie a l'avance dans la configuration de l'agent, pas laissée au jugement du LLM.
 
 ## Pattern 7 : Validation des paramètres
 
 ### Vérifier avant d'exécuter
+
+Ne faites jamais confiance aveuglément aux paramètres générés par le LLM. Validez-les avant l'exécution :
 
 ```python
 def safe_sql_query(query: str) -> str:
@@ -147,13 +145,13 @@ def safe_sql_query(query: str) -> str:
     return execute_query(query)
 ```
 
-C'est de la défense en profondeur : on ne fait pas confiance aveuglément au LLM.
+C'est de la défense en profondeur : même si le LLM fait une erreur (ou est manipulé), la couche de validation bloque les actions dangereuses.
 
 ## Pattern 8 : Outils avec état
 
-### Certains outils se "souviennent"
+### Quand un outil se "souvient" entre les appels
 
-Certains outils maintiennent un état entre les appels (comme une session ouverte) :
+Certains outils maintiennent un état persistant entre les appels successifs. C'est plus efficace que de tout recharger a chaque fois :
 
 ```python
 class SpreadsheetTool:
@@ -172,19 +170,19 @@ class SpreadsheetTool:
         return f"Écrit {value} dans {sheet}!{cell}"
 ```
 
-Au lieu de charger le fichier à chaque appel, on le garde ouvert. C'est plus efficace.
+L'outil ouvre le fichier une fois, puis toutes les opérations suivantes sont rapides car le fichier est déja en mémoire. C'est le même principe qu'une connexion a une base de données qu'on garde ouverte.
 
 ## Bonnes pratiques de conception
 
-### 1. Granularité — ni trop fin, ni trop gros
+### 1. Granularité : trouver le juste milieu
 
-- **Trop fin** : le LLM doit orchestrer trop de petits appels (inefficace)
+- **Trop fin** : le LLM doit orchestrer des dizaines de micro-appels (lent, fragile)
 - **Trop gros** : les outils monolithiques manquent de flexibilité
-- **Le bon niveau** : une action métier cohérente par outil
+- **Le bon niveau** : une action métier cohérente par outil. "Chercher un client" est bon. "Faire un appel HTTP GET" est trop bas. "Gérer tout le CRM" est trop haut.
 
-### 2. Descriptions comme contrat
+### 2. Les descriptions d'outils sont un contrat
 
-Les descriptions des outils sont le "contrat" entre vous et le LLM :
+Les descriptions sont le "mode d'emploi" que le LLM utilise pour décider quand et comment appeler un outil :
 
 ```python
 @tool("search_customers")
@@ -201,26 +199,26 @@ def search_customers(name: str, country: str = "FR") -> list[Customer]:
     ...
 ```
 
-Incluez des exemples et les cas limites.
+Des descriptions claires avec des exemples concrets améliorent drastiquement la fiabilité du tool use.
 
 ### 3. Idempotence quand c'est possible
 
-Un outil idempotent peut être appelé plusieurs fois sans nouvelle conséquence. Cela simplifie les retries.
+Un outil idempotent produit le même résultat qu'on l'appelle une ou dix fois. Cela simplifie énormément les retries :
 
 ```python
-# Idempotent : pas de problème d'appeler deux fois
+# Idempotent : appeler deux fois ne pose aucun problème
 def set_user_preference(user_id, pref, value):
     db.set(f"user_{user_id}_{pref}", value)
 
-# Pas idempotent : appeler deux fois charge deux fois
+# Pas idempotent : appeler deux fois double l'effet
 def add_credit(user_id, amount):
     db.increment(f"user_{user_id}_credit", amount)
 ```
 
 ### 4. Logging et observabilité
 
-Loggez chaque appel d'outil : paramètres, durée, résultat. C'est essentiel pour le debugging et l'audit.
+Loggez systématiquement chaque appel d'outil : paramètres, durée, résultat ou erreur. Sans logs, débugger un agent en production est un cauchemar. Avec des logs structurés, vous pouvez retracer exactement ce qui s'est passé et pourquoi.
 
-<Callout type="tip" title="Le pattern qui change tout">
-Si vous ne retenez qu'un seul pattern, c'est **retry avec message d'erreur clair**. La plupart des échecs d'agents viennent d'erreurs d'outils mal gérées. Un message d'erreur descriptif permet souvent au LLM de corriger son appel automatiquement. "City not found" → LLM essaie sans le pays. C'est magique.
+<Callout type="tip" title="Le pattern qui change tout : retry avec message d'erreur clair">
+Si vous ne retenez qu'un seul pattern de cette page, c'est celui-la. La majorité des échecs d'agents en production viennent d'erreurs d'outils mal gérées. Un message d'erreur descriptif permet au LLM de corriger son appel automatiquement dans la plupart des cas. "City not found" suffit au LLM pour essayer sans le pays. C'est simple, et ça transforme la fiabilité d'un agent.
 </Callout>

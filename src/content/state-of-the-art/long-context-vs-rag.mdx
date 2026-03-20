@@ -5,30 +5,31 @@ description: "Les modèles à fenêtre de contexte étendue (128K-1M tokens) rem
 
 ## Le twist : les modèles lisent maintenant des milliers de pages
 
-GPT-4 Turbo : 128K tokens. Claude : 200K tokens. Gemini 1.5 Pro : 1 à 2 millions de tokens.
+GPT-4 Turbo : 128K tokens. Claude : 200K tokens. Gemini 1.5 Pro : 1 a 2 millions de tokens.
 
-Avec 1M tokens, vous pouvez fourrer **des centaines de pages** directement dans le prompt. Pourquoi encore faire du RAG compliqué avec chunking, embeddings, bases vectorielles, reranking ?
+Avec 1M tokens, vous pouvez fourrer **des centaines de pages** directement dans le prompt. Pourquoi encore construire un pipeline RAG compliqué avec chunking, embeddings, bases vectorielles, reranking, et toute la plomberie qui va avec ?
 
-C'est une question sérieuse.
+C'est une question sérieuse. Il y a 2 ans, la fenêtre de contexte était de 4K tokens et le RAG était indispensable. Aujourd'hui avec des fenêtres de 1M tokens, le paysage a fondamentalement changé. Mais la réponse n'est pas aussi simple qu'on pourrait le croire.
 
 <Callout type="info" title="La vraie question">
-Long contexte vs RAG n'est pas un débat philosophique — c'est un trade-off coûts/latence/qualité. Le meilleur choix dépend de VOS chiffres.
+Long contexte vs RAG n'est pas un débat philosophique — c'est un **trade-off concret** entre coûts, latence, qualité, et complexité de maintenance. Le meilleur choix dépend de VOS chiffres, pas d'opinions sur Twitter.
 </Callout>
 
 ## Avantages du long contexte
 
-**Simplicité radicale** : zéro pipeline RAG. Balancez les docs, le modèle fait le resto. Développement et maintenance super simples.
+**Simplicité radicale** : zéro pipeline RAG. Pas de chunking à calibrer, pas d'embeddings à choisir, pas de base vectorielle à maintenir, pas de reranking à optimiser. Vous balancez les docs dans le prompt, le modèle fait le reste. Le temps de développement passe de semaines à minutes. La maintenance ? Quasi inexistante.
 
-**Accès complet** : le modèle voit TOUT simultanément. Peut identifier des patterns, croiser des infos, synthétiser. Parfait pour les questions qui exigent de voir la big picture.
+**Accès complet et simultané** : le modèle voit TOUT le corpus en même temps. Il peut identifier des patterns subtils, croiser des informations de différentes sections, détecter des contradictions, synthétiser une vue d'ensemble. C'est parfait pour les questions qui exigent de voir la **big picture** — par exemple, "résume les tendances principales de ce rapport de 200 pages" ou "y a-t-il des contradictions entre les chapitres 3 et 7 ?".
 
-**Zéro perte** : le RAG peut rater des docs pertinents (recall < 100%). Long contexte = tout y est.
+**Zéro perte de retrieval** : le RAG peut rater des documents pertinents. Si votre query ne correspond pas bien aux embeddings des passages importants, ces passages ne sont pas récupérés. Le recall du retrieval n'est jamais 100%. Avec le long contexte, tout est là — pas de risque de rater un passage crucial.
 
+**Zéro configuration** : pas de choix de modèle d'embedding, pas de taille de chunk à optimiser, pas de overlap à calibrer, pas de top-k à régler. Toutes ces décisions de design d'un pipeline RAG disparaissent.
 
 ## Avantages du RAG
 
-**Scalabilité massive** : long contexte est limité à quelques millions de tokens. RAG peut indexer des **milliards** de tokens. Votre corpus est énorme ? RAG est l'option.
+**Scalabilité massive** : le long contexte est limité à quelques millions de tokens au maximum. Le RAG peut indexer des **milliards** de tokens sans problème. Une base de connaissances d'entreprise avec des milliers de documents, un corpus scientifique de millions d'articles — seul le RAG peut gérer ces volumes.
 
-**Coûts** :
+**Coûts** : c'est souvent l'argument décisif.
 
 | Approche | Input tokens | Coût par requête (GPT-4) |
 |---|---|---|
@@ -37,54 +38,58 @@ Long contexte vs RAG n'est pas un débat philosophique — c'est un trade-off co
 | Long contexte 200K | 200 000 | 2.00$ |
 | Long contexte 1M | 1 000 000 | 10.00$ |
 
-Envoyer 1M tokens à chaque requête ? Ça saigne le compte.
+Envoyer 1M tokens à chaque requête ? Avec 1000 requêtes par jour, c'est **10 000$ par jour**. Le RAG à 0.02$ par requête coûte 20$ par jour. Le facteur est de 500x. Pour des applications à fort volume, le long contexte est tout simplement impraticable financièrement.
 
-**Latence** :
-- RAG : 200ms (search) + 50ms (prefill 2K tokens) = ~250ms
-- Long contexte 200K : 5-15 secondes juste pour traiter le contexte
+**Latence** : chaque token en entrée doit être traité par le modèle avant de commencer à générer.
+- RAG : ~200ms (search vectorielle) + ~50ms (prefill 2K tokens) = **~250ms** avant le premier token
+- Long contexte 200K : **5-15 secondes** juste pour le prefill, avant même de commencer à répondre
+- Long contexte 1M : **30-60 secondes** de prefill
 
-**Précision** : le RAG retourne EXACTEMENT les passages pertinents, focalisant l'attention du modèle. Long contexte = chercher dans 500 pages. Ça dégrade la qualité.
+Pour une application interactive (chatbot, assistant), 15 secondes d'attente c'est une éternité.
+
+**Précision focalisée** : le RAG retourne EXACTEMENT les passages pertinents, focalisant l'attention du modèle. Avec un long contexte de 500 pages, le modèle doit trouver l'aiguille dans une botte de foin — et il n'est pas toujours bon à ça.
 
 <Callout type="paper" title="Lost in the middle">
-Les LLMs prêtent moins attention aux infos au milieu d'un long contexte. Début et fin ? Bien retenues. Milieu ? Oublié. Le RAG contourne ça en ne retournant que les passages pertinents.
+Un phénomène bien documenté : les LLMs prêtent moins attention aux informations situées au **milieu** d'un long contexte. Début et fin ? Bien retenus. Milieu ? Partiellement oublié. C'est un biais attentionnel lié à la distribution des positions vues pendant l'entraînement. Le RAG contourne élégamment ce problème en ne retournant que les passages pertinents, les plaçant en position de forte attention.
 </Callout>
 
-**Fraîcheur** : ajouter un doc au RAG = quelques secondes (embed + index). Long contexte = régénérer et retransmettre tout.
+**Fraîcheur des données** : ajouter un nouveau document au RAG = quelques secondes (embed + index). Avec le long contexte, il faut retransmettre tout le corpus à chaque requête — pas de notion d'incrémentalité.
 
-## Tableau de décision
+## Tableau de décision pratique
 
-**Long contexte si :**
-- Corpus < 50K tokens
-- Questions exigent vue d'ensemble
-- Simplicité = priorité
-- Budget permet
-- Peu de requêtes par jour
+**Utilisez le long contexte si :**
+- Corpus petit (< 50K tokens, soit ~30-40 pages)
+- Questions exigeant une vue d'ensemble ou des croisements d'information
+- Simplicité de développement = priorité absolue
+- Budget permet le coût par requête
+- Peu de requêtes par jour (< 100)
+- Prototype rapide ou proof of concept
 
-**RAG si :**
-- Corpus > 100K tokens
-- Questions ciblées
-- Volume high
-- Latence critique
+**Utilisez le RAG si :**
+- Corpus volumineux (> 100K tokens)
+- Questions ciblées appelant des réponses précises
+- Volume élevé de requêtes (centaines/milliers par jour)
+- Latence critique (< 1 seconde)
 - Budget serré
-- Docs changent souvent
+- Documents qui changent fréquemment
 
-**Hybride si :**
-- Questions variées
-- Besoin de précision max
-- RAG donne les passages pertinents, long contexte ajoute contexte global
+**Utilisez une approche hybride si :**
+- Questions variées (certaines locales, d'autres globales)
+- Besoin de précision maximale
+- RAG identifie les documents pertinents, long contexte permet de les lire en entier
 
-<Callout type="tip" title="Approche hybride intelligente">
-Utilisez RAG pour trouver les documents pertinents, puis injectez les **documents complets** (pas juste chunks) en long contexte. Best of both : précision du retrieval + contexte élargi du document entier.
+<Callout type="tip" title="L'approche hybride intelligente">
+La meilleure stratégie souvent : utilisez RAG pour **trouver** les documents pertinents (retrieval), puis injectez les **documents complets** (pas juste les chunks de 512 tokens) en long contexte. Vous combinez la précision du retrieval (trouver les bons docs) avec le contexte élargi (lire le document entier, pas juste un extrait). C'est le best of both worlds.
 </Callout>
 
 ## L'avenir va les rapprocher
 
-Les coûts baissent (ce qui coûte 10$ aujourd'hui coûtera 0.10$ demain). Les LLMs intègrent d'meilleure attention. RAG s'enrichit (Graph RAG, agents).
+Les coûts d'inférence baissent exponentiellement (ce qui coûte 10$ aujourd'hui coûtera probablement 0.10$ dans 2-3 ans). Les modèles développent une meilleure attention sur les longs contextes (le problème "lost in the middle" s'atténue). Le RAG s'enrichit avec Graph RAG, agents, et retrieval multi-modal.
 
-La tension va probablement se résoudre par convergence : les modèles futurs auront du retrieval natif, et le RAG utilisera des contextes plus longs.
+La tension va probablement se résoudre par **convergence** : les modèles futurs auront du retrieval natif intégré à l'architecture (certaines recherches vont dans ce sens), et les systèmes RAG utiliseront des contextes de plus en plus longs pour le raisonnement post-retrieval.
 
-<Callout type="warning" title="Pas de one-size-fits-all">
-Analysez VOS chiffres : volume de données, budget, latence acceptable, type de questions. Un RAG simple bien optimisé reste souvent plus rapide et moins cher qu'un long contexte mal utilisé.
+<Callout type="warning" title="Pas de solution universelle">
+Analysez VOS chiffres : volume de données, budget, latence acceptable, type de questions, fréquence de mise à jour. Un RAG simple bien optimisé reste souvent plus rapide et moins cher qu'un long contexte mal utilisé. Inversement, un long contexte sur un petit corpus est imbattable en simplicité. Ne suivez pas les modes — mesurez et décidez.
 </Callout>
 
-La vraie leçon : long contexte et RAG ne sont pas ennemis. C'est deux outils avec des forces différentes. Utilisez celui (ou l'approche hybride) qui répond à VOTRE cas d'usage.
+La vraie leçon : long contexte et RAG ne sont pas ennemis. Ce sont deux outils complémentaires avec des forces différentes. Utilisez celui (ou l'approche hybride) qui répond le mieux à VOTRE cas d'usage spécifique.

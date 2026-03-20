@@ -7,9 +7,11 @@ description: "Étude des Retention Networks (RetNet), une architecture proposant
 
 ## Trois modes pour le prix d'un
 
-Voici un problème que chaque chercheur en NLP affronte : à l'entraînement, on veut traiter toute la séquence en parallèle (c'est rapide). À l'inférence, on génère token par token (on veut que ce soit efficace). Et parfois, on veut un compromis — traiter un prompt long de manière semi-parallèle avant de générer.
+Voici un dilemme que chaque chercheur en NLP connaît bien. À l'entraînement, on veut traiter toute la séquence d'un coup, en parallèle — c'est comme ça que les GPU travaillent vite. À l'inférence, on génère les tokens un par un — et là, on veut que chaque token coûte le moins cher possible. Et puis il y a un troisième scénario : le prefill, quand on doit digérer un long prompt avant de commencer à générer. Là, il faut un compromis entre les deux.
 
-La plupart des architectures choisissent un mode et s'y tiennent. **RetNet**, proposé par Microsoft Research, a une ambition plus grande : supporter nativement **trois modes de calcul** qui sont mathématiquement équivalents.
+La plupart des architectures choisissent un seul mode et font avec. Les Transformers sont parallèles à l'entraînement mais traînent leur KV cache à l'inférence. Les RNN sont efficaces token par token mais impossibles à paralléliser pour l'entraînement. Toujours un sacrifice quelque part.
+
+**RetNet**, proposé par Microsoft Research, refuse ce compromis. Son ambition : supporter nativement **trois modes de calcul** qui sont mathématiquement équivalents — vous choisissez le meilleur selon la situation, sans jamais perdre en précision.
 
 <ArxivLink id="2307.08621" title="Retentive Network: A Successor to Transformer for Large Language Models" />
 
@@ -17,88 +19,91 @@ La plupart des architectures choisissent un mode et s'y tiennent. **RetNet**, pr
 
 ### L'idée centrale : attention avec décroissance exponentielle
 
-RetNet remplace l'attention par la **retention** — un mécanisme qui ressemble à l'attention mais avec une différence clé : les poids d'attention sont multipliés par un facteur de décroissance exponentielle selon la distance entre les tokens.
+RetNet remplace le mécanisme d'attention classique par la **retention** — un cousin de l'attention avec une différence fondamentale : les poids d'interaction entre tokens sont automatiquement pondérés par un facteur de décroissance exponentielle selon leur distance.
 
-```
-Retention(X) = (Q * K_transposé ⊙ D) * V
-```
+$$
+\text{Retention}(X) = (Q \cdot K^\top \odot D) \cdot V
+$$
 
 Où `D` est une matrice de masquage causal avec décroissance :
 
-```
-D[n,m] = gamma^(n-m)  si n >= m (token n est après token m)
-D[n,m] = 0            si n < m  (masquage causal)
-```
+$$
+D_{n,m} = \begin{cases} \gamma^{(n-m)} & \text{si } n \geq m \text{ (token } n \text{ est après token } m\text{)} \\ 0 & \text{si } n < m \text{ (masquage causal)} \end{cases}
+$$
 
-Le paramètre `gamma` (entre 0 et 1) contrôle la vitesse de décroissance. Avec `gamma = 0,99`, un token à 100 positions de distance aura un poids multiplié par `0,99^100 ≈ 0,37` — soit moins de la moitié du poids original.
+Le paramètre `gamma` (entre 0 et 1) contrôle la vitesse de cette décroissance. Prenons un exemple concret : avec `gamma = 0,99`, un token situé à 100 positions de distance verra son poids multiplié par `0,99^100 ≈ 0,37` — soit moins de la moitié du poids original. Un token à 500 positions ? Son poids tombe à `0,99^500 ≈ 0,007` — presque rien.
 
 <Callout type="info" title="Intuition de la retention">
-Imaginez lire un texte et mémoriser les phrases précédentes : les phrases juste au-dessus sont très fraîches dans votre esprit, celles de trois paragraphes plus haut un peu moins, et celles du début du chapitre encore moins. La retention encode mathématiquement cette décroissance naturelle de l'attention avec la distance — c'est un biais inductif raisonnable pour la plupart des textes.
+Imaginez que vous lisez un roman. Les phrases que vous venez de lire sont parfaitement claires dans votre esprit. Celles du paragraphe précédent sont encore là, mais un peu floues. Le premier chapitre ? Vous vous souvenez de l'idée générale, pas des mots exacts. La retention encode mathématiquement cette décroissance naturelle de la mémoire avec la distance. C'est un biais inductif raisonnable : dans la plupart des textes, le contexte immédiat compte plus que le contexte lointain.
 </Callout>
 
 ### Encodage de position dans l'espace complexe
 
 RetNet utilise une rotation complexe similaire à **RoPE** (Rotary Position Embedding) pour encoder les positions :
 
-```
-Q = (X * W_Q) ⊙ Theta
-K = (X * W_K) ⊙ Theta_conjugué
-```
+$$
+\begin{aligned}
+Q &= (X \cdot W_Q) \odot \Theta \\
+K &= (X \cdot W_K) \odot \overline{\Theta}
+\end{aligned}
+$$
 
-Où `Theta` contient des éléments `exp(i*n*theta)` — des nombres complexes qui tournent selon la position `n`. Cette formulation encode l'information positionnelle directement dans le mécanisme de retention, sans encodage positionnel séparé.
+Où `Theta` contient des éléments `exp(i*n*theta)` — des nombres complexes qui tournent selon la position `n`. Chaque position dans la séquence correspond à un angle de rotation différent. Quand on calcule le produit `Q * K^T`, les rotations se combinent pour produire un signal qui dépend de la distance relative entre les tokens — exactement ce qu'on veut pour encoder l'information positionnelle, sans avoir besoin d'un encodage séparé.
 
 ## Les trois paradigmes de calcul
 
-C'est la vraie valeur ajoutée de RetNet.
+C'est la vraie pépite de RetNet — et ce qui le distingue de tous ses concurrents.
 
 ### Mode parallèle : pour l'entraînement
 
 En mode parallèle, la retention se calcule comme une multiplication matricielle standard, similaire à l'attention :
 
-```
-Retention_parallèle(X) = (Q * K_transposé ⊙ D) * V
-```
+$$
+\text{Retention}_{\text{parallèle}}(X) = (Q \cdot K^\top \odot D) \cdot V
+$$
 
-Complexité : O(L² d), identique à l'attention standard. Parfaitement parallélisable sur GPU.
+Complexité : O(L² d), identique à l'attention standard. C'est parfaitement parallélisable sur GPU — chaque élément de la matrice peut être calculé indépendamment. On utilise ce mode à l'entraînement, là où la vitesse prime.
 
 ### Mode récurrent : pour l'inférence token par token
 
 En mode récurrent, la retention se reformule comme une récurrence avec un **état matriciel** `s` :
 
-```
-s_n = gamma * s_(n-1) + k_n_transposé * v_n   # mise à jour de l'état
-o_n = q_n * s_n                                 # sortie
-```
+$$
+\begin{aligned}
+s_n &= \gamma \cdot s_{n-1} + k_n^\top \cdot v_n & \text{(mise à jour de l'état)} \\
+o_n &= q_n \cdot s_n & \text{(sortie)}
+\end{aligned}
+$$
 
-L'état `s_n` est une **matrice de taille d x d** qui accumule les associations clé-valeur pondérées par la décroissance. Chaque nouveau token se calcule en O(d²), indépendamment de la longueur de la séquence.
+L'état `s_n` est une **matrice de taille d x d** qui accumule les associations clé-valeur, pondérées par la décroissance gamma. C'est comme un carnet de notes qui se met à jour à chaque nouveau token : les anciennes notes s'estompent progressivement (multiplication par gamma), et la nouvelle association clé-valeur s'ajoute. Chaque nouveau token se calcule en O(d²), indépendamment de la longueur de la séquence — fini le KV cache qui grossit sans fin.
 
 <Callout type="tip" title="Équivalence exacte entre les modes">
-Contrairement à certaines approximations (comme l'attention linéaire qui approxime le softmax), les trois modes de RetNet sont **mathématiquement identiques**. Le résultat numérique est exactement le même, que vous utilisiez le mode parallèle, récurrent, ou chunkwise. On peut s'entraîner en mode parallèle et inférer en mode récurrent sans aucune perte de précision — ce n'est pas une approximation.
+Contrairement à certaines approximations (comme l'attention linéaire qui approxime le softmax), les trois modes de RetNet sont **mathématiquement identiques**. Le résultat numérique est exactement le même, que vous utilisiez le mode parallèle, récurrent, ou chunkwise. On peut s'entraîner en mode parallèle et inférer en mode récurrent sans aucune perte de précision — ce n'est pas une approximation, c'est une reformulation exacte du même calcul.
 </Callout>
 
-### Mode chunkwise : le compromis
+### Mode chunkwise : le compromis intelligent
 
-Le mode chunkwise divise la séquence en morceaux (chunks) de taille B :
+Le mode chunkwise découpe la séquence en morceaux (chunks) de taille B, puis combine le meilleur des deux mondes :
 
-- **Intra-chunk** : calcul parallèle en mode parallèle au sein de chaque morceau
-- **Inter-chunk** : propagation récurrente de l'état entre morceaux
+- **Intra-chunk** : calcul parallèle au sein de chaque morceau (rapide, GPU-friendly)
+- **Inter-chunk** : propagation récurrente de l'état entre morceaux (mémoire fixe)
 
-```
-Retention_chunk(X_i) = (Q_i * K_i_transposé ⊙ D) * V_i + (Q_i * S_i) ⊙ xi
-```
+$$
+\text{Retention}_{\text{chunk}}(X_i) = (Q_i \cdot K_i^\top \odot D) \cdot V_i + (Q_i \cdot S_i) \odot \xi
+$$
 
-Ce mode est particulièrement utile pour traiter un long prompt (phase de prefill) : plus rapide que la récurrence pure, moins gourmand en mémoire que le mode parallèle sur une très longue séquence.
+Ce mode est idéal pour la phase de prefill : quand un utilisateur envoie un long prompt, on peut le digérer par morceaux — plus rapide que la récurrence pure (qui traite un token à la fois), moins gourmand en mémoire que le mode parallèle sur une très longue séquence.
 
 ## Multi-Scale Retention : plusieurs échelles de temps
 
-Comme le Multi-Head Attention utilise plusieurs têtes, RetNet utilise plusieurs têtes de retention avec des **taux de décroissance différents** :
+Comme le Multi-Head Attention utilise plusieurs têtes pour capturer différents aspects du contexte, RetNet utilise plusieurs têtes de retention avec des **taux de décroissance différents** :
 
-```
-gamma_h appartient à {1 - 2^(-5), 1 - 2^(-6), ..., 1 - 2^(-5-h)}
-```
+$$
+\gamma_h \in \{1 - 2^{-5},\; 1 - 2^{-6},\; \ldots,\; 1 - 2^{-(5+h)}\}
+$$
 
 <Callout type="paper" title="Multi-Scale Retention">
-Différentes valeurs de `gamma` permettent aux têtes de se spécialiser : une tête avec `gamma = 0,999` (décroissance très lente) capture les dépendances à longue portée — elle "se souvient" bien des tokens lointains. Une tête avec `gamma = 0,9` (décroissance rapide) se concentre sur les interactions locales. Ensemble, elles couvrent plusieurs échelles temporelles simultanément.
+Chaque valeur de `gamma` donne à une tête une "portée temporelle" différente. Une tête avec `gamma = 0,999` (décroissance très lente) se souvient bien des tokens lointains — elle capture les dépendances à longue portée, comme le thème général d'un paragraphe. Une tête avec `gamma = 0,9` (décroissance rapide) se concentre sur les quelques tokens immédiats — les accords grammaticaux, les relations syntaxiques locales. Ensemble, elles couvrent plusieurs échelles simultanément, un peu comme un orchestre où chaque instrument couvre une plage de fréquences différente.
 </Callout>
 
 ### Architecture complète d'un bloc RetNet
@@ -117,31 +122,31 @@ Chaque bloc RetNet contient :
 | Taille de l'état | KV cache = O(L*d) | Matrice O(d²) | Vecteur O(d) | Vecteur O(N*d) |
 | Mode chunkwise natif | Non | Oui | Possible | Oui (Mamba-2) |
 
-L'état matriciel d x d de RetNet est plus grand que l'état vectoriel de RWKV ou Mamba — ce qui lui donne potentiellement plus de capacité de mémorisation, au prix d'une mémoire d'inférence plus élevée.
+L'état matriciel d x d de RetNet est plus grand que l'état vectoriel de RWKV ou Mamba — ce qui lui donne potentiellement plus de capacité de mémorisation, au prix d'une mémoire d'inférence plus élevée. C'est un compromis explicite : plus d'information stockée par couche, mais un coût mémoire fixe plus conséquent.
 
 ## Forces et limitations
 
 ### Ce que RetNet fait bien
 
-- **Triple paradigme** : flexibilité unique, on choisit le mode selon le contexte d'utilisation
+- **Triple paradigme** : flexibilité unique, on choisit le mode selon le contexte d'utilisation — entraînement, inférence, ou prefill
 - **Pas de KV cache** : mémoire d'inférence fixe, indépendante de la longueur du contexte
-- **Équivalence mathématique** : pas de compromis de précision entre les modes
-- **Multi-échelle** : les différents gamma capturent différentes portées temporelles
+- **Équivalence mathématique** : pas de compromis de précision entre les modes, contrairement aux approximations d'attention linéaire
+- **Multi-échelle** : les différents gamma capturent naturellement différentes portées temporelles
 
 <Callout type="warning" title="Le coût de l'état matriciel">
-L'état récurrent de RetNet est une matrice d x d par tête. Pour une dimension cachée d = 4 096, chaque tête stocke une matrice de 16 millions d'éléments. Multiplié par 32 têtes et 32 couches, c'est ~16 milliards d'éléments en précision float16 — soit ~32 GB juste pour l'état. Beaucoup plus que RWKV ou Mamba, même si c'est toujours fixe en longueur de séquence.
+L'état récurrent de RetNet est une matrice d x d par tête. Pour une dimension cachée d = 4 096, chaque tête stocke une matrice de 16 millions d'éléments. Multiplié par 32 têtes et 32 couches, c'est ~16 milliards d'éléments en précision float16 — soit ~32 GB juste pour l'état. C'est beaucoup plus que RWKV ou Mamba, même si c'est toujours fixe en longueur de séquence. En pratique, cela peut limiter le nombre de requêtes qu'on peut traiter en parallèle sur un même GPU.
 </Callout>
 
 ### Ce que RetNet fait moins bien
 
-- **Décroissance fixe** : les taux gamma sont fixes, pas data-dependent (contrairement à Mamba). Le modèle ne peut pas décider dynamiquement de mémoriser plus longtemps un token important.
-- **Pas de sélectivité** : c'est un système LTI (temps-invariant), comme S4 avant Mamba.
-- **Adoption limitée** : peu de modèles de production utilisent RetNet, contrairement à Mamba ou RWKV.
+- **Décroissance fixe** : les taux gamma sont fixes après l'entraînement, pas data-dependent (contrairement à Mamba). Le modèle ne peut pas décider dynamiquement de mémoriser plus longtemps un token important — un mot-clé crucial est oublié au même rythme qu'un mot anodin.
+- **Pas de sélectivité** : c'est un système LTI (temps-invariant), comme S4 avant Mamba. Chaque token est traité avec le même filtre, sans adaptation au contenu.
+- **Adoption limitée** : peu de modèles de production utilisent RetNet, contrairement à Mamba ou RWKV qui ont des communautés actives.
 
 ## Héritage de RetNet
 
-RetNet a influencé plusieurs développements. Le framework SSD de Mamba-2, qui unifie les vues parallèle et récurrente des SSM, est conceptuellement proche du triple paradigme de RetNet. Le concept de "calcul chunkwise" est devenu un critère important pour évaluer les nouvelles architectures.
+Même si RetNet n'a pas été massivement adopté en production, ses idées ont eu un impact réel. Le framework SSD de Mamba-2, qui unifie les vues parallèle et récurrente des SSM, est conceptuellement très proche du triple paradigme de RetNet. Le concept de "calcul chunkwise" — ce compromis entre parallèle et récurrent — est devenu un critère d'évaluation standard pour les nouvelles architectures.
 
 <Callout type="tip" title="Où se situe RetNet dans l'écosystème ?">
-RetNet occupe un espace intermédiaire entre les Transformers (expressivité maximale, coût élevé) et les RNN classiques (efficacité maximale, expressivité limitée). Il offre un compromis pragmatique avec une garantie d'équivalence mathématique entre ses modes, ce qui le rend attrayant pour les déploiements qui doivent optimiser à la fois l'entraînement et l'inférence.
+RetNet occupe un espace intermédiaire entre les Transformers (expressivité maximale, coût élevé) et les RNN classiques (efficacité maximale, expressivité limitée). Son apport principal n'est peut-être pas l'architecture elle-même, mais la démonstration qu'on peut avoir l'équivalence exacte entre modes parallèle et récurrent — une idée qui a influencé toute la génération suivante d'architectures alternatives.
 </Callout>

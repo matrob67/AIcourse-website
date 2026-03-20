@@ -5,82 +5,89 @@ description: "Méthodes pratiques pour vérifier qu'un modèle fine-tuné foncti
 
 ## Le problème : le modèle oublie tout
 
-Imaginez un élève excellent qui apprend à devenir expert en pâtisserie. Super ! Mais s'il oublie toutes les maths en chemin, c'est un désastre. Exactement ce qui arrive au fine-tuning : en forçant un modèle à exceller sur une tâche spécifique, on risque de casser ses capacités générales.
+Imaginez un chirurgien brillant qui décide de se spécialiser en cardiologie. Après six mois intensifs, il est devenu excellent en cardiologie, mais il a oublié comment traiter une fracture. C'est exactement ce qui arrive avec le fine-tuning : en forçant un modèle à exceller sur une tâche spécifique, on risque de **casser ses capacités générales**. C'est ce qu'on appelle le "catastrophic forgetting" (oubli catastrophique).
+
+L'évaluation post fine-tuning, c'est le bilan de santé complet du modèle. On ne vérifie pas juste qu'il fait bien sa nouvelle tâche : on vérifie qu'il n'a rien perdu en route.
 
 <Callout type="warning" title="Le piège du loss faible">
-Une loss d'entraînement qui diminue ne signifie pas que tout va bien. C'est comme un élève qui bachoté pour l'examen final en oubliant le reste du programme. On doit tester partout, pas juste sur la tâche ciblée.
+Une loss d'entraînement qui diminue ne signifie PAS que tout va bien. C'est comme un étudiant qui a bachoté uniquement les annales de l'examen : sa note monte sur cet examen précis, mais il n'a peut-être rien compris au reste du programme. On doit tester sur plusieurs fronts, pas juste sur la tâche ciblée.
 </Callout>
 
 ## Les trois piliers de l'évaluation
 
-### 1. La tâche cible
+Pour évaluer correctement un modèle fine-tuné, il faut vérifier trois dimensions. Ignorer l'une d'entre elles, c'est piloter à l'aveugle.
 
-Vérifier que le modèle fait vraiment bien ce pour quoi on l'a entraîné :
+### 1. La tâche cible (est-ce que ça marche ?)
 
-- **Classification** : accuracy, F1-score
-- **Génération de texte** : BERTScore, ROUGE
-- **Suivre des instructions** : AlpacaEval (test sur 805 instructions)
-- **Code** : HumanEval (résoudre 164 problèmes de programmation)
+C'est le test évident : votre modèle fait-il bien ce pour quoi vous l'avez entraîné ?
 
-### 2. Les capacités générales
+- **Classification** : accuracy, F1-score (surtout si classes déséquilibrées)
+- **Génération de texte** : BERTScore (similarité sémantique via embeddings BERT), ROUGE — Recall-Oriented Understudy for Gisting Evaluation (recoupement de n-grammes)
+- **Suivi d'instructions** : AlpacaEval (test sur 805 instructions variées, jugées par un LLM)
+- **Code** : HumanEval (le modèle doit résoudre 164 problèmes de programmation fonctionnels)
 
-Tester que le modèle n'a rien oublié :
+### 2. Les capacités générales (est-ce qu'il a tout oublié ?)
 
-- **Raisonnement** : ARC (160 questions de physique)
-- **Connaissances** : MMLU (15 500 questions sur tous les sujets)
-- **Mathématiques** : GSM8K (problèmes de maths de primaire)
+C'est le test critique que beaucoup oublient. Votre modèle a-t-il conservé son savoir général ?
 
-### 3. Sécurité et comportement
+- **Raisonnement** : ARC (160 questions de physique et raisonnement scientifique)
+- **Connaissances** : MMLU (15 500 questions couvrant 57 domaines, du droit à la biologie)
+- **Mathématiques** : GSM8K (problèmes de maths de niveau primaire, qui testent le raisonnement pas-à-pas)
 
-Vérifier qu'il n'est pas devenu toxique ou bizarre :
+### 3. Sécurité et comportement (est-ce qu'il est devenu bizarre ?)
 
-- **Toxicité** : RealToxicityPrompts (200 prompts qui testent la sécurité)
-- **Refus** : le modèle refuse-t-il toujours les requêtes dangereuses ?
+Le fine-tuning peut involontairement "désaligner" un modèle, le rendant plus toxique ou moins prudent :
 
-<Callout type="info" title="La recette d'or">
-Testez minimum sur 3 dimensions : votre tâche cible (100%), un benchmark de capacités générales (30-50%), un test de sécurité (20-30%). C'est assez pour détecter les gros problèmes.
+- **Toxicité** : RealToxicityPrompts (200 prompts conçus pour provoquer des réponses problématiques)
+- **Refus** : le modèle refuse-t-il toujours les requêtes dangereuses, ou le fine-tuning a-t-il érodé ses garde-fous ?
+
+<Callout type="info" title="La règle d'or : testez sur 3 dimensions minimum">
+Testez votre tâche cible (objectif principal), un benchmark de capacités générales (MMLU, ARC), et un test de sécurité. C'est le minimum pour détecter les problèmes majeurs avant de déployer. Ça prend quelques heures, mais ça peut sauver des semaines de debug en production.
 </Callout>
-
-
 
 ## Les juges automatiques (LLM-as-Judge)
 
-Au lieu de faire lire manuellement 1000 réponses par un humain (trop cher et lent), on utilise un **autre LLM pour juger**. GPT-4 peut noter si la réponse d'un Mistral est bonne.
+Faire lire 1 000 réponses par un humain, c'est lent et cher. L'alternative : utiliser un **LLM plus puissant comme juge**. GPT-4 peut noter si la réponse de votre Mistral fine-tuné est bonne, pertinente, et bien structurée.
+
+Concrètement, vous donnez au juge le prompt original, la réponse de votre modèle, et vous lui demandez de noter sur une échelle (par exemple 1 à 10) avec justification.
 
 **Avantages :**
-- Rapide et pas cher
-- Réplicable (même prompt = mêmes résultats)
+- Rapide (des milliers d'évaluations en minutes)
+- Peu coûteux comparé aux annotateurs humains
+- Réplicable (même prompt de jugement = résultats cohérents)
 
 **Pièges à connaître :**
-- Le juge préfère souvent la première réponse (biais de position)
-- Les réponses longues et bavârdes sont favorisées
-- GPT-4 note mieux les réponses qui ressemblent à GPT-4
+- **Biais de position** : le juge préfère souvent la première réponse quand il en compare deux
+- **Biais de verbosité** : les réponses longues et bavardes sont favorisées, même si une réponse concise est meilleure
+- **Auto-préférence** : GPT-4 note mieux les réponses qui ressemblent au style de GPT-4
 
-<Callout type="tip" title="Bonnes pratiques">
-Utilisez un juge plus puissant que votre modèle (GPT-4 pour évaluer Mistral). Mélangez l'ordre des réponses. Demandez au juge d'expliquer son raisonnement. Deux juges c'est mieux qu'un.
+<Callout type="tip" title="Bonnes pratiques pour le LLM-as-Judge">
+Utilisez un juge plus puissant que votre modèle (GPT-4 pour évaluer Mistral-7B). Mélangez l'ordre des réponses pour neutraliser le biais de position. Demandez au juge d'expliquer son raisonnement avant de donner sa note. Et idéalement, utilisez deux juges différents et comparez.
 </Callout>
 
-## Détecter la catastrophe oubli
+## Détecter le catastrophic forgetting
 
-Comparez les scores avant et après fine-tuning :
+La méthode la plus fiable : comparez les scores du modèle **avant et après** fine-tuning sur les mêmes benchmarks.
 
 | Benchmark | Avant | Après | Changement |
 |---|---|---|---|
-| Votre tâche | 45% | 85% | +40% ✓ |
-| MMLU | 62% | 61% | -1% ✓ |
-| GSM8K | 55% | 54% | -1% ✓ |
+| Votre tâche | 45% | 85% | +40% |
+| MMLU | 62% | 61% | -1% |
+| GSM8K | 55% | 54% | -1% |
 
-Une baisse de 1-2% est normal (juste un peu d'oubli). Au-delà de 5%, il y a problème.
+Une baisse de 1-2% est normale et acceptable (le modèle "oublie" un tout petit peu en se spécialisant). Au-delà de 5% de baisse sur un benchmark général, c'est un signal d'alarme. À 10%+, il y a un vrai problème.
 
-**Signaux d'alerte :**
-- Perte importante sur MMLU (oubli des connaissances)
-- Textes deviennent incohérents sur de longs passages
-- Réponses plus toxiques ou bizarres
-- Hallucinations qui n'existaient pas avant
+**Signaux d'alerte concrets :**
+- Chute importante sur MMLU (perte de connaissances factuelles)
+- Textes qui deviennent incohérents sur de longs passages (perte de cohérence)
+- Réponses plus toxiques ou offensantes qu'avant (érosion de l'alignement)
+- Hallucinations nouvelles qui n'existaient pas dans le modèle de base
 
 ## Les outils pratiques
 
 ### lm-evaluation-harness (le couteau suisse)
+
+C'est l'outil de référence pour l'évaluation automatisée. Il supporte des dizaines de benchmarks et produit des résultats comparables :
 
 ```bash
 lm_eval --model hf \
@@ -89,25 +96,27 @@ lm_eval --model hf \
     --batch_size 8
 ```
 
-Testez tout d'un coup.
+Une seule commande pour tester sur trois benchmarks. Les résultats sont directement comparables avec ceux publiés par d'autres équipes.
 
 ### Évaluation personnalisée
 
-Créez votre propre test :
-- **20-50 exemples** que le modèle n'a jamais vus
-- **Cas limites** (textes bizarres, questions pièges)
-- **Variantes** (même question, formulée différemment)
+Les benchmarks standards ne couvrent pas toujours votre cas d'usage spécifique. Créez votre propre jeu de test :
+- **20-50 exemples** que le modèle n'a jamais vus pendant l'entraînement
+- **Cas limites** : textes inhabituels, questions pièges, entrées mal formatées
+- **Variantes de formulation** : la même question posée de trois manières différentes
 
-<Callout type="warning" title="Attention à la triche">
-Si vos données d'entraînement contiennent des questions du benchmark d'évaluation, les résultats sont pourris. Vérifiez qu'il n'y a pas de chevauchement. Utilisez des benchmarks privés ou dynamiques si vous êtes paranoïaque.
+Cet ensemble personnalisé est souvent le plus révélateur, parce qu'il teste exactement ce que vous allez demander au modèle en production.
+
+<Callout type="warning" title="Attention à la contamination des données">
+Si vos données d'entraînement contiennent des questions du benchmark d'évaluation, vos résultats sont trompeurs : le modèle récite au lieu de raisonner. Vérifiez systématiquement qu'il n'y a pas de chevauchement entre entraînement et évaluation. Pour les cas critiques, utilisez des benchmarks privés ou des benchmarks dynamiques qui changent régulièrement.
 </Callout>
 
-## Workflow recommandé (5 étapes)
+## Workflow recommandé en 5 étapes
 
-1. **Test rapide** : quelques exemples manuels (1 heure)
-2. **Benchmark rapide** : AlpacaEval ou MT-Bench (1-2 heures)
-3. **Batterie complète** : lm-eval-harness sur 4 benchmarks (4-6 heures)
-4. **Révision humaine** : 50-100 exemples lus par un expert (2-4 heures)
-5. **Tests de robustesse** : textes bizarres, longueurs variables, autres langues (1 heure)
+1. **Test rapide** (1h) : quelques exemples manuels, vérification visuelle que le modèle répond correctement
+2. **Benchmark rapide** (1-2h) : AlpacaEval ou MT-Bench pour un premier score global
+3. **Batterie complète** (4-6h) : lm-eval-harness sur MMLU, GSM8K, HellaSwag, ARC
+4. **Révision humaine** (2-4h) : un expert lit 50-100 réponses et note la qualité subjective
+5. **Tests de robustesse** (1h) : textes inhabituels, longueurs extrêmes, langues non vues, prompts adversariaux
 
-Au total : un jour de travail pour être sûr de ce qu'on a.
+Au total, c'est une journée de travail pour être confiant dans votre modèle. C'est un investissement modeste comparé au coût de déployer un modèle cassé en production.

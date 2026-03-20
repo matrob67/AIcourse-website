@@ -5,11 +5,11 @@ description: "Comprendre MSE, cross-entropy, triplet loss et autres. Comment cho
 
 ## Introduction : La perte c'est ton objectif
 
-La **fonction de perte** mesure "combien tu te trompes". Le nombre unique qui dit : "Modèle, tu es nul (perte haute) ou bon (perte basse)".
+La **fonction de perte** (ou loss function) est le nombre unique qui dit a ton modele "a quel point tu te trompes". Une perte haute signifie que le modele fait n'importe quoi, une perte basse signifie qu'il fait du bon travail. C'est ce nombre que l'optimiseur cherche a minimiser a chaque etape d'entrainement.
 
-C'est **crucial** : le choix de la perte définit littéralement ce que ton modèle apprend. Change la perte = change complètement le comportement.
+Ce choix est **crucial** car la perte definit litteralement ce que le modele apprend a optimiser. Deux pertes differentes sur les memes donnees et la meme architecture produiront deux modeles aux comportements completement differents.
 
-Exemple : une perte qui pénalise les erreurs légères uniformément vs une qui écrase les erreurs énormes. Deux modèles totalement différents.
+Prenons un exemple concret : une perte qui penalise toutes les erreurs de maniere uniforme (MAE) va produire un modele "equilibre" qui ne se laisse pas perturber par les cas extremes. Une perte qui ecrase les grosses erreurs (MSE) va produire un modele obsede par les cas difficiles, quitte a sacrifier un peu de precision sur les cas faciles. Meme donnees, meme architecture, comportements opposes.
 
 
 
@@ -17,34 +17,34 @@ Exemple : une perte qui pénalise les erreurs légères uniformément vs une qui
 
 **Mean Squared Error**. Pour la régression (prédire un nombre continu).
 
-```
-MSE = moyenne de (prédiction - réalité)²
-```
+$$
+\text{MSE} = \frac{1}{n} \sum_{i=1}^{n} (\hat{y}_i - y_i)^2
+$$
 
 Exemple : tu prédis le prix d'une maison.
 - Maison 1 : tu dis 400k, c'est 400k. Erreur = 0. Contribution à MSE = 0.
 - Maison 2 : tu dis 500k, c'est 450k. Erreur = 50k. Contribution = (50k)² = 2.5 milliards.
 - Maison 3 : tu dis 405k, c'est 400k. Erreur = 5k. Contribution = (5k)² = 25 millions.
 
-### Pourquoi le carré ?
+### Pourquoi le carre ?
 
-Le carré pénalise **fortement** les gros erreurs. Une erreur de 10 vaut 100 fois plus qu'une erreur de 1 (10² vs 1²).
+Le carre penalise **disproportionnellement** les grosses erreurs. Une erreur de 10 contribue 100 fois plus a la perte qu'une erreur de 1 ($10^2 = 100$ vs $1^2 = 1$). C'est une propriete a double tranchant.
 
-C'est bien si les gros erreurs sont catastrophiques (prédire 100k au lieu de 0 pour un prix, c'est dingue).
+C'est un **avantage** quand les grosses erreurs sont catastrophiques. Si tu predis le prix d'une maison, une erreur de 100k euros est bien plus grave qu'une erreur de 5k, et le carre reflète cette realite en la penalisant 400 fois plus.
 
-C'est mal si tu as des **outliers bizarres** (un appartement à 10M d'euros distortionne complètement la MSE).
+C'est un **inconvenient** quand tes donnees contiennent des **outliers** (valeurs aberrantes). Un seul appartement a 10 millions d'euros dans ton dataset va dominer completement la MSE et forcer le modele a sacrifier sa precision sur tous les autres exemples juste pour reduire cette unique erreur extreme.
 
 ### Variante : MAE
 
 **Mean Absolute Error** :
 
-```
-MAE = moyenne de |prédiction - réalité|
-```
+$$
+\text{MAE} = \frac{1}{n} \sum_{i=1}^{n} |\hat{y}_i - y_i|
+$$
 
-Pas de carré. Linéaire. Une erreur de 10 vaut juste 10 fois plus qu'une erreur de 1.
+Pas de carre, la penalite est lineaire. Une erreur de 10 ne vaut que 10 fois une erreur de 1, pas 100 fois. C'est beaucoup plus robuste face aux outliers : une valeur aberrante aura un impact proportionnel, pas explosif.
 
-Plus "douce" avec les outliers. Utilise si tes données ont des valeurs bizarres.
+En pratique, il existe aussi la **Huber loss** (ou Smooth L1), qui combine le meilleur des deux mondes : elle se comporte comme la MSE pour les petites erreurs (gradient lisse pres de zero) et comme la MAE pour les grandes (pas d'explosion due aux outliers). C'est un excellent choix par defaut quand tu n'es pas sur de la distribution de tes erreurs.
 
 ## Cross-Entropy : classification
 
@@ -52,27 +52,27 @@ Plus "douce" avec les outliers. Utilise si tes données ont des valeurs bizarres
 
 Pour classifier entre 2 catégories (spam vs pas spam, chat vs pas chat).
 
-```
-BCE = -(y * log(prédiction) + (1-y) * log(1-prédiction))
-```
+$$
+\text{BCE} = -\left[ y \cdot \log(\hat{y}) + (1 - y) \cdot \log(1 - \hat{y}) \right]
+$$
 
-Où y = 0 ou 1 (vraie classe), prédiction entre 0 et 1.
+Ici, $y$ est la vraie classe (0 ou 1), et $\hat{y}$ est la probabilite predite par le modele (entre 0 et 1, sortie d'une activation sigmoide).
 
+La beaute de cette formule : seul le terme correspondant a la vraie classe "compte". Si $y = 1$, la perte vaut $-\log(\hat{y})$. Si le modele predit $\hat{y} = 0.99$ (confiant et correct), $-\log(0.99) = 0.01$, quasi zero. Si le modele predit $\hat{y} = 0.01$ (confiant et **faux**), $-\log(0.01) = 4.6$, une penalite enorme.
 
+**Pourquoi pas MSE pour la classification ?** Avec MSE et une activation sigmoide, quand le modele predit 0.01 pour une vraie valeur de 1, le gradient est proportionnel a $2 \times (0.01 - 1) \times \sigma'(...)$, et la derivee de la sigmoide est quasiment nulle dans cette zone. Le modele est tres loin de la bonne reponse mais recoit un gradient minuscule, il n'apprend presque rien.
 
-**Pourquoi pas MSE ?** Avec MSE et une activation sigmoïde, quand tu prédis 0.01 pour une vraie valeur de 1, le gradient est faible (peu de correction).
-
-Avec cross-entropy, log(0.01) = -4.6. C'est énorme ! Le modèle est brutalement pénalisé d'être confiant ET faux.
+Avec la cross-entropy, le gradient reste fort meme quand le modele se trompe avec confiance. C'est exactement ce qu'on veut : penaliser brutalement le modele quand il est confiant ET faux.
 
 ### Categorical Cross-Entropy (3+ classes)
 
-Pour 3, 5, 10 catégories.
+C'est l'extension naturelle de la BCE pour 3 classes ou plus (chien, chat, oiseau, etc.).
 
-```
-Loss = -somme de (vraie_classe * log(probabilité_prédite))
-```
+$$
+\mathcal{L} = -\sum_{c=1}^{C} y_c \cdot \log(\hat{y}_c)
+$$
 
-Le modèle produit un score pour chaque classe. Un softmax les convertit en probabilités qui somment à 1.
+Le modele produit un score brut (logit) pour chaque classe. Un softmax convertit ces scores en probabilites qui somment a 1. La perte ne penalise que la probabilite attribuee a la bonne classe : si la vraie classe est "chat" et que le modele lui attribue 95% de probabilite, la perte est faible. S'il ne lui attribue que 5%, la perte est enorme.
 
 <Callout type="info" title="Implémentation stable">
 Combines jamais softmax puis log séparément. Utilise `cross_entropy_with_logits` ou `log_softmax`. C'est mathématiquement équivalent mais numériquement plus stable (avoid log de nombres minuscules).
@@ -87,9 +87,9 @@ Utilisations :
 - Recherche d'images similaires : la requête et les résultats pertinents doivent être proches dans l'espace
 - Embeddings de texte : deux phrases qui signifient la même chose doivent être proches
 
-```
-Loss = (si différent) * distance² + (si pareil) * max(0, marge - distance)²
-```
+$$
+\mathcal{L} = (1 - y) \cdot d^2 + y \cdot \max(0, m - d)^2
+$$
 
 Les éléments d'une même classe sont attirés ensemble. Les éléments de classes différentes sont repoussés — mais seulement jusqu'à une certaine marge. Au-delà, la pénalité est nulle : inutile de les repousser infiniment loin, il suffit qu'ils soient assez distincts.
 
@@ -97,9 +97,9 @@ Les éléments d'une même classe sont attirés ensemble. Les éléments de clas
 
 Variation : prends 3 exemples : l'**ancre**, un **positif** (même classe) et un **négatif** (classe différente).
 
-```
-Loss = max(0, distance(ancre, positif) - distance(ancre, négatif) + marge)
-```
+$$
+\mathcal{L} = \max\left(0,\ d(a, p) - d(a, n) + m\right)
+$$
 
 Force l'ancre à être plus proche du positif que du négatif. Si ça réussit déjà, loss = 0. Si ça échoue, pénalité.
 
@@ -117,13 +117,13 @@ Inutile.
 
 **Focal Loss** réduit l'importance des cas **faciles à bien classer** :
 
-```
-Loss = -(1 - prédiction)^2 * log(prédiction)
-```
+$$
+\mathcal{L} = -(1 - \hat{y})^\gamma \cdot \log(\hat{y})
+$$
 
-Le facteur (1 - prédiction)^2 est 1 si tu es très confiant et faux (besoin d'apprendre), proche de 0 si tu es correct (déjà bon, pas besoin d'apprendre).
+Le facteur de modulation $(1 - \hat{y})^\gamma$ est la cle. Quand le modele predit correctement avec haute confiance ($\hat{y}$ proche de 1), ce facteur vaut presque zero : le cas facile contribue tres peu a la loss. Quand le modele se trompe ($\hat{y}$ proche de 0), le facteur vaut presque 1 : le cas difficile contribue pleinement. Le parametre $\gamma$ (typiquement 2) controle l'intensite de cette modulation.
 
-Résultat : ton modèle ignore les cas faciles et focus sur les difficiles.
+Resultat : au lieu de noyer le signal d'apprentissage sous des millions de cas triviaux, le modele concentre son effort sur les cas difficiles, ceux ou il se trompe vraiment. C'est comme si le prof arretait de poser des questions auxquelles l'eleve sait deja repondre et se concentrait sur ses points faibles.
 
 <Callout type="tip" title="Utilisée au-delà de la détection">
 Partout où tu as un énorme déséquilibre de classes : détection de fraude (99.9% légitime), diagnostics de maladies rares, détection d'anomalies. Focal loss aide le modèle à pas devenir "paresseux".
@@ -135,13 +135,13 @@ Les modèles comme **CLIP** (qui joint vision + texte) et **SimCLR** (pour l'app
 
 C'est une cross-entropy appliquée aux similarités entre représentations :
 
-```
-Loss = -log(exp(sim_positive / T) / somme(exp(sim_j / T)))
-```
+$$
+\mathcal{L} = -\log \frac{\exp(\text{sim}(z_i, z_p) / \tau)}{\sum_{j} \exp(\text{sim}(z_i, z_j) / \tau)}
+$$
 
-Où T (température) contrôle le "piquant" : plus T grand = apprentissage plus doux.
+Le parametre $\tau$ (temperature) controle la "selectivite" de la distribution. Avec un $\tau$ faible, la distribution softmax devient tres piquee : seul le positif le plus similaire compte. Avec un $\tau$ eleve, la distribution est plus lisse et le modele apprend de maniere plus douce.
 
-Intuition : maximise la similarité avec le positif, minimise avec les négatifs. Comme triplet loss mais plus stable.
+L'intuition est simple : c'est une cross-entropy ou les "classes" sont les paires positives et negatives. Le modele apprend a maximiser la similarite avec le positif tout en minimisant la similarite avec tous les negatifs du batch simultanement. Par rapport a la triplet loss, InfoNCE est plus stable car elle utilise tous les negatifs du batch en une seule passe, ce qui donne un signal d'apprentissage plus riche et moins bruite.
 
 ## Tableau récapitulatif
 

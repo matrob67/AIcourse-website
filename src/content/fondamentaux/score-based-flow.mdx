@@ -11,9 +11,9 @@ C'est **exactement** ce que les modèles génératifs basés sur le **score** fo
 
 Le **score**, c'est ce cri : une flèche pointant vers où les vraies données sont plus denses. Mathématiquement, c'est le gradient (la pente) de la densité de probabilité :
 
-```
-score(x) = gradient log p(x)
-```
+$$
+s(x) = \nabla_x \log p(x)
+$$
 
 Traduction : "Dans quel sens la densité de vraies données augmente-t-elle le plus ?"
 
@@ -33,11 +33,9 @@ Pour chaque image floue, le **score** (la direction à suivre) est facile à cal
 
 Maintenant : entraînez le réseau sur tous ces cas flous. "Voici une image floue. Dis-moi dans quelle direction bouger les pixels pour la rendre moins floue."
 
-```
-1. Bruiter les donnees: image_floue = image_claire + bruit
-2. Le score est simple: score = -(image_floue - image_claire) / variance_du_bruit
-3. Entraîner le reseau: Loss = Erreur(prediction_du_reseau - score_reel)
-```
+1. **Bruiter les données** : $\tilde{x} = x + \epsilon$
+2. **Le score est simple** : $s = -(\tilde{x} - x) / \sigma^2$
+3. **Entraîner le réseau** : $L = \| s_\theta(\tilde{x}) - s_{\text{réel}} \|^2$
 
 L'astuce : le réseau apprend à **enlever du bruit** sans jamais voir une image totalement claire. Juste le pattern de "quelle direction nettoyer".
 
@@ -55,9 +53,9 @@ Après l'entraînement, comment générer une image ? Simples étapes :
 4. Ajoutez un tout petit bruit aléatoire pour l'exploration
 5. Répétez des centaines de fois
 
-```
-image_nouvelle = image_ancienne + (petit_pas / 2) * score(image_ancienne) + bruit_alea
-```
+$$
+x_{t+1} = x_t + \frac{\eta}{2} \, s_\theta(x_t) + \sqrt{\eta} \, z, \quad z \sim \mathcal{N}(0, I)
+$$
 
 C'est comme marcher dans le brouillard en demandant la direction à chaque pas. Vous n'allez jamais en ligne droite, mais finalement, vous émergerez vers une vraie donnée.
 
@@ -70,10 +68,13 @@ En 2021, Song et al. ont découvert quelque chose de fascinant : **tous** les mo
 
 En français simple : comment transformer progressivement une chose en une autre en ajoutant/retirant du bruit ?
 
-```
-En avant (ajouter du bruit):  dx = drift(x, t) dt + variance(t) bruit_aleatoire
-En arrière (enlever du bruit): dx = [drift - variance^2 * score] dt + variance inverse_bruit
-```
+$$
+\text{En avant :} \quad dx = f(x, t)\,dt + g(t)\,dW
+$$
+
+$$
+\text{En arrière :} \quad dx = \left[f(x,t) - g(t)^2 \, \nabla_x \log p_t(x)\right] dt + g(t)\,d\bar{W}
+$$
 
 Rien que pour fun, voici ce que cela signifie : vous avez des **mouvements déterministes** (drift) + du **hasard** (le bruit aléatoire). En avant : vous partez d'une donnée réelle et ajoutez du bruit. En arrière : vous partez du bruit pur et enlevez le bruit en utilisant le score que vous avez appris.
 
@@ -89,12 +90,17 @@ Après les SDE complexes, une idée plus simple a émergé : **oubliez les équa
 
 L'idée : prenez du bruit. Prenez une vraie donnée. Maintenant, imaginez une ligne droite les reliant. Demandez au réseau : "A chaque point sur cette ligne, quel est le vecteur de vitesse pour aller vers la donnée réelle ?"
 
-```
-trajectoire_interpolee = (1-t) * bruit_pur + t * donnee_reelle
-vitesse = donnee_reelle - bruit_pur
+$$
+x_t = (1 - t) \cdot z + t \cdot x_1, \quad z \sim \mathcal{N}(0, I)
+$$
 
-L = Erreur(reseau_dit_vitesse - vraie_vitesse)
-```
+$$
+v = x_1 - z
+$$
+
+$$
+L = \| v_\theta(x_t, t) - v \|^2
+$$
 
 Incroyablement simple. Pas de bruit, pas de schedules complexes. Juste : "prédis la direction du déplacement".
 
@@ -116,13 +122,11 @@ Si les trajets sont droits, vous pourriez générer en une seule étape. Un simp
 
 **Rectified flows** : il y a une astuce itérative pour redresser les trajets :
 
-```
-Iteration 1: Entraîner flow matching normal
-Iteration 2: Generer beaucoup de trajets avec ce modele
-Iteration 3: Les analyser - remarquer qu'ils sont courbes
-Iteration 4: Re-entraîner sur ces trajets pour les rendre droits
-Iteration 5: Recommencer - les trajets deviennent plus droits à chaque fois
-```
+1. Entraîner le flow matching normal
+2. Générer beaucoup de trajets avec ce modèle
+3. Les analyser -- remarquer qu'ils sont courbes
+4. Ré-entraîner sur ces trajets pour les rendre droits
+5. Recommencer -- les trajets deviennent plus droits à chaque itération
 
 Résultat après quelques itérations : **génération en une seule étape**. Vous partez du pur bruit, vous faites un énorme pas dans la direction que le réseau a apprise, et vous avez une image photorealiste. Une étape. Révolutionnaire.
 

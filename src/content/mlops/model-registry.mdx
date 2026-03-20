@@ -5,145 +5,129 @@ description: "Centralisez vos modèles. Versionnage, staging, production. Un seu
 
 ## Le chaos avant un Model Registry
 
-Vous avez entraîné 100 modèles. Lequel est en production ? Lequel était là avant ? Comment revenir en arrière ? Quel dataset a produit ce modèle ?
+Vous avez entraîné 100 modèles en 6 mois. Lequel est en production ? Lequel était là avant ? Comment revenir en arrière si le nouveau modèle fait n'importe quoi ? Quel dataset a produit ce modèle ? Quels hyperparamètres ?
 
-Sans un registry, c'est du chaos. Les modèles sont sur des disques, des S3 buckets, des machines différentes. `model_v3_final_FINAL_v2.pt` → quoi ? Personne ne sait.
+Sans un registry, c'est le chaos. Les modèles sont éparpillés sur des disques locaux, des buckets S3, des machines différentes. `model_v3_final_FINAL_v2.pt` : personne ne sait ce que c'est, même pas celui qui l'a entraîné il y a 3 mois.
 
-Un **Model Registry** = source de vérité pour les modèles.
+Un **Model Registry**, c'est une source de vérité unique pour tous vos modèles. C'est comme Git pour le code, mais pour les modèles ML. Chaque modèle est versionné, documenté, tracé. Vous savez toujours exactement quel modèle est en production, d'où il vient, et comment le remplacer.
 
-<Callout type="info" title="Le cycle : de développement à la poubelle">
-Développement → Staging (tests pre-prod) → Production (live) → Archived (vieux). Le registry gère ces transitions et sait toujours où vous en êtes.
+<Callout type="info" title="Le cycle de vie d'un modèle">
+Développement (expérimentation) → Staging (tests pré-production) → Production (live, avec les vrais utilisateurs) → Archived (retiré, mais conservé pour référence). Le registry gère ces transitions et maintient un historique complet. À tout moment, vous savez où en est chaque modèle.
 </Callout>
 
-
-
-## Les trucs fondamentaux qu'il faut
+## Les fonctionnalités fondamentales
 
 ### Versioning
-Chaque modèle a des versions. V1 = BERT-base, V2 = BERT + plus de data. Chaque version = metadata (accuracy, learning rate, dataset version).
+
+Chaque modèle a des versions numérotées. V1 = BERT-base entraîné sur 10K exemples. V2 = BERT-base avec plus de données. V3 = RoBERTa avec une nouvelle architecture. Chaque version est un artefact immuable : une fois enregistré, il ne change plus. C'est comme un tag Git : un instantané figé dans le temps.
 
 ### Metadata complète
-Pour chaque version : commit hash du code, version du dataset, hyperparamètres, métriques de test. **Tout**. Parce que sinon, reproduire devient impossible.
+
+Pour chaque version du modèle, le registry stocke : le commit hash du code, la version du dataset d'entraînement, tous les hyperparamètres, les métriques sur le test set (accuracy, F1, latence), l'environnement (versions des librairies). **Tout**. Parce que sans ces informations, reproduire un résultat ou comprendre pourquoi un modèle se comporte ainsi devient un casse-tête.
 
 ### Les stades du modèle
-None (pas livré) → Staging (test pré-prod) → Production (live avec les users) → Archived (vieux). Chaque transition = tracée avec qui et pourquoi.
+
+Un modèle passe par des stades bien définis : None (pas encore prêt) → Staging (en cours de test pré-prod) → Production (live avec les utilisateurs) → Archived (retiré). Chaque transition est tracée : qui l'a promue, quand, et pourquoi. C'est un audit trail complet.
 
 ### Reproductibilité
-Vous trouvez un modèle en prod, vous devez pouvoir remonter à exactement quel code, quel dataset, quels hyperparam ont produit ça.
+
+Vous trouvez un modèle en production qui fait des prédictions bizarres. Vous devez pouvoir remonter à exactement quel code, quel dataset, quels hyperparamètres l'ont produit. Sans cette traçabilité, le debugging en production est un cauchemar. Le registry est le fil d'Ariane qui vous ramène toujours à l'origine.
 
 ## MLflow Model Registry
 
-**MLflow** c'est l'outil le plus utilisé. C'est intégré avec MLflow Tracking (où vous avez loggé votre entraînement).
+**MLflow** est l'outil de model registry le plus utilisé. Il s'intègre avec MLflow Tracking (là où vous avez loggé vos expériences d'entraînement), ce qui crée un pipeline naturel : vous entraînez, vous loggez, vous enregistrez le meilleur modèle dans le registry.
 
-### Le workflow basique
+### Le workflow typique
 
-```
-Vous entraînez via MLflow → ça crée un run
-Vous enregistrez le modèle → ça crée une version
-Vous le taggez "Staging" → ça le marque pour test
-Vous le testez → ça marche
-Vous le taggez "Production" → ça le met live
-Problème en prod → vous revenez à la version précédente en 2 clics
-```
+1. Vous entraînez un modèle via MLflow → ça crée un **run** avec toutes les métriques
+2. Vous enregistrez le modèle dans le registry → ça crée une **version** liée au run
+3. Vous passez la version en "Staging" → elle est marquée pour les tests pré-production
+4. Vous testez sur votre environnement de staging → tout va bien
+5. Vous passez en "Production" → le modèle est live
+6. Problème en prod ? → vous revenez à la version précédente en quelques clics, sans panique
 
-### MLflow Model Format
+### Le format MLflow Model
 
-MLflow définit un format standardisé pour les modèles, appelé **MLmodel**. Ce format encapsule :
+MLflow définit un format standardisé pour les modèles, appelé **MLmodel**. Ce format encapsule tout ce qu'il faut pour réutiliser le modèle :
 - Les poids du modèle dans le format natif (PyTorch, TensorFlow, ONNX, etc.)
-- Un fichier `MLmodel` décrivant les flavors supportés
-- Un `conda.yaml` ou `requirements.txt` pour l'environnement
-- Une **signature** définissant le schéma d'entrée/sortie du modèle
+- Un fichier `MLmodel` décrivant les interfaces supportées (appelées "flavors")
+- Un `conda.yaml` ou `requirements.txt` pour recréer l'environnement exact
+- Une **signature** définissant le schéma d'entrée/sortie du modèle (quelles colonnes en entrée, quel format en sortie)
 
-<Callout type="tip" title="Flavors MLflow">
-Les "flavors" sont un concept puissant de MLflow : un même modèle peut être enregistré avec plusieurs interfaces. Un modèle PyTorch est enregistré à la fois comme `pytorch` (chargeable en tant que module PyTorch) et comme `python_function` (chargeable comme une simple fonction Python). Cela permet au système de serving de charger n'importe quel modèle de manière uniforme.
+<Callout type="tip" title="Les Flavors MLflow : la portabilité en action">
+Les "flavors" sont un concept puissant de MLflow : un même modèle peut être chargé de plusieurs manières. Un modèle PyTorch est enregistré à la fois comme `pytorch` (chargeable en tant que module PyTorch natif) et comme `python_function` (chargeable comme une simple fonction Python avec `predict()`). Cela permet au système de serving de charger n'importe quel modèle de manière uniforme, qu'il soit PyTorch, TensorFlow, scikit-learn ou autre. C'est l'abstraction qui rend le déploiement agnostique au framework.
 </Callout>
 
 ### Déploiement depuis le Registry
 
-MLflow permet de déployer directement un modèle depuis le registry :
-- **Inférence locale** : chargement du modèle via l'API Python
-- **REST API** : `mlflow models serve` lance un serveur d'inférence
-- **Docker** : `mlflow models build-docker` crée une image conteneur
-- **Cloud** : déploiement vers SageMaker, Azure ML, Databricks
+MLflow permet de déployer directement un modèle depuis le registry, sans copier-coller de fichiers :
+- **Inférence locale** : chargement du modèle via l'API Python (`mlflow.pyfunc.load_model()`)
+- **REST API** : `mlflow models serve` lance un serveur d'inférence HTTP en une commande
+- **Docker** : `mlflow models build-docker` crée une image conteneur prête à déployer
+- **Cloud** : déploiement direct vers SageMaker, Azure ML, ou Databricks
 
-### Forces
+### Forces et limites
 
-- Open source et gratuit
-- Intégration avec l'écosystème MLflow (tracking, projects)
-- Gestion des stages et transitions
-- Format standardisé facilitant le déploiement
-- API Python et REST
+**Forces** : open source et gratuit, intégration native avec tout l'écosystème MLflow, gestion des stades et transitions, format standardisé qui facilite le déploiement, API Python et REST complètes
 
-### Limites
-
-- Interface web basique pour la gestion des modèles
-- Pas de contrôle d'accès granulaire (sans Databricks)
-- Pas de fonctionnalités sociales (pas de discussions, pas de likes)
-- Les modèles très volumineux (dizaines de Go) nécessitent un stockage adapté
+**Limites** : l'interface web est fonctionnelle mais basique pour la gestion des modèles, pas de contrôle d'accès granulaire sans la version Databricks payante, les modèles très volumineux (dizaines de Go) nécessitent un stockage adapté (S3, GCS)
 
 ## Hugging Face Hub
 
-### Vue d'ensemble
+### Le GitHub des modèles ML
 
-Le **Hugging Face Hub** est une plateforme communautaire qui combine model registry, partage de datasets, et hébergement d'espaces de démonstration. C'est devenu le **GitHub des modèles ML**, avec plus de 500 000 modèles publics.
+Le **Hugging Face Hub** est une plateforme communautaire qui combine model registry, partage de datasets, et hébergement d'applications de démonstration. C'est devenu le **GitHub des modèles ML**, avec plus de 500 000 modèles publics. Si MLflow est le registry d'entreprise, le Hub est la place publique mondiale du ML.
 
 ### Fonctionnalités
 
-- **Model Cards** : documentation structurée décrivant le modèle, ses capacités, ses limites et ses biais
-- **Versioning Git** : chaque modèle est un dépôt Git (avec Git LFS pour les fichiers volumineux)
-- **Inference API** : test d'inférence directement depuis la page du modèle
-- **Spaces** : déploiement d'applications de démo (Gradio, Streamlit)
-- **Discussions** : commentaires et pull requests sur les modèles
-- **Collections** : regroupement thématique de modèles
-- **Leaderboards** : classements de modèles sur des benchmarks
+- **Model Cards** : documentation structurée décrivant le modèle, ses capacités, ses limites et ses biais. C'est devenu un standard de l'industrie.
+- **Versioning Git** : chaque modèle est un dépôt Git (avec Git LFS pour les fichiers volumineux). Vous avez l'historique complet des modifications.
+- **Inference API** : testez l'inférence directement depuis la page du modèle, sans écrire une ligne de code
+- **Spaces** : déploiement d'applications de démo avec Gradio ou Streamlit, hébergées gratuitement
+- **Discussions** : commentaires, questions et pull requests sur les modèles (exactement comme sur GitHub)
+- **Collections** : regroupement thématique de modèles (par exemple, tous les modèles de traduction français-anglais)
+- **Leaderboards** : classements de modèles sur des benchmarks standardisés
 
 <Callout type="paper" title="Hub privé pour les entreprises">
-Hugging Face propose un Hub privé (Enterprise Hub) pour les organisations. Les modèles restent privés, avec gestion des accès, audit logs, et conformité SOC2. C'est une option populaire pour les entreprises qui veulent le workflow Hugging Face sans exposer leurs modèles publiquement.
+Hugging Face propose un Hub privé (Enterprise Hub) pour les organisations. Les modèles restent privés, avec gestion fine des accès, audit logs, et conformité SOC2. C'est une option populaire pour les entreprises qui veulent le workflow et la simplicité Hugging Face sans exposer leurs modèles au public.
 </Callout>
 
 ### Intégration avec l'écosystème HuggingFace
 
-Le Hub s'intègre directement avec les bibliothèques HuggingFace :
-- **Transformers** : `model.push_to_hub()` et `AutoModel.from_pretrained("user/model")`
-- **Datasets** : `load_dataset("user/dataset")`
-- **PEFT** : partage d'adaptateurs LoRA
-- **Safetensors** : format sécurisé pour les poids de modèles
+Le Hub s'intègre directement avec les bibliothèques HuggingFace, ce qui le rend extrêmement pratique :
+- **Transformers** : `model.push_to_hub()` pour publier, `AutoModel.from_pretrained("user/model")` pour charger
+- **Datasets** : `load_dataset("user/dataset")` pour charger un dataset en une ligne
+- **PEFT** : partage d'adaptateurs LoRA (des petits fichiers qui modifient le comportement d'un gros modèle)
+- **Safetensors** : format sécurisé pour les poids de modèles (voir l'encadré sécurité ci-dessous)
 
-### Forces
+### Forces et limites
 
-- Communauté massive et active
-- Documentation (Model Cards) comme norme
-- Facilité d'utilisation exceptionnelle
-- Inference API gratuite pour le test
-- Versioning Git natif
+**Forces** : communauté massive et active, Model Cards comme norme de documentation, facilité d'utilisation exceptionnelle, Inference API gratuite pour tester, versioning Git natif
 
-### Limites
-
-- Pas de gestion formelle des stages (staging/production)
-- Pas d'intégration native avec les pipelines CI/CD d'entreprise
-- Orienté partage communautaire plus que gestion d'entreprise
-- Coût du Hub Enterprise pour les grandes organisations
+**Limites** : pas de gestion formelle des stades (staging/production) comme MLflow, pas d'intégration native avec les pipelines CI/CD d'entreprise, orienté partage communautaire plus que gestion de cycle de vie, coût du Hub Enterprise pour les grandes organisations
 
 ## Comparaison
 
 | Critère | MLflow Registry | HuggingFace Hub |
 |---|---|---|
 | Type | Registry d'entreprise | Plateforme communautaire |
-| Stages (staging/prod) | Oui | Non natif |
-| Versioning | Séquentiel | Git |
-| Documentation | Basique | Model Cards riche |
-| Communauté | N/A | 500K+ modèles |
-| Déploiement | Multi-cloud | Inference API + Spaces |
-| Accès | On-premise/cloud | Cloud (SaaS/Enterprise) |
-| Coût | Gratuit (OSS) | Gratuit (public) / Payant (privé) |
+| Stades (staging/prod) | Oui, natif | Non natif |
+| Versioning | Séquentiel (v1, v2, v3) | Git (branches, commits) |
+| Documentation | Basique (tags, description) | Model Cards riches et structurées |
+| Communauté | N/A | 500K+ modèles publics |
+| Déploiement | Multi-cloud (SageMaker, Azure) | Inference API + Spaces |
+| Hébergement | On-premise ou cloud (vous gérez) | Cloud SaaS / Enterprise |
+| Coût | Gratuit (open source) | Gratuit (public) / Payant (privé) |
 
-<Callout type="warning" title="Sécurité des modèles">
-Les modèles ML peuvent contenir du code malveillant, notamment les fichiers pickle (utilisés par PyTorch). Le format **safetensors** de HuggingFace stocke uniquement les tenseurs sans code exécutable, éliminant ce risque. Privilégiez toujours le format safetensors pour le stockage et le partage de modèles.
+<Callout type="warning" title="Sécurité des modèles : attention aux fichiers pickle">
+Les modèles ML peuvent contenir du code malveillant, notamment les fichiers pickle (utilisés par défaut par PyTorch). Charger un fichier pickle revient à exécuter du code arbitraire : un modèle malveillant pourrait supprimer vos fichiers ou exfiltrer vos données. Le format **safetensors** de HuggingFace résout ce problème : il stocke uniquement les tenseurs (les chiffres) sans aucun code exécutable. Privilégiez toujours safetensors pour le stockage et le partage de modèles.
 </Callout>
 
-## En pratique
+## En pratique : combiner les deux
 
-Pour une équipe ML en entreprise, l'approche recommandée combine souvent les deux :
-- **MLflow Model Registry** pour la gestion interne du cycle de vie (staging, production, rollback)
-- **Hugging Face Hub** (privé ou public) pour le partage, la documentation et la collaboration
-- Des **webhooks et CI/CD** pour automatiser les transitions entre les deux systèmes
+Pour une équipe ML en entreprise, l'approche la plus courante combine les forces des deux outils :
+- **MLflow Model Registry** pour la gestion interne du cycle de vie (staging, production, rollback, audit trail)
+- **Hugging Face Hub** (privé ou public) pour le partage, la documentation riche (Model Cards), et la collaboration
+- Des **webhooks et pipelines CI/CD** pour automatiser les transitions entre les deux systèmes (un modèle validé dans MLflow est automatiquement poussé sur le Hub privé, par exemple)
+
+Cette combinaison donne le meilleur des deux mondes : la rigueur du cycle de vie MLflow et la richesse communautaire du Hub.

@@ -5,105 +5,111 @@ description: "Tree of Thoughts étend le chain-of-thought en explorant plusieurs
 
 
 
-## Le problème : un seul chemin c'est fragile
+## Le problème : un seul chemin, c'est fragile
 
-Chain-of-thought génère un raisonnement linéaire. Si le LLM se trompe à l'étape 2, tout ce qui suit est corrompu.
+Le Chain-of-thought génère un raisonnement linéaire : étape 1, étape 2, étape 3, conclusion. C'est mieux que pas de raisonnement du tout, mais c'est fragile. Si le LLM se trompe à l'étape 2, toute la suite est corrompue. Il n'y a pas de retour en arrière possible.
 
-**Tree of Thoughts** explore plusieurs chemins en parallèle et sélectionne les meilleurs. C'est comme un groupe de randonneurs qui essayent plusieurs sentiers.
+**Tree of Thoughts (ToT)** propose une solution naturelle : au lieu de suivre un seul chemin, explorer **plusieurs chemins en parallèle** et sélectionner les meilleurs à chaque étape. C'est la différence entre un randonneur qui prend un sentier au hasard et un groupe d'éclaireurs qui explorent plusieurs pistes et convergent vers la meilleure.
 
 <ArxivLink id="2305.10601" title="Tree of Thoughts: Deliberate Problem Solving with Large Language Models (Yao et al., 2023)" />
 
 <Callout type="info" title="L'analogie">
-CoT = un randonneur qui prend un seul chemin. ToT = groupe qui explore plusieurs sentiers, communique sur les progrès, converge vers le meilleur chemin.
+Le CoT, c'est un joueur d'échecs débutant qui joue le premier coup qui lui vient à l'esprit. Le ToT, c'est un joueur expérimenté qui évalue mentalement plusieurs coups, anticipe les réponses possibles, et choisit la ligne la plus prometteuse. C'est de la recherche arborescente appliquée au raisonnement.
 </Callout>
 
 ## Comment ça marche
 
-1. **Décomposer en étapes** : diviser le problème en étapes intermédiaires
-2. **Générer candidats** : à chaque étape, LLM génère plusieurs « thoughts »
-3. **Évaluer** : chaque thought obtient un score
-4. **Recherche** : algorithme (BFS, DFS) explore l'arbre
+L'algorithme se décompose en quatre étapes :
 
-```
-Problème
-├── Thought A (score: 0.8)
-│   ├── A1 (score: 0.9) ← Meilleur
-│   │   └── Solution
-│   └── A2 (score: 0.3) ✗
-├── Thought B (score: 0.6)
-│   └── B1 (score: 0.7)
-└── Thought C (score: 0.2) ✗
-```
+1. **Décomposer** : diviser le problème en étapes intermédiaires bien définies
+2. **Générer** : à chaque étape, demander au LLM de proposer plusieurs "thoughts" (candidats)
+3. **Évaluer** : chaque candidat reçoit un score de qualité (donné par le LLM lui-même)
+4. **Rechercher** : un algorithme de recherche (BFS ou DFS) explore l'arbre des possibilités
 
-**BFS** : explore tous les candidats à chaque niveau, garde les K meilleurs. Fiable si évaluation est bonne.
+Voici la structure arborescente :
 
-**DFS** : explore profond d'abord, backtrack si mauvais. Pour espaces très larges.
+**Problème**
+- **Thought A** (score: 0.8)
+  - **A1** (score: 0.9) &larr; Meilleur &rarr; **Solution**
+  - A2 (score: 0.3) &cross;
+- **Thought B** (score: 0.6)
+  - B1 (score: 0.7)
+- Thought C (score: 0.2) &cross;
 
-<Callout type="paper" title="Résultats massifs">
-Jeu des 24 : CoT atteint 4%, ToT atteint 74%. Mots croisés : CoT 16%, ToT 60%. L'avantage est énorme sur les problèmes qui exigent de l'exploration.
+Deux stratégies de recherche sont possibles :
+
+**BFS (Breadth-First Search)** : on explore tous les candidats à chaque niveau, on garde les K meilleurs, puis on passe au niveau suivant. C'est fiable quand l'évaluation est bonne, car on ne risque pas de rater une bonne branche.
+
+**DFS (Depth-First Search)** : on explore en profondeur d'abord, et on backtrack (revient en arrière) si on atteint une impasse. Plus efficace en mémoire pour les arbres très larges, car on n'a pas besoin de stocker tous les candidats d'un niveau.
+
+<Callout type="paper" title="Des résultats spectaculaires">
+Sur le Jeu des 24 (trouver comment obtenir 24 avec 4 nombres) : CoT atteint 4% de réussite, ToT atteint **74%**. Sur les mots croisés : CoT 16%, ToT **60%**. L'avantage est écrasant sur les problèmes qui nécessitent de l'exploration et du backtracking.
 </Callout>
 
-## Évaluation des thoughts
+## L'évaluation des thoughts : le LLM juge ses propres idées
 
-Le LLM évalue la qualité d'une étape de raisonnement :
+La pièce maîtresse de ToT, c'est que le LLM évalue lui-même la qualité de ses propres étapes de raisonnement. On lui demande explicitement de noter chaque candidat :
 
-```
-Évalue cette étape pour [problème].
-Étape : [thought]
-Score 1-10 :
-- 1-3 : impasse probable
-- 4-6 : incertain mais possible
-- 7-10 : prometteur
+> **Prompt d'évaluation :**
+>
+> Évalue cette étape pour [problème].
+> Étape : [thought]
+> Score 1-10 :
+> - 1-3 : impasse probable
+> - 4-6 : incertain mais possible
+> - 7-10 : prometteur
+>
+> Donne ton score et justification :
 
-Donne ton score et justification :
-```
+C'est de la **métacognition assistée** : le modèle réfléchit sur sa propre réflexion. Et ça marche étonnamment bien, surtout sur les modèles puissants.
 
-### Exemple : jeu des 24
+### Exemple concret : le Jeu des 24
 
-```
-Nombres : 4, 5, 6, 10
-Objectif : 24
+> **Nombres :** 4, 5, 6, 10 -- **Objectif :** obtenir 24 avec les 4 opérations
+>
+> **Étape 1 -- Propositions :**
+> - A) $10 - 4 = 6$ (reste : 5, 6, 6) &rarr; 7/10
+> - B) $5 \times 4 = 20$ (reste : 6, 10, 20) &rarr; 6/10
+> - C) $6 / 4 = 1.5$ (nombre décimal, complique la suite) &rarr; 3/10
+>
+> On garde A et B, on élague C.
+>
+> **Étape 2 (depuis A, avec 5, 6, 6) :**
+> - A1) $5 + 6 = 11$ (reste : 6, 11) &rarr; $6 + 11 = 17$ &cross;
+> - A2) $6 - 5 = 1$ &rarr; $6 \times 1 = 6$ &cross;
+> - A3) $5 \times 6 = 30$ &rarr; $30 - 6 = 24$ &check;
 
-Étape 1 - Propositions :
-A) 10 - 4 = 6 (reste : 5, 6, 6) → 7/10
-B) 5 × 4 = 20 (reste : 6, 10, 20) → 6/10
-C) 6 / 4 = 1.5 → 3/10
+L'arbre a trouvé la solution en explorant systématiquement les branches prometteuses et en élaguant les impasses.
 
-Garde A et B, élague C.
+## Variantes et améliorations
 
-Étape 2 (depuis A) :
-A1) 5 + 6 = 11 (reste : 6, 11) → 6 + 11 = 17 ✗
-A2) 6 - 5 = 1 → 6 × 1 = 6 ✗
-A3) 5 × 6 = 30 → 30 - 6 = 24 ✓
-```
+**ToT + self-consistency** : au lieu de juste évaluer les thoughts, on les complète jusqu'à la solution finale. Si un thought mène à une solution valide, il est validé. Si non, il est élagué. Plus coûteux mais plus fiable.
 
-## Variantes
+**Beam Search** : version simplifiée et très populaire. À chaque étape, on garde uniquement les K meilleurs candidats (le "beam"), on génère leurs continuations, et on re-sélectionne les K meilleurs. C'est le compromis le plus courant entre exhaustivité et coût.
 
-**ToT + self-consistency** : complétez chaque thought jusqu'à la solution, gardez ceux qui mènent à des solutions valides.
+**MCTS (Monte Carlo Tree Search)** : combine ToT avec l'algorithme MCTS (celui qui a battu le champion du monde de Go). Exploration plus intelligente qui balance entre exploitation des branches prometteuses et exploration de nouvelles branches.
 
-**Beam Search** : version simplifiée. À chaque étape, gardez les K meilleurs candidats (le « beam »), générez les continuations. Plus efficace que BFS.
-
-**MCTS** (Monte Carlo Tree Search) : combine ToT avec MCTS pour exploration plus intelligente.
-
-<Callout type="tip" title="Quand l'utiliser">
-ToT aide pour les problèmes combinatoires : puzzles logiques, planification, math. Pour questions factuelles ou génération de texte, CoT standard suffit et coûte bien moins cher.
+<Callout type="tip" title="Quand utiliser ToT">
+ToT aide énormément sur les problèmes **combinatoires** : puzzles logiques, planification multi-étapes, résolution mathématique, optimisation. Pour des questions factuelles simples ou de la génération de texte, le CoT standard suffit largement et coûte 10 à 30 fois moins cher.
 </Callout>
 
-## Le coût est lourd
+## Le coût : l'éléphant dans la pièce
 
-ToT multiplie les appels LLM :
-- K candidats par étape × E évaluations × N étapes
-- K=5, N=3 étapes = 15 générations + 15 évaluations = 30 appels LLM
-- Contre 1 appel pour CoT
+ToT multiplie les appels au LLM de manière significative :
+- K candidats par étape x E évaluations x N étapes
+- Avec K=5 et N=3 étapes : 15 générations + 15 évaluations = **30 appels LLM**
+- Contre **1 seul appel** pour le CoT classique
 
-Le coût est 10-30× plus élevé. **La majorité des applis ne le justifient pas.**
+Le surcoût est de 10 à 30 fois. En termes de latence, une requête qui prend 1 seconde en CoT peut prendre 30 secondes en ToT. En termes de coût API, la facture explose proportionnellement.
 
-<Callout type="warning" title="ROI du coût">
-30 appels LLM au lieu de 1, ça coûte cher. Justifiable uniquement si CoT échoue fréquemment ET l'exploration auto peut corriger. Pour la plupart des chatbots, CoT ou self-consistency suffisent.
+<Callout type="warning" title="Le rapport coût/bénéfice">
+30 appels LLM au lieu de 1, c'est un investissement lourd. Il n'est justifiable que si : (1) le CoT échoue fréquemment sur votre type de problème, ET (2) l'exploration arborescente peut réellement corriger les erreurs. Pour la majorité des applications (chatbots, résumé, QA factuel), le CoT simple ou le self-consistency (générer 5 réponses et voter) sont bien plus rentables.
 </Callout>
 
-## Impact conceptuel
+## L'impact conceptuel : le raisonnement comme recherche
 
-Tree of Thoughts a ouvert la voie : traiter le raisonnement LLM comme un **problème de recherche** plutôt que juste génération séquentielle. Cette perspective a influencé les modèles de raisonnement comme o1 et DeepSeek-R1, qui internalisent l'exploration.
+Au-delà de l'algorithme lui-même, Tree of Thoughts a introduit une idée transformative : traiter le raisonnement d'un LLM comme un **problème de recherche dans un espace d'états**, plutôt qu'une simple génération séquentielle de tokens.
 
-Même si ToT explicite est peu utilisé en production, ses idées (branching, élagage, recherche) persistent.
+Cette perspective a directement influencé les modèles de raisonnement de nouvelle génération comme o1 (OpenAI) et DeepSeek-R1, qui **internalisent** l'exploration : au lieu de faire la recherche arborescente explicitement avec des appels multiples, ces modèles apprennent à explorer mentalement les branches pendant un seul appel, en utilisant plus de tokens de raisonnement interne.
+
+Même si le ToT explicite est rarement utilisé en production (trop coûteux), ses idées fondamentales (branching, élagage, évaluation, backtracking) sont devenues les briques de base du raisonnement avancé par LLM.

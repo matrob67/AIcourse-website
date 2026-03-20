@@ -3,136 +3,175 @@ title: "Positional encoding : comment le Transformer comprend l'ordre"
 description: "Donner au Transformer la notion de position : des sinusoïdes aux techniques modernes comme RoPE."
 ---
 
-## Le problème : le Transformer oublie l'ordre
+## Le problème : le Transformer est aveugle à l'ordre
 
-Voici un problème mathématique subtil : l'attention n'a **aucune notion de position**. Si vous présentez les mots dans un ordre différent, l'attention produit le même résultat.
+Voici un problème mathématique subtil mais fondamental : le mécanisme d'attention n'a **aucune notion de position**. Si tu permutes les tokens en entrée, l'attention produit exactement le même résultat (à permutation près des sorties).
 
-Exemple pathologique :
+Exemple qui illustre l'absurdité :
 - "Le chat mange la souris" → résultat A
-- "La souris mange le chat" → même résultat A (WRONG!)
+- "La souris mange le chat" → même résultat A (catastrophique !)
 
-Linguistiquement : le sens change complètement. Mathématiquement : l'attention s'en fout. Il faut donc **ajouter manuellement** une information de position.
+Linguistiquement, le sens change complètement. Mathématiquement, l'attention s'en fiche -- elle ne voit que des **ensembles** de vecteurs, pas des **séquences** ordonnées. Chaque token interagit avec tous les autres via le produit scalaire Q.K, et ce produit ne dépend pas de l'ordre dans lequel les tokens apparaissent.
 
-## Sinusoïdes : la recette originale
+C'est un contraste frappant avec les RNN, qui traitent les tokens un par un de gauche à droite et intègrent naturellement l'ordre. Le Transformer, en échange de sa parallélisation massive, a perdu cette propriété. Il faut donc **injecter manuellement** une information de position dans les représentations.
 
-Le papier Transformer original (2017) propose une astuce élégante : ajouter des vecteurs périodiques (sinusoïdes) qui encodent la position.
+La question est : comment encoder la position de manière à ce que le modèle puisse apprendre à l'exploiter efficacement ?
 
+## Sinusoïdes : la recette originale (2017)
 
+Le papier "Attention Is All You Need" propose une solution élégante et mathématiquement inspirée : ajouter à chaque token un vecteur de position construit à partir de **fonctions sinusoïdales** à différentes fréquences.
 
-Pour la position i, les dimensions des vecteurs oscillent à des fréquences différentes :
+Pour la position $i$ dans la séquence, chaque dimension $k$ du vecteur de position est calculée ainsi :
 
-```
-Dimension paire:   sin(i / 10000^(pair/d_model))
-Dimension impaire: cos(i / 10000^(impair/d_model))
-```
+$$
+PE_{(i, 2k)} = \sin\left(\frac{i}{10000^{2k / d_{\text{model}}}}\right)
+$$
 
-Pensez à ça comme une **horloge multi-fréquence** :
-- Dimensions basses : oscillent lentement (position globale)
-- Dimensions hautes : oscillent rapidement (position locale)
+$$
+PE_{(i, 2k+1)} = \cos\left(\frac{i}{10000^{2k / d_{\text{model}}}}\right)
+$$
 
+La formule semble intimidante, mais l'intuition est simple. Pense à une **horloge multi-fréquence** :
+- Les premières dimensions oscillent **lentement** : elles distinguent les positions éloignées (début vs milieu vs fin de phrase). C'est comme l'aiguille des heures.
+- Les dernières dimensions oscillent **rapidement** : elles distinguent les positions voisines (mot 42 vs mot 43). C'est comme l'aiguille des secondes.
 
+Chaque position dans la séquence obtient un "code" unique composé de ces oscillations à différentes fréquences. Comme dans un système de numération, les "chiffres de poids fort" (fréquences basses) changent rarement et les "chiffres de poids faible" (fréquences hautes) changent souvent.
+
+Le vecteur PE est simplement **ajouté** à l'embedding du token : $\text{input} = \text{token\_embedding} + \text{PE}$. Le modèle reçoit donc un vecteur qui combine le sens du mot et sa position.
 
 <Callout type="info" title="Pourquoi les sinusoïdes ?">
-Mathématiquement, la position i+k peut s'exprimer comme une transformation linéaire simple de la position i. Le modèle apprend donc **facilement les positions relatives** ("le mot 5 pas loin"). Bonus : cela **extrapolle automatiquement** à des séquences plus longues que celles d'entraînement.
+Le choix des sinusoïdes n'est pas arbitraire. Mathématiquement, la position $i+k$ peut s'exprimer comme une **transformation linéaire** de la position $i$ (propriété des fonctions trigonométriques). Cela signifie que le modèle peut apprendre facilement à reconnaître les **positions relatives** ("ce token est 5 positions plus loin") à partir de simples produits matriciels. De plus, les sinusoïdes sont définies pour n'importe quel entier positif, ce qui permet théoriquement de **généraliser à des séquences plus longues** que celles vues pendant l'entraînement.
 </Callout>
 
-Avantages des sinusoïdes :
-- Pas d'entraînement (formule mathématique fixe)
-- Fréquences multiples (capture local ET global)
-- **Extrapolation gratuite** à des séquences plus longues
+**Avantages des sinusoïdes** :
+- **Pas d'entraînement nécessaire** : c'est une formule mathématique fixe, pas de paramètres à apprendre
+- **Fréquences multiples** : capture simultanément les relations locales ET globales
+- **Extrapolation** : fonctionne en théorie pour des séquences plus longues que celles d'entraînement
+- **Déterministe** : même position = même encodage, toujours
 
-## Embeddings appris : la version paresseuse
+**Limitation** : en pratique, les sinusoïdes ne sont plus utilisées dans les modèles modernes. Elles ont été surpassées par des approches apprenables ou par RoPE. Mais elles restent un point de départ conceptuel important.
 
-Alternatif simple : au lieu d'une formule, juste apprendre un vecteur différent pour chaque position.
+## Embeddings appris : la version directe
+
+L'approche la plus simple : au lieu d'une formule, **apprendre un vecteur différent** pour chaque position possible.
 
 ```python
 position_embedding = nn.Embedding(max_seq_len, d_model)
-# Position 0 : vecteur appris
-# Position 1 : vecteur appris
-# Position 512 : vecteur appris
+# Position 0 : vecteur appris de dimension d_model
+# Position 1 : vecteur appris de dimension d_model
+# ...
+# Position 511 : vecteur appris de dimension d_model
 ```
 
-Simple à implémenter. **Problème majeur** : limité à la longueur max d'entraînement.
+C'est une lookup table : la position 42 correspond au 42e vecteur de la table, qui est un paramètre du modèle mis à jour par gradient descent pendant l'entraînement. L'embedding de position est ajouté à l'embedding du token, exactement comme avec les sinusoïdes.
 
-BERT entraîné sur 512 tokens ? Vous ne pouvez pas l'utiliser sur 1024 tokens sans le ré-entraîner. C'est un gaspillage.
+C'est simple à implémenter et ça fonctionne bien en pratique. BERT et GPT-2 utilisent cette approche.
+
+**Le problème majeur** : tu es **limité à la longueur maximale d'entraînement**. Si le modèle est entraîné avec `max_seq_len = 512`, la table contient 512 vecteurs. Position 513 ? Elle n'existe pas. Tu ne peux pas utiliser le modèle sur une séquence de 1024 tokens sans le ré-entraîner ou bricoler (interpolation des embeddings existants).
+
+C'est une limitation sérieuse à l'ère des longs contextes. Un utilisateur veut passer un document de 10 000 mots dans son modèle, mais le modèle ne connaît que les positions 0 à 511. Les techniques modernes résolvent ce problème.
 
 ## RoPE : le champion actuel
 
-Voici une astuce géniale découverte récemment : au lieu d'**ajouter** un vecteur de position, pourquoi ne pas **faire tourner** les vecteurs Q et K selon la position ?
+RoPE (Rotary Position Embedding), proposé par Su et al. en 2021, est une approche fondamentalement différente. Au lieu d'**ajouter** un vecteur de position aux embeddings, RoPE **fait tourner** (rotation) les vecteurs Query et Key selon leur position dans la séquence.
 
-Imaginez un vecteur 2D (x, y). Une rotation d'angle θ le transforme en (x*cos(θ) - y*sin(θ), x*sin(θ) + y*cos(θ)). Pour chaque paire de dimensions, vous appliquez une rotation 2D avec un angle proportionnel à la position.
+### L'intuition géométrique
 
-```
-Q_position_encodee = Rotation(position) × Q
-K_position_encodee = Rotation(position) × K
-```
+Imagine un vecteur 2D $(x, y)$ dans le plan. Une rotation d'angle $\theta$ le transforme en :
+$$(x \cos\theta - y \sin\theta,\; x \sin\theta + y \cos\theta)$$
 
-**Pourquoi c'est brillant ?**
+RoPE applique exactement cette idée : pour chaque **paire de dimensions** consécutives du vecteur Q ou K, on applique une rotation 2D dont l'angle est proportionnel à la position du token dans la séquence.
 
-1. **Les distances relatives émergen naturellement** : après rotation, le produit scalaire Q · K dépend seulement de la **différence** de positions (pos_q - pos_k), pas des positions absolues. Le modèle voit automatiquement les distances relatives.
+$$
+Q'_i = R(\theta_i) \cdot Q_i
+$$
 
-2. **L'attention décroît avec la distance naturellement** : c'est une propriété mathématique, pas un hack.
+$$
+K'_j = R(\theta_j) \cdot K_j
+$$
 
-3. **Ça s'étend à des séquences plus longues** : contrairement aux embeddings appris, RoPE fonctionne pour n'importe quelle longueur (avec quelques ajustements : YaRN, NTK-aware).
+$R(\theta)$ est une matrice de rotation par blocs 2x2, et $\theta_i$ est proportionnel à la position $i$, avec des fréquences différentes pour chaque paire de dimensions (exactement comme les sinusoïdes, mais appliquées en rotation plutôt qu'en addition).
+
+### Pourquoi c'est brillant
+
+**1. Les distances relatives émergent naturellement.**
+Après rotation, le produit scalaire $Q'_i \cdot K'_j$ ne dépend que de la **différence** de positions $i - j$, pas des positions absolues. Le modèle voit automatiquement "ce token est 3 positions avant moi" plutôt que "je suis à la position 42 et l'autre est à la position 39". C'est exactement l'information relationnelle dont l'attention a besoin.
+
+Mathématiquement : $Q'_i \cdot K'_j = Q_i^T R(\theta_i - \theta_j) K_j$. Le produit scalaire dépend de $\theta_i - \theta_j$, donc de la distance relative.
+
+**2. L'attention décroît naturellement avec la distance.**
+C'est une propriété mathématique des rotations appliquées au produit scalaire : plus deux tokens sont éloignés, plus les angles de rotation divergent, et plus le produit scalaire tend à diminuer. Les tokens proches reçoivent naturellement plus d'attention que les tokens lointains, sans aucun mécanisme ad hoc.
+
+**3. Extensible à de longues séquences.**
+Contrairement aux embeddings appris, RoPE est défini pour n'importe quelle position (c'est une formule, pas une table). Avec quelques ajustements (YaRN, NTK-aware scaling), un modèle entraîné sur 4096 tokens peut traiter des séquences de 32000+ tokens.
 
 <ArxivLink id="2104.09864" title="RoFormer: Enhanced Transformer with Rotary Position Embedding (Su et al., 2021)" />
 
-<Callout type="tip" title="Coin technique : les rotations 2D">
-Chaque paire de dimensions (2i, 2i+1) subit une rotation 2D indépendante. Les paires basses fréquence capturent l'ordre global, hautes fréquence l'ordre local. Élégance mathématique totale.
+<Callout type="tip" title="Coin technique : les rotations par paires">
+RoPE découpe le vecteur Q ou K en paires de dimensions : (dim 0, dim 1), (dim 2, dim 3), etc. Chaque paire subit une rotation 2D indépendante à sa propre fréquence. Les paires de dimensions basses utilisent des fréquences basses (oscillation lente = position globale), les paires hautes des fréquences élevées (oscillation rapide = position locale). C'est exactement la même logique multi-fréquence que les sinusoïdes, mais appliquée de manière multiplicative via des rotations.
 </Callout>
 
-**Utilisé par** : LLaMA, Mistral, GPT-NeoX, Qwen, et quasi tous les LLM modernes.
+**Utilisé par** : LLaMA, Mistral, GPT-NeoX, Qwen, Gemma, et la quasi-totalité des LLM modernes. C'est le standard de facto.
 
-## ALiBi : Alternative minimaliste
+## ALiBi : l'alternative minimaliste
 
-Approche radicalement différente : plutôt que d'encoder la position dans les vecteurs, ajouter simplement un **biais** aux scores d'attention.
+ALiBi (Attention with Linear Biases), proposé par Press et al. en 2022, prend une approche radicalement différente de toutes les précédentes. Plutôt que d'encoder la position dans les vecteurs d'entrée, ALiBi ajoute simplement un **biais linéaire** aux scores d'attention :
 
-```
-score(i, j) = Q_i · K_j - facteur × distance(i, j)
-```
+$$
+\text{score}(i, j) = Q_i \cdot K_j - m \cdot |i - j|
+$$
 
-C'est simple : si deux mots sont loin, réduisez légèrement leur score d'attention. Si proches, le score reste normal.
+C'est d'une simplicité désarmante : si deux tokens sont éloignés ($|i - j|$ grand), on **pénalise** leur score d'attention d'un montant proportionnel à la distance. Si deux tokens sont proches, le score reste intact. Le paramètre $m$ est un scalaire fixe (non appris) qui varie par tête d'attention, permettant à chaque tête de se spécialiser sur une portée différente.
+
+Pas de vecteurs de position, pas de rotations, pas de formules trigonométriques. Juste une soustraction.
 
 <ArxivLink id="2108.12409" title="Train Short, Test Long: Attention with Linear Biases (Press et al., 2022)" />
 
-### Superbe extrapolation
+### Extrapolation exceptionnelle
 
-Entraîner sur 1024 tokens, puis utiliser sur 10,000 tokens ? ALiBi le fait sans perte majeure. Les positions relatives sont si simples que le modèle généralise parfaitement.
+Le principal avantage d'ALiBi est son **extrapolation**. Un modèle entraîné sur 1024 tokens peut être utilisé sur 10 000 tokens avec une perte de performance minimale. Pourquoi ? Parce que le biais linéaire est défini pour n'importe quelle distance -- il n'y a rien à "étendre" ou "interpoler". Le modèle a appris que les tokens lointains comptent moins, et cette règle se généralise naturellement.
 
-```
-Modeles: BLOOM, MPT
-```
+**Modèles utilisant ALiBi** : BLOOM, MPT
+
+**Limitation** : ALiBi impose une décroissance monotone de l'attention avec la distance, ce qui peut être restrictif pour certaines tâches où des dépendances à longue distance sont cruciales. RoPE offre plus de flexibilité car le modèle peut apprendre des patterns d'attention à distance arbitraire.
 
 ## Comparaison : les quatre approches
 
-| Méthode | Fond | Extrapolation | Difficulté | Utilisé par |
+| Méthode | Principe | Extrapolation | Complexité d'implémentation | Modèles phares |
 |---|---|---|---|---|
-| Sinusoïdal | Formule fixe | Bonne | Moyenne | Transformer original |
-| Appris | Lookup table | Mauvaise (limité à entraînement) | Facile | BERT, GPT-2 |
-| RoPE | Rotation 2D | Bonne (avec YaRN) | Difficile | LLaMA, Mistral, Qwen |
-| ALiBi | Biais linéaire | Excellente | Très facile | BLOOM, MPT |
+| Sinusoïdal | Formule fixe (sin/cos) | Bonne en théorie | Moyenne | Transformer original |
+| Appris | Lookup table optimisée | Mauvaise (limité au max d'entraînement) | Facile | BERT, GPT-2 |
+| RoPE | Rotation 2D des Q/K | Bonne (avec YaRN/NTK) | Moyenne-difficile | LLaMA, Mistral, Qwen |
+| ALiBi | Biais linéaire sur les scores | Excellente | Très facile | BLOOM, MPT |
 
-## L'enjeu : allonger la fenêtre de contexte
+## L'enjeu majeur : allonger la fenêtre de contexte
 
-Un défi actuel majeur : les modèles s'entraînent sur 4000-32000 tokens, mais on aimerait traiter 100,000+ tokens.
+Un des défis les plus actifs de la recherche actuelle est l'**extension de la fenêtre de contexte**. Les modèles sont entraînés sur une certaine longueur (4096, 8192, 32000 tokens), mais on aimerait leur faire traiter des séquences beaucoup plus longues (100 000+ tokens) sans tout ré-entraîner.
 
-Les techniques de positional encoding déterminent la **longueur maximale** pratique. Heureusement, il existe des raccourcis :
+Le positional encoding est le facteur limitant. Même avec RoPE, un modèle entraîné sur 4k tokens voit ses performances se dégrader au-delà. Plusieurs techniques d'extension ont été développées :
 
-- **YaRN** : interpolation mathématique de RoPE pour des positions plus loin
-- **NTK-aware scaling** : ajuster les fréquences de base
-- **Longrope** : interpolation progressive avec continuum
+- **YaRN** (Yet another RoPE extensioN) : interpole mathématiquement les fréquences de RoPE pour "étirer" l'encodage positionnel. Permet d'étendre de 4k à 128k tokens avec un fine-tuning minimal.
+- **NTK-aware scaling** : ajuste les fréquences de base de RoPE en tenant compte de la théorie Neural Tangent Kernel. Les basses fréquences sont étirées plus que les hautes.
+- **LongRoPE** : interpolation progressive avec un continuum de facteurs d'extension.
+- **Position interpolation** (Meta) : au lieu d'extrapoler au-delà des positions connues, on interpole en "compressant" les positions dans la plage originale.
 
-Résultat : un modèle entraîné sur 4k tokens peut traiter 32k-100k+ tokens avec seulement une légère baisse de performance. Le contexte s'allonge sans ré-entraînement.
+Résultat concret : un modèle entraîné sur 4k tokens peut traiter 32k à 128k tokens avec seulement un court fine-tuning et une légère baisse de performance. Le contexte s'allonge sans ré-entraînement complet, ce qui économise des millions de dollars.
 
 ## Pourquoi c'est important
 
-La longueur du contexte affecte **tout** : vous pouvez passer un document entier, un long historique de conversation, une codebase complète. Plus long = meilleur. Mais c'est limité par le positional encoding et la complexité quadratique de l'attention.
+La longueur du contexte affecte **tout** ce qu'un LLM peut faire :
+- **Court contexte (512-2k)** : une question simple, une phrase à compléter
+- **Contexte moyen (4k-16k)** : un article, une conversation de quelques échanges
+- **Long contexte (32k-128k)** : un livre entier, un codebase complet, un historique de conversation de plusieurs heures
+- **Très long contexte (500k+)** : plusieurs livres, un projet logiciel entier
+
+Le positional encoding est la brique qui détermine cette limite. Choisir la bonne technique (et savoir l'étendre) est crucial pour les applications pratiques.
 
 ## Les points clés à retenir
 
-1. Le Transformer **oublie l'ordre** : il faut ajouter l'info de position explicitement
-2. **Sinusoïdes** = élégant mais peu utilisé
-3. **Embeddings appris** = simple mais limité à la taille d'entraînement
-4. **RoPE** = le standard moderne (LLaMA, Mistral), positions relatives naturelles
-5. **ALiBi** = meilleure extrapolation, moins utilisé
-6. **L'extension de contexte** (YaRN, NTK) = enjeu majeur de 2024-2026
+1. Le Transformer **oublie l'ordre** par construction : il faut ajouter l'information de position explicitement
+2. **Sinusoïdes** : la solution originale, élégante mais dépassée en pratique
+3. **Embeddings appris** : simple mais rigidement limité à la longueur d'entraînement
+4. **RoPE** : le standard actuel (LLaMA, Mistral, Qwen), encode les positions relatives via des rotations 2D
+5. **ALiBi** : meilleure extrapolation native, approche minimaliste, mais moins flexible
+6. **L'extension de contexte** (YaRN, NTK) : un enjeu majeur de la recherche 2024-2026, directement lié au positional encoding

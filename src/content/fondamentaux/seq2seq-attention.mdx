@@ -5,145 +5,168 @@ description: "L'architecture encodeur-décodeur pour les tâches séquence à s�
 
 ## Le défi : transformer une séquence en une autre
 
-Traduire "Bonjour" en anglais = "Hello". Facile : lengths match.
+Beaucoup de problèmes en IA impliquent de **transformer une séquence en une autre** de longueur différente. Quelques exemples :
 
-Traduire "Le chat noir dort sous la table" en "The black cat sleeps under the table". Pas matches. Pas de correspondance mot-à-mot. Pire : résumé (long texte → 3 mots), dialogue (question → réponse imprévisible).
+- **Traduction** : "Le chat noir dort" → "The black cat sleeps" (4 mots → 4 mots, mais ça aurait pu être 3 ou 5)
+- **Résumé** : un article de 500 mots → un résumé de 30 mots
+- **Dialogue** : une question → une réponse de longueur imprévisible
+- **Transcription** : une séquence audio de 10 secondes → une phrase de 8 mots
 
-RNN/LSTM classique ? Goulot d'étranglement : **toute l'info doit passer par un vecteur unique** (état caché final). C'est comme passer une encyclopédie par une paille.
+Le problème fondamental : l'entrée et la sortie n'ont **pas la même longueur**, et il n'y a **pas de correspondance mot-à-mot** évidente. Un RNN classique produit une sortie à chaque pas de temps, ce qui fonctionne quand entrée et sortie sont synchronisées. Mais pour la traduction ? L'ordre des mots change, des mots sont ajoutés ou supprimés, la grammaire est différente.
+
+Il fallait une nouvelle architecture. C'est le modèle **séquence-à-séquence** (seq2seq).
 
 ## Encodeur-Décodeur : deux réseaux, un pont
 
+### L'idée (2014, Sutskever/Vinyals/Le chez Google)
 
+L'architecture seq2seq sépare le problème en deux parties distinctes confiées à deux réseaux différents :
 
-### L'idée (2014, Sutskever/Vinyals/Le Google)
+**L'encodeur** : lit la séquence source mot par mot et la **compresse** en un vecteur de taille fixe appelé **vecteur de contexte**. C'est le dernier état caché du RNN/LSTM encodeur. Ce vecteur est censé capturer tout le "sens" de la phrase source.
 
-**Encodeur** : lit la séquence source, compresse tout en un **vecteur de contexte** (dernier état caché).
-
-**Décodeur** : prend ce vecteur, génère la séquence cible **autoregressive** (mot par mot, chaque mot cherche le suivant).
+**Le décodeur** : prend ce vecteur de contexte comme point de départ et génère la séquence cible **de manière autorégressive** -- c'est-à-dire mot par mot, en utilisant chaque mot généré comme entrée pour prédire le suivant.
 
 ### Fonctionnement pas à pas
 
-1. Encodeur (LSTM) traite "Le chat noir dort..." → états cachés pour chaque mot
-2. État caché final = contexte = résumé de tout
-3. Décodeur part de ce contexte
-4. Token spécial "START" en entrée
-5. Décodeur prédit "The"
-6. Utilise "The" + état pour prédire "black"
-7. Arrête quand prédit "END"
+Prenons un exemple concret de traduction français → anglais :
+
+1. L'encodeur (un LSTM) traite "Le chat noir dort" token par token, mettant à jour son état caché à chaque mot
+2. L'état caché final de l'encodeur = le **vecteur de contexte** = un résumé compressé de toute la phrase source
+3. Ce vecteur initialise l'état caché du décodeur
+4. Le décodeur reçoit un token spécial \<START\> en entrée
+5. Il prédit le premier mot : "The"
+6. "The" est réinjecté comme entrée, le décodeur prédit "black"
+7. "black" → prédit "cat", "cat" → prédit "sleeps"
+8. Le décodeur s'arrête quand il prédit le token \<END\>
+
+C'est élégant : l'encodeur "comprend" la source, le décodeur "rédige" la cible. Les deux sont reliés par un unique vecteur.
 
 <Callout type="info" title="Le goulot d'étranglement">
-Tout ce qui importait de "Le chat noir dort sous la table énorme" doit tenir dans un vecteur 500-dim. Pour une phrase ? OK. Pour un livre ? Les détails disparaissent. C'est le problème **fondamental** de seq2seq vanilla. Ça motive l'attention.
+Tout ce que l'encodeur a compris de "Le chat noir dort sous la grande table en bois massif" doit tenir dans un **unique vecteur** de 500 ou 1000 dimensions. Pour une phrase courte, ça passe. Pour un paragraphe entier ? Les premiers mots sont "oubliés" au profit des derniers. C'est comme essayer de résumer un livre entier en une seule phrase : les détails se perdent inévitablement. Ce goulot d'étranglement est le problème **fondamental** de seq2seq vanilla, et c'est exactement ce que l'attention va résoudre.
 </Callout>
 
 ## L'attention de Bahdanau (2014)
 
 ### L'intuition révolutionnaire
 
-Au lieu de forcer le décodeur à mémoriser, laissez-le **regarder** chaque mot de la source à chaque génération.
+Bahdanau a une idée simple mais profonde : au lieu de forcer toute l'information à passer par un unique vecteur, laissons le décodeur **regarder directement la séquence source** à chaque étape de la génération.
 
-Métaphore : vous traduisez une phrase. Vous ne mémorisez pas d'abord, vous consultez au fur et à mesure.
+La métaphore est naturelle : quand tu traduis une phrase, tu ne mémorises pas d'abord la phrase entière avant de commencer à écrire. Tu consultes le texte source **au fur et à mesure**. Pour traduire "noir", tu regardes le mot correspondant dans la source. Pour traduire "dort", tu regardes un autre endroit.
+
+C'est exactement ce que fait le mécanisme d'attention : à chaque mot que le décodeur génère, il "regarde" tous les états cachés de l'encodeur et décide lesquels sont les plus pertinents pour sa prédiction actuelle.
 
 <ArxivLink id="1409.0473" title="Neural Machine Translation by Jointly Learning to Align and Translate" />
 
+### Mathématiques de l'attention
 
+À chaque pas de décodage $t$, le mécanisme d'attention calcule quatre choses :
 
+**1. Scores d'alignement** : pour chaque mot source $j$, on calcule un score indiquant sa pertinence :
+$$
+e(t, j) = a(s_{t-1},\; h_j)
+$$
 
+Ici, $s_{t-1}$ est l'état du décodeur au pas précédent, $h_j$ est l'état de l'encodeur pour le mot source $j$, et $a$ est un petit réseau de neurones (le "modèle d'attention"). Ce score répond à la question : "à quel point le mot source $j$ est-il important pour la prédiction que je m'apprête à faire ?"
 
-### Mathématique de l'attention
+**2. Poids d'attention** : on normalise les scores avec un softmax :
+$$
+\alpha(t, j) = \frac{\exp(e(t, j))}{\sum_k \exp(e(t, k))}
+$$
 
-À chaque pas de décodage t :
+Cela transforme les scores bruts en une **distribution de probabilités** sur les mots sources. Par exemple : "je regarde 70% le mot 'noir', 20% le mot 'chat', 10% le mot 'dort'". Tous les poids sont positifs et somment à 1.
 
-**1. Scores d'alignement** : pour chaque mot source j :
-```
-e(t, j) = a(s(t-1), h_j)
-```
-où s = état décodeur, h_j = état encodeur au mot j, a = petit réseau (attention model).
-"Ce mot source importe combien pour ma prédiction?"
+**3. Vecteur de contexte** : on calcule une moyenne pondérée des états cachés de l'encodeur :
+$$
+c(t) = \sum_j \alpha(t, j) \cdot h_j
+$$
 
-**2. Poids d'attention** : softmax pour normaliser :
-```
-alpha(t, j) = exp(e(t, j)) / sum_k exp(e(t, k))
-```
-Distribution de probabilités : "je regarde 70% le mot 1, 20% le mot 3, 10% le mot 5".
+C'est une **extraction sélective** : au lieu de tout compresser en un vecteur fixe, on crée un vecteur de contexte **différent à chaque pas**, focalisé sur les parties pertinentes de la source. C'est le coeur de l'innovation.
 
-**3. Vecteur de contexte** : moyenne pondérée des sources :
-```
-c(t) = sum_j alpha(t, j) * h_j
-```
-Extraction sélective : regarder ce qui importe.
-
-**4. Prédiction** : combine contexte et état décodeur pour sortie.
+**4. Prédiction** : le vecteur de contexte $c(t)$ est combiné avec l'état du décodeur $s_t$ pour prédire le mot suivant. Le décodeur a maintenant accès à une vue ciblée de la source, plus son propre état interne.
 
 <Callout type="tip" title="Visualisation magique">
-Les poids alpha(t, j) forment une heatmap. Pour la traduction, tu vois littéralement : "quand je génère 'black', je regarde 'noir'", "quand je génère 'the', je regarde 'le'". Sans supervision ! Le modèle apprend seul les alignements.
+Les poids d'attention $\alpha(t, j)$ forment naturellement une **matrice de chaleur** (heatmap) quand on les affiche. Pour la traduction, on voit littéralement les alignements : quand le décodeur génère "black", il regarde "noir" ; quand il génère "the", il regarde "le". Et tout ça **sans supervision** ! Le modèle apprend seul quels mots correspondent à quels mots. Ces visualisations ont été une des raisons du succès fulgurant de l'attention : pour la première fois, on pouvait "voir" ce que le modèle faisait.
 </Callout>
 
-### L'attention additives Bahdanau
+### L'attention additive de Bahdanau
 
-Implémentation détaillée :
-```
-e(t, j) = v^T . tanh(W_a . s(t-1) + U_a . h_j)
-```
+L'implémentation spécifique de Bahdanau utilise un petit réseau de neurones pour calculer les scores :
 
-On appelle "additive" car W_a . s et U_a . h sont additionnés, pas multipliés. v, W_a, U_a = paramètres apprenables.
+$$
+e(t, j) = v^T \cdot \tanh(W_a \cdot s_{t-1} + U_a \cdot h_j)
+$$
 
-## Attention de Luong (2015) : variantes
+On appelle ça l'attention "additive" car les transformations de $s$ et $h$ sont **additionnées** (pas multipliées). Les paramètres $v$, $W_a$, $U_a$ sont appris pendant l'entraînement. Le tanh introduit une non-linéarité, et $v^T$ projette le résultat en un scalaire (le score).
 
-### Plus simple : dot-product
+C'est plus expressif qu'un simple produit scalaire car le réseau d'attention a ses propres paramètres apprenables, mais aussi plus coûteux en calcul.
 
-```
-e(t, j) = s(t)^T . h_j
-```
+## Attention de Luong (2015) : variantes simplifiées
 
-Juste le produit scalaire. Rapide, pas de paramètres extras.
+Un an après Bahdanau, Luong propose des variantes plus simples et plus rapides.
 
-### Avec poids : "general attention"
+### Dot-product attention
 
-```
-e(t, j) = s(t)^T . W_a . h_j
-```
+$$
+e(t, j) = s_t^T \cdot h_j
+$$
 
-Produit scalaire avec matrice learnable.
+Juste le produit scalaire entre l'état du décodeur et l'état de l'encodeur. Pas de paramètres supplémentaires, pas de réseau d'attention dédié. Extrêmement rapide. L'intuition : deux vecteurs similaires (même direction dans l'espace) ont un produit scalaire élevé, donc un score d'attention élevé.
+
+### General attention
+
+$$
+e(t, j) = s_t^T \cdot W_a \cdot h_j
+$$
+
+Un compromis : le produit scalaire passe par une matrice de poids apprenables $W_a$. Plus expressif que le dot-product pur, mais moins coûteux que l'attention additive de Bahdanau.
 
 ### Bahdanau vs Luong
 
 | Aspect | Bahdanau | Luong |
 |--|--|--|
-| État utilisé | s(t-1) (précédent) | s(t) (courant) |
-| Modèle | Additif (NN) | Dot-product |
-| Paramètres | Plus | Moins |
-| Vitesse | Lent | Rapide |
+| État décodeur utilisé | $s_{t-1}$ (pas précédent) | $s_t$ (pas courant) |
+| Modèle d'attention | Additif (réseau de neurones) | Dot-product ou general |
+| Paramètres supplémentaires | Plus nombreux | Moins nombreux |
+| Vitesse | Plus lent | Plus rapide |
 
-Empiriquement ? Proches. Luong plus efficace, Bahdanau plus expressif.
+En pratique, les performances sont proches. Luong est plus efficace et plus simple à implémenter, ce qui explique sa popularité. Mais surtout, c'est l'attention dot-product de Luong qui servira de base au **Transformer** : le scaled dot-product attention de "Attention Is All You Need" est une généralisation directe de cette idée.
 
-<Callout type="paper" title="L'évolution vers Transformer">
-L'attention est une contribution **massive**. Elle devient :
-1. Pièce d'aide dans seq2seq
-2. Mécanisme central dans Transformer (2017)
-3. Seule primitive de Transformer (self-attention)
+<Callout type="paper" title="L'évolution vers le Transformer">
+L'attention est la contribution la plus influente de cette période. Son évolution :
+1. **2014** : mécanisme d'aide dans seq2seq (Bahdanau) -- un complément au RNN
+2. **2015** : variantes simplifiées (Luong) -- le dot-product attention émerge
+3. **2017** : mécanisme central et unique du Transformer -- plus de RNN du tout
 
-Le titre de Transformer "Attention Is All You Need" dit tout. Pas de RNN, pas de CNN, juste de l'attention.
+Le titre du papier Transformer, "Attention Is All You Need", résume cette trajectoire. On est passé de "l'attention aide les RNN" à "l'attention remplace les RNN".
 </Callout>
 
 ## Attention globale vs locale
 
-**Globale** : regarder tous les mots source. Coûteux pour très longues séquences (O(n²)).
+**Attention globale** : le décodeur regarde **tous** les mots de la séquence source à chaque étape. C'est l'approche par défaut. Le coût est proportionnel à la longueur de la source : $O(n)$ par pas de décodage, donc $O(n \times m)$ au total (avec $m$ la longueur cible).
 
-**Locale** : regarder seulement une fenêtre. Moins expressif mais O(n).
+**Attention locale** : le décodeur ne regarde qu'une **fenêtre** autour d'une position estimée. Moins expressif mais plus rapide, surtout pour les très longues séquences. C'est un précurseur des mécanismes d'attention à fenêtre glissante (sliding window) qu'on retrouve dans les architectures modernes comme Longformer.
 
-Pour texte court ? Global. Pour documents ? Fenêtres qui glissent (sliding windows).
+Pour des phrases de longueur raisonnable (< 100 tokens), l'attention globale est standard. Pour des documents de milliers de tokens, les variantes locales ou à fenêtre deviennent nécessaires.
+
+## Pourquoi c'est important
+
+L'attention de Bahdanau est un des concepts les plus influents de l'histoire du deep learning. Comprendre ce mécanisme te donne :
+
+- **Les bases du Transformer** : la self-attention du Transformer est une généralisation directe de l'attention seq2seq
+- **L'intuition "Query-Key-Value"** : dans l'attention Bahdanau, l'état du décodeur joue le rôle de "query", les états de l'encodeur sont les "keys" et "values". C'est exactement le vocabulaire du Transformer.
+- **Un paradigme universel** : l'idée de "regarder sélectivement ce qui est pertinent" se retrouve partout : attention spatiale en vision, graph attention sur les graphes, cross-attention dans les modèles multimodaux (CLIP, DALL-E)
 
 ## L'héritage colossal
 
-- Traduction automatique : surpassé les systèmes statistiques classiques
-- Self-attention : une séquence s'attend elle-même, fondateur des Transformers
-- Domaine du problème : attention spatiale en vision, graph attention sur graphes
-- Multimodal : attention texte-image (CLIP, DALL-E)
+- **Traduction automatique** : a surpassé les systèmes statistiques classiques qui dominaient depuis des décennies
+- **Self-attention** : quand une séquence s'applique l'attention à elle-même, on obtient le fondement des Transformers
+- **Attention multi-domaine** : attention spatiale en vision par ordinateur, graph attention sur les graphes
+- **Multimodal** : attention croisée texte-image dans CLIP, DALL-E, et les modèles de génération
 
-<Callout type="info" title="Pourquoi c'est fondateur">
-Avant attention : "mémoriser l'entrée en un vecteur". Après : "regarder ce qui importe pour chaque sortie". C'est un changement de paradigme. C'est pourquoi tous les modèles modernes utilisent l'attention, et pourquoi les Transformers (attention pure) ont gobé le NLP.
+<Callout type="info" title="Le changement de paradigme">
+Avant l'attention : "compresser toute l'entrée en un unique vecteur, puis générer à partir de ce résumé". Après l'attention : "consulter directement la source à chaque étape, en se focalisant sur ce qui est pertinent". C'est un changement de paradigme fondamental : de la compression aveugle à l'accès sélectif. C'est pourquoi tous les modèles modernes utilisent l'attention sous une forme ou une autre.
 </Callout>
 
 ## Résumé final
 
-Seq2seq = encodeur + décodeur. Attention = décodeur regarde l'encodeur sélectivement. C'est le pont qui sauve les longues séquences de l'oubli. Bahdanau l'invente, Luong la simplifie, Transformer la généralise. Fondamental pour tout ce qui transforme des séquences : traduction, résumé, dialogue, code generation.
+Seq2seq = un encodeur qui comprend la source + un décodeur qui génère la cible. Le problème : tout passe par un seul vecteur. L'attention résout ça en permettant au décodeur de regarder sélectivement l'encodeur à chaque pas. Bahdanau l'invente avec une attention additive, Luong la simplifie avec le dot-product, et le Transformer la généralise en self-attention. C'est la brique fondamentale de tout ce qui transforme des séquences aujourd'hui : traduction, résumé, dialogue, génération de code.

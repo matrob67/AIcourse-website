@@ -5,155 +5,154 @@ description: "Les modèles de diffusion (DDPM), le processus de bruitage progres
 
 ## L'idée simple et élégante
 
-Prendre une image → ajouter **progressivement du bruit** jusqu'à c'est du pur bruit gaussien. Puis apprendre à **inverser** ce processus : partir de bruit, enlever bruit étape par étape, reconstruire l'image.
+Le principe fondamental des modèles de diffusion tient en deux étapes : prendre une image et **ajouter progressivement du bruit** jusqu'à obtenir du pur bruit gaussien aléatoire. Puis apprendre à **inverser** ce processus : partir de bruit pur, enlever le bruit étape par étape, et reconstruire une image cohérente.
 
-C'est simple. C'est stable. Ça fonctionne TRÈS bien. En 2022, Stable Diffusion et DALL-E utilisent ça. Qualité > GAN. Stabilité > VAE. Révolution 2022.
+C'est une idée d'une simplicité trompeuse. Et pourtant, elle a déclenché une révolution. En 2022, Stable Diffusion, DALL-E 2 et Midjourney ont démontré que cette approche produit des images d'une qualité supérieure aux GANs, avec une stabilité d'entraînement bien meilleure que les VAEs. Là où les GANs souffrent d'un équilibre fragile entre générateur et discriminateur, et les VAEs produisent des images floues, la diffusion combine le meilleur des deux mondes.
 
 <ArxivLink id="2006.11239" title="Denoising Diffusion Probabilistic Models" />
 
 
 
-
 ## Processus forward : du signal au bruit
 
-### La progression
+### La progression pas à pas
 
-À chaque pas t (de 1 à T, typiquement T = 1000) :
+Le processus forward est **fixe** et ne s'apprend pas. C'est simplement l'ajout progressif de bruit gaussien. À chaque pas $t$ (de 1 à $T$, typiquement $T = 1000$), on mélange l'image avec un peu de bruit :
 
-```
-x_t = sqrt(alpha_t) * x_{t-1} + sqrt(1 - alpha_t) * epsilon_t
-```
+$$
+x_t = \sqrt{\alpha_t} \cdot x_{t-1} + \sqrt{1 - \alpha_t} \cdot \epsilon_t
+$$
 
-où epsilon ~ N(0, I) = bruit gaussien pur.
+avec $\epsilon \sim \mathcal{N}(0, I)$ qui est du bruit gaussien pur (tiré aléatoirement).
 
-alpha_t ∈ (0, 1) contrôle la proportion signal vs bruit à chaque étape. alpha petit = beaucoup bruit, alpha gros = beaucoup signal.
+L'intuition est celle d'un mélangeur : $\alpha_t$ contrôle la proportion entre signal et bruit à chaque étape. Quand $\alpha_t$ est proche de 1, on garde surtout le signal existant et on ajoute très peu de bruit. Quand $\alpha_t$ est petit, on noie le signal sous le bruit. Les coefficients $\sqrt{\alpha_t}$ et $\sqrt{1 - \alpha_t}$ sont choisis pour que la variance totale reste contrôlée (normalisée) à chaque étape.
 
 ### Le schedule de bruit
 
-Quelle quantité de bruit ajouter à chaque pas ? Défini par beta_t = 1 - alpha_t.
+La quantité de bruit ajoutée à chaque pas est définie par le "schedule" : $\beta_t = 1 - \alpha_t$. Deux schedules courants :
 
-**Linéaire** (original DDPM) : beta augmente linéairement, 0.0001 → 0.02. Progressif.
+**Schedule linéaire** (DDPM original) : $\beta$ augmente linéairement de $0.0001$ à $0.02$. Le bruitage est très progressif au début (on préserve les détails fins), puis s'accélère. Simple et efficace.
 
-**Cosinus** : progression plus douce, bénéfique haute résolution.
+**Schedule cosinus** : progression plus douce, particulièrement bénéfique pour les images haute résolution. Le bruitage est plus uniforme tout au long du processus, évitant de détruire trop vite les structures de basse fréquence.
 
-### Sauter directement
+### Sauter directement au pas t
 
-Propriété magique : tu peux calculer **directement** x_t à partir de x_0 sans passer par tous les pas intermédiaires :
+Propriété mathématique cruciale : grâce aux propriétés de la gaussienne, tu peux calculer **directement** $x_t$ à partir de $x_0$ sans passer par tous les pas intermédiaires :
 
-```
-x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * epsilon
-```
+$$
+x_t = \sqrt{\bar{\alpha}_t} \cdot x_0 + \sqrt{1 - \bar{\alpha}_t} \cdot \epsilon
+$$
 
-où alpha_bar_t = produit de alpha_1 à alpha_t, epsilon ~ N(0, I).
+avec $\bar{\alpha}_t = \prod_{s=1}^{t} \alpha_s$ (le produit cumulé de tous les $\alpha$) et $\epsilon \sim \mathcal{N}(0, I)$.
 
-**Crucial pour entraînement** : échappe le coût quadratique, peux sampler n'importe quel t uniformément.
+Pourquoi c'est **crucial pour l'entraînement** ? Parce que pendant l'entraînement, tu dois bruiter une image à un pas $t$ aléatoire. Sans cette formule, tu devrais appliquer séquentiellement les 500 étapes de bruitage pour obtenir $x_{500}$. Avec elle, un seul calcul suffit. Tu peux échantillonner n'importe quel $t$ uniformément et obtenir $x_t$ instantanément.
 
-<Callout type="info" title="Destruction progressive">
-t petit : x_t ≈ x_0 avec bruit léger. t = T : x_T est bruit pur, indistinguable de N(0, I). Chaque étape = petite perturbation, donc **potentiellement réversible**. C'est là où la magie arrive.
+<Callout type="info" title="La destruction progressive en images">
+Au pas $t = 0$ : l'image originale, intacte. Au pas $t = 100$ : l'image est floue, les détails fins ont disparu mais les grandes structures sont visibles. Au pas $t = 500$ : on distingue vaguement des formes, des couleurs dominantes. Au pas $t = T = 1000$ : du bruit pur, indistinguable de $\mathcal{N}(0, I)$. Toute l'information a été détruite. Mais chaque étape individuelle n'a ajouté qu'une **petite perturbation**, ce qui rend le processus **potentiellement réversible** étape par étape. C'est là que la magie opère.
 </Callout>
 
-## Processus reverse : débruitage
+## Processus reverse : le débruitage appris
 
 ### L'objectif
 
-Inverser le forward. Partir de bruit, enlever bruit étape par étape.
+Inverser le processus forward. Partir de bruit pur $x_T$ et remonter étape par étape jusqu'à une image propre $x_0$.
 
-Mathématiquement : apprendre `p(x_{t-1} | x_t)`. "Vu cette image bruitée, comment était-elle 1 étape moins bruitée ?"
+Mathématiquement, cela revient à apprendre la distribution conditionnelle $p(x_{t-1} | x_t)$ : "étant donné cette image bruitée au pas $t$, à quoi ressemblait-elle au pas $t-1$, c'est-à-dire avec un tout petit peu moins de bruit ?" Si tu sais répondre à cette question pour chaque $t$, tu peux remonter de $x_T$ (bruit) à $x_0$ (image) pas à pas.
 
-### Le réseau débruitage
+### Le réseau de débruitage
 
-**U-Net** entraîné pour prédire le **bruit** :
+En pratique, on entraîne un réseau (typiquement un **U-Net**) à prédire le **bruit** ajouté :
 
-```
-epsilon_theta(x_t, t) ≈ epsilon
-```
+$$
+\epsilon_\theta(x_t, t) \approx \epsilon
+$$
 
-Input : image bruitée x_t + encoding du pas de temps t (sinusoids positionnels). Output : prédiction du bruit gaussian ajouté.
+Le réseau reçoit en entrée l'image bruitée $x_t$ accompagnée d'un encoding du pas de temps $t$ (via des sinusoïdes positionnelles, comme dans les Transformers). Sa tâche : prédire le bruit gaussien $\epsilon$ qui a été ajouté pour obtenir $x_t$ à partir de $x_{t-1}$.
 
-### Pourquoi prédire le bruit ?
+### Pourquoi prédire le bruit plutôt que l'image ?
 
-On pourrait prédire x_0 ou `x_{t-1}`. Prédire le bruit est plus stable, avec une variance uniforme à travers les pas de temps. Mathématiquement équivalent (on dérive x_0 de x_t et epsilon), mais c'est une meilleure paramétrisation.
+C'est un choix de paramétrisation, pas une nécessité mathématique. On pourrait entraîner le réseau à prédire $x_0$ directement, ou $x_{t-1}$. Mais prédire le bruit $\epsilon$ est empiriquement plus stable : la cible (le bruit gaussien) a une variance uniforme à travers tous les pas de temps, ce qui stabilise l'entraînement. Mathématiquement, connaître $\epsilon$ permet de retrouver $x_0$ via la formule du forward, donc c'est équivalent -- mais c'est une meilleure paramétrisation en pratique.
 
-## Entraînement DDPM : simplicité de rêve
+## Entraînement DDPM : une simplicité remarquable
 
-L'entraînement ? **Remarquablement simple** :
+L'algorithme d'entraînement est d'une simplicité presque déconcertante :
 
-1. Sampler x_0 du dataset
-2. Sampler t aléatoirement dans `{1, ..., T}`
-3. Sampler bruit epsilon ~ N(0, I)
-4. Calculer x_t via forward
-5. Minimiser : **L = ||epsilon - epsilon_theta(x_t, t)||^2**
+1. Échantillonner une image $x_0$ du dataset
+2. Tirer un pas de temps $t$ aléatoirement dans $\{1, \ldots, T\}$
+3. Tirer du bruit $\epsilon \sim \mathcal{N}(0, I)$
+4. Calculer $x_t$ via la formule du forward (un seul calcul, pas besoin d'itérer)
+5. Passer $x_t$ et $t$ dans le réseau, obtenir la prédiction $\hat{\epsilon}$
+6. Minimiser : $\mathcal{L} = \| \epsilon - \hat{\epsilon} \|^2$
 
-C'est tout. MSE brute entre bruit réel et bruit prédit.
+C'est tout. Une simple MSE (erreur quadratique moyenne) entre le vrai bruit et le bruit prédit. Pas de loss complexe, pas de composants adversariaux, pas d'équilibrage délicat entre deux réseaux.
 
-Stabilité ? Pas d'adversarial training. Mode collapse ? Zéro. Chaque étape = tâche de débruitage supervisée classique. Convergence ? Guaranteed. C'est pourquoi diffusion a **explosé** en popularité.
+Comparons avec les alternatives. Les **GANs** nécessitent un équilibre fragile entre générateur et discriminateur, souffrent de mode collapse (le générateur ne produit qu'un sous-ensemble des images possibles), et sont notoirement difficiles à entraîner. Les **VAEs** nécessitent un compromis délicat entre la loss de reconstruction et la régularisation KL, et produisent souvent des images floues. La diffusion ? Un seul réseau, une seule loss, une convergence garantie. C'est cette stabilité qui a permis de scaler les modèles de diffusion à des résolutions et qualités inaccessibles aux GANs.
 
-<Callout type="tip" title="La beaute de la simplicite">
-C'est la beauté des modèles de diffusion : un seul réseau, une seule loss, pas de jeux complexes. Compare aux GAN (équilibre délicat) ou VAE (KL vs recon). Diffusion = straightforward.
+<Callout type="tip" title="La beauté de la simplicité">
+Chaque étape d'entraînement est essentiellement une tâche de débruitage supervisé classique : "voici une image bruitée, prédit le bruit". Rien de plus. Cette simplicité rend la diffusion extrêmement robuste et facile à reproduire, contrairement aux GANs qui nécessitent des tricks d'entraînement complexes.
 </Callout>
 
-### Architecture U-Net
+### Architecture U-Net : le réseau de débruitage
 
-Standard : **encodeur → goulot → décodeur**
+Le réseau de débruitage standard est un **U-Net**, une architecture en forme de U :
 
-- Encodeur : convolutions, réduction résolution, augmentation canaux
-- Décodeur : augmentation résolution
-- Skip connections entre encodeur ↔ décodeur (même résolution)
-- **Attention blocks** aux résolutions intermédiaires (self-attention pour dépendances globales)
-- **Conditioning temporel** : pas de temps t encodé via sinusoids + injecté par adaptive layer norm
+- **Encodeur** (branche descendante) : convolutions progressives qui réduisent la résolution spatiale tout en augmentant le nombre de canaux. L'image 256x256 devient 128x128, puis 64x64, etc.
+- **Goulot** (point le plus bas) : résolution minimale, canaux maximaux. C'est ici que les dépendances globales sont capturées.
+- **Décodeur** (branche ascendante) : augmentation progressive de la résolution spatiale.
+- **Skip connections** entre encodeur et décodeur à chaque résolution : permettent de combiner informations de bas niveau (textures, bords) et de haut niveau (structure globale).
+- **Blocs d'attention** aux résolutions intermédiaires : du self-attention pour capturer les dépendances spatiales à longue distance.
+- **Conditioning temporel** : le pas de temps $t$ est encodé via des sinusoïdes (comme les positional embeddings des Transformers) et injecté dans chaque couche via adaptive layer norm. Cela permet au réseau de savoir "quel niveau de bruit je dois enlever".
 
-## Inférence : générer des images
+## Inférence : générer des images à partir de rien
 
-Processus de génération :
+Le processus de génération est l'inverse du forward :
 
-1. Sampler x_T ~ N(0, I) (bruit pur)
-2. Pour t = T, T-1, ..., 1 :
-   - Prédire le bruit : epsilon_hat = epsilon_theta(x_t, t)
-   - Calculer `x_{t-1}` en utilisant epsilon_hat et les paramètres du schedule
-   - Ajouter bruit stochastique (sauf t = 1)
+1. Échantillonner du bruit pur : $x_T \sim \mathcal{N}(0, I)$
+2. Pour chaque pas $t = T, T-1, \ldots, 1$ :
+   - Prédire le bruit : $\hat{\epsilon} = \epsilon_\theta(x_t, t)$
+   - Calculer $x_{t-1}$ en utilisant $\hat{\epsilon}$ et les paramètres du schedule
+   - Ajouter un petit bruit stochastique (sauf au dernier pas $t = 1$) pour maintenir la diversité
 
-Résultat : image synthétique réaliste, progressive du bruit.
+Le résultat : une image synthétique réaliste, construite progressivement à partir de bruit pur.
 
-### Le tradeoff : lenteur
+### Le compromis majeur : la lenteur
 
-**Inconvénient** : 1000 étapes séquentielles. Chaque étape nécessite un passage complet dans le réseau U-Net. C'est 1000× plus lent qu'un GAN qui génère en un seul passage. En pratique : plusieurs secondes sur GPU pour une image, contre quelques millisecondes pour un GAN.
+**Inconvénient principal** : le processus nécessite 1000 passages séquentiels dans le réseau U-Net. Chaque passage est un forward complet. Comparaison : un GAN génère une image en un **seul** passage. La diffusion est donc environ 1000 fois plus lente. En pratique : plusieurs secondes sur GPU pour une image, contre quelques millisecondes pour un GAN.
 
-### Accélération
+### Les techniques d'accélération
 
-Plusieurs approches ont été développées pour réduire ce coût :
+Plusieurs approches ont été développées pour réduire drastiquement ce coût :
 
-**DDIM (Denoising Diffusion Implicit Models)** : reformulation déterministe du processus de débruitage qui permet de sauter des étapes. On peut descendre à 50-100 étapes avec très peu de perte de qualité.
+**DDIM (Denoising Diffusion Implicit Models)** : reformulation déterministe du processus de débruitage qui permet de "sauter" des étapes intermédiaires. On descend à 50-100 étapes avec très peu de perte de qualité. L'idée : au lieu de suivre la trajectoire stochastique complète, on suit un chemin déterministe plus direct.
 
-**DPM-Solver** : utilise des solveurs d'équations différentielles ordinaires (ODE) d'ordre supérieur. Permet d'atteindre 10-20 étapes avec une qualité comparable aux 1000 étapes originales.
+**DPM-Solver** : utilise des solveurs d'équations différentielles ordinaires (ODE) d'ordre supérieur. Au lieu de faire des pas d'Euler naïfs (1 pas = 1 étape), on fait des pas plus intelligents qui couvrent plusieurs étapes d'un coup. Permet d'atteindre 10-20 étapes avec une qualité comparable aux 1000 originales.
 
-**Distillation de consistance** : on entraîne un modèle "étudiant" à imiter en 1-4 étapes ce que le modèle "enseignant" fait en 1000. Le modèle étudiant apprend à sauter directement du bruit vers l'image finale.
+**Distillation de consistance** : on entraîne un modèle "étudiant" à imiter en 1-4 étapes ce que le modèle "enseignant" fait en 1000. L'étudiant apprend à sauter directement du bruit vers l'image finale, en "compressant" toute la trajectoire de débruitage.
 
-<Callout type="info" title="Connexion score matching">
-Prédire le bruit epsilon = estimer le **score** (gradient du log-densité) de la distribution bruitée. Song et al. unifient diffusion, score matching, et SDEs dans un cadre théorique. Ouvre voies vers flow matching, score-based models. Mathématiques profondes sous-jacentes.
+<Callout type="info" title="Connexion avec le score matching">
+Il existe un lien mathématique profond entre la diffusion et le "score matching". Prédire le bruit $\epsilon$ revient à estimer le **score** de la distribution (le gradient du log de la densité de probabilité) de la distribution bruitée. Song et al. ont unifié les modèles de diffusion, le score matching et les équations différentielles stochastiques (SDEs) dans un cadre théorique élégant. Cette connexion ouvre la voie au flow matching et aux modèles à base de score.
 </Callout>
 
-## Guidance : contrôler la génération
+## Guidance : contrôler ce que le modèle génère
 
 ### Classifier guidance
 
-Ajouter le gradient d'un classifieur pré-entraîné au débruitage. Pousse vers une classe spécifique.
-
-Trade-off : fidélité vs diversité.
+Première approche : utiliser un classifieur pré-entraîné pour "guider" le débruitage vers une classe cible. À chaque étape, on ajoute le gradient du classifieur au processus de débruitage, poussant l'image en construction vers la classe souhaitée. Le trade-off : plus de guidance = images plus fidèles à la classe mais moins diverses.
 
 ### Classifier-free guidance (le standard actuel)
 
-Entraîner le diffusion model à débruiter avec ET sans conditioning. À l'inférence :
+Approche plus élégante qui ne nécessite aucun classifieur externe. Pendant l'entraînement, le modèle apprend à débruiter **avec et sans** conditioning (texte, classe, etc.). À l'inférence, on combine les deux :
 
-```
-epsilon_guided = epsilon_uncond + w * (epsilon_cond - epsilon_uncond)
-```
+$$
+\epsilon_{\text{guided}} = \epsilon_{\text{uncond}} + w \cdot (\epsilon_{\text{cond}} - \epsilon_{\text{uncond}})
+$$
 
-où w > 1 amplifie l'effet du conditioning. C'est comment Stable Diffusion et DALL-E font text-to-image. Pas besoin de classifieur séparé.
+Le terme $(\epsilon_{\text{cond}} - \epsilon_{\text{uncond}})$ capture la "direction" du conditioning. Le poids $w > 1$ amplifie cet effet. Plus $w$ est grand, plus l'image colle au prompt texte, mais au prix de la diversité. C'est exactement comme ça que Stable Diffusion et DALL-E transforment du texte en images.
 
-<Callout type="paper" title="Diffusion latente">
-Stable Diffusion : diffusion dans l'espace latent d'un VAE, pas l'espace pixel. Encodeur VAE compress image → petit vecteur latent. Diffusion opère là-dedans (100× moins coûteux). Décodeur reconstruit final. Rend diffusion pratique haute-res.
+<Callout type="paper" title="Diffusion latente : le passage à l'échelle">
+Stable Diffusion n'opère pas dans l'espace pixel mais dans l'**espace latent** d'un VAE pré-entraîné. L'encodeur du VAE compresse l'image (par exemple 512x512x3) en un petit vecteur latent (64x64x4), soit environ 100 fois moins de données. Le processus de diffusion opère entièrement dans cet espace compact. Le décodeur du VAE reconstruit l'image finale. C'est cette astuce qui rend la diffusion praticable en haute résolution -- sans elle, bruiter et débruiter des images 512x512 pixel par pixel serait prohibitivement coûteux.
 </Callout>
 
 ## Résumé
 
-Les modèles de diffusion reposent sur une idée remarquablement simple : bruiter progressivement les données jusqu'au bruit pur, puis apprendre à inverser ce processus. Le processus forward est fixe et ne s'apprend pas. Le processus reverse est appris par un réseau de débruitage (U-Net). L'entraînement est stable et simple (une seule loss MSE), contrairement aux GANs. La génération est lente (1000 étapes), mais des techniques comme DDIM ou DPM-Solver ramènent cela à 10-50 étapes. En termes de qualité, les modèles de diffusion surpassent les GANs et les VAEs sur la plupart des benchmarks depuis 2022 — c'est pourquoi Stable Diffusion, DALL-E 2 et Midjourney les utilisent tous.
+Les modèles de diffusion reposent sur une idée remarquablement simple : bruiter progressivement les données jusqu'au bruit pur (forward, fixe), puis apprendre à inverser ce processus (reverse, appris par un U-Net). L'entraînement est stable et simple (une seule loss MSE), contrairement aux GANs. La génération est lente (1000 étapes) mais des techniques comme DDIM et DPM-Solver ramènent cela à 10-50 étapes. La classifier-free guidance permet de conditionner la génération sur du texte ou d'autres signaux. Depuis 2022, les modèles de diffusion dominent la génération d'images -- Stable Diffusion, DALL-E 2, Midjourney les utilisent tous.

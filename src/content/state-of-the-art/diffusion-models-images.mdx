@@ -5,151 +5,141 @@ description: "Comprendre les fondements mathématiques des modèles de diffusion
 
 ## L'idée centrale : apprendre à "dé-bruiter"
 
-**Imaginez ceci** : vous commencez avec du pur bruit blanc (complètement aléatoire). Puis vous montrez à un réseau de neurones comment enlever un tout petit peu de bruit à chaque étape, jusqu'à obtenir une image cohérente. C'est la diffusion.
+**Imagine ceci** : tu commences avec du pur bruit blanc --- une image entièrement aléatoire, comme la neige sur un vieux téléviseur. Puis tu montres à un réseau de neurones comment enlever un tout petit peu de bruit à chaque étape, jusqu'à obtenir une image cohérente. C'est la diffusion.
 
-C'est contre-intuitif mais puissant. Au lieu d'apprendre à générer directement ("dessine une chaise"), vous apprenez à retirer du bruit progressivement ("enlève le bruit qui n'est pas une chaise").
+C'est contre-intuitif mais brillant. Au lieu d'apprendre à générer directement une image ("dessine un chat"), tu apprends à retirer progressivement le bruit ("enlève le bruit qui n'est pas un chat"). Cette reformulation du problème est la clé de tout le paradigme.
 
 <Callout type="info" title="L'analogie de la sculpture">
-Les modèles de diffusion fonctionnent comme un sculpteur qui commence par un bloc de marbre informe (du bruit blanc). À chaque coup de ciseau (étape), il retire un peu de matière. Après 50 coups, une statue émerge. Le réseau neuronal apprend quel "morceau de bruit" retirer à chaque étape pour révéler une image.
+Les modèles de diffusion fonctionnent comme un sculpteur devant un bloc de marbre informe (le bruit blanc). À chaque coup de ciseau (étape de débruitage), il retire un peu de matière. Après 50 coups, une statue émerge. Le réseau neuronal apprend exactement quel "morceau de bruit" retirer à chaque étape pour révéler l'image cachée dans le chaos.
 </Callout>
 
 ## DDPM : le fondateur
 
 ### Le processus forward (bruitage progressif)
 
-À chaque étape t, on ajoute un petit peu de bruit gaussien :
+À chaque étape t, on ajoute un petit peu de bruit gaussien à l'image :
 
-```
-q(x_t | x_t-1) = N(x_t; sqrt(1 - beta_t) * x_t-1, beta_t * I)
-```
+$$q(x_t \mid x_{t-1}) = \mathcal{N}(x_t;\ \sqrt{1 - \beta_t} \cdot x_{t-1},\ \beta_t \cdot I)$$
 
-**Explication** : x_t est l'image à l'étape t, beta_t contrôle combien de bruit ajouter. Après 1000 étapes, l'image est du pur bruit gaussien.
+En termes simples : x_t est l'image à l'étape t, et beta_t contrôle combien de bruit on ajoute. C'est comme ajouter une couche de neige sur un paysage : à chaque étape, le paysage est un peu plus recouvert. Après 1000 étapes, tu ne vois plus que de la neige --- l'image originale a complètement disparu dans du pur bruit gaussien.
 
 ### Le processus reverse (débruitage)
 
-Le modèle (un UNet ou Transformer) apprend l'inverse : prédire comment retirer du bruit :
+Le modèle (un UNet ou un Transformer) apprend à faire l'inverse : prédire comment retirer le bruit étape par étape :
 
-```
-p_theta(x_t-1 | x_t) = N(x_t-1; mu_theta(x_t, t), sigma_t^2 * I)
-```
+$$p_\theta(x_{t-1} \mid x_t) = \mathcal{N}(x_{t-1};\ \mu_\theta(x_t, t),\ \sigma_t^2 \cdot I)$$
 
-### L'entraînement
+### L'entraînement : élégant et simple
 
-L'objectif d'entraînement est élégant et simple :
+L'objectif d'entraînement est d'une simplicité remarquable :
 
-```
-L = E[||epsilon - epsilon_theta(x_t, t)||^2]
-```
+$$\mathcal{L} = \mathbb{E}\left[\|\varepsilon - \varepsilon_\theta(x_t, t)\|^2\right]$$
 
-Où epsilon est le bruit qui a été ajouté, et epsilon_theta est la prédiction du modèle. Le modèle reçoit l'image bruitée x_t et le timestep t (quelle étape), et prédit le bruit.
+epsilon est le bruit qui a été ajouté à l'image, et epsilon_theta est la prédiction du modèle. Concrètement, pendant l'entraînement : on prend une image, on lui ajoute du bruit à une étape t aléatoire, et on demande au modèle de prédire quel bruit a été ajouté. Si sa prédiction est bonne, il pourra retirer ce bruit à l'inférence. C'est juste une régression en norme L2 --- pas de loss compliquée.
 
-### Le problème : trop d'étapes
+### Le problème : la lenteur
 
-Le DDPM original nécessite environ 1000 étapes de débruitage pour générer une image de qualité. À 1 seconde par étape, ça prend 1000 secondes (16 minutes). C'est complètement impraticable pour la production.
+Le DDPM original nécessite environ 1000 étapes de débruitage séquentiel pour produire une image de qualité. À raison d'une passe forward du réseau par étape, ça prend plusieurs minutes. Complètement impraticable pour une utilisation interactive ou en production.
 
 
 
 ## DDIM : l'accélération révolutionnaire
 
-### L'insight
+### L'insight fondamental
 
-DDIM (Denoising Diffusion Implicit Models) montre que le processus de débruitage ne doit pas être **stochastique** (aléatoire). On peut le rendre **déterministe** et **sauter des étapes** sans perdre beaucoup de qualité.
+DDIM (Denoising Diffusion Implicit Models) fait une observation cruciale : le processus de débruitage ne doit pas forcément être **stochastique** (aléatoire à chaque étape). On peut le rendre **déterministe** et **sauter des étapes** sans perdre beaucoup de qualité.
 
-Au lieu de 1000 étapes, vous pouvez utiliser 20-50 étapes et obtenir une image presque aussi bonne. Passage de 16 minutes à 10-20 secondes.
+Au lieu de 1000 étapes, tu peux utiliser 20-50 étapes et obtenir une image presque aussi bonne. Passage de plusieurs minutes à 10-20 secondes --- un facteur 20-50x d'accélération sans réentraîner le modèle.
 
-### Propriétés
+### Propriétés remarquables
 
-- **Déterministe** : même noise initial = même image générée
-- **Saut d'étapes** : vous pouvez sauter des étapes sans réentraîner
-- **Inversion** : vous pouvez "inverser" une image réelle en bruit, ce qui permet d'éditer les images
+- **Déterministe** : même bruit initial = même image générée à chaque fois (reproductibilité parfaite)
+- **Saut d'étapes** : tu choisis combien d'étapes utiliser après l'entraînement, sans modifier le modèle
+- **Inversion** : tu peux "inverser" une image réelle en bruit, ce qui ouvre la porte à l'édition d'images (tu inverses, tu modifies le prompt, tu regénères)
 
 <Callout type="paper" title="L'insight clé de DDIM">
-DDIM montre que le processus de débruitage n'a pas besoin d'être aléatoire. En le rendant déterministe, vous obtenez un mapping direct : bruit → image. Vous pouvez alors sauter des étapes sans dégradation majeure. C'est comme découvrir qu'on n'a pas besoin de 1000 étapes de révision pour écrire un bon poème, 20 suffisent.
+DDIM montre que le processus de débruitage n'a pas besoin d'être aléatoire. En le rendant déterministe, on obtient un mapping direct et reproductible : bruit vers image. Et comme ce mapping est continu, on peut sauter des étapes intermédiaires sans dégradation majeure. C'est comme découvrir qu'on n'a pas besoin de 1000 brouillons pour écrire un bon texte --- 20 révisions bien ciblées suffisent.
 </Callout>
 
 ## Noise Schedules : contrôler la vitesse du bruit
 
-Le noise schedule β_t contrôle à quelle vitesse on ajoute du bruit :
+Le noise schedule beta_t définit à quelle vitesse on ajoute du bruit dans le processus forward. C'est un choix de design crucial :
 
-- **Linear** : β augmente linéairement de 0 à 1 (simple mais pas optimal)
-- **Cosine** : β suit une courbe cosinus (meilleur pour les images haute qualité)
-- **Scaled Linear** : utilisé par Stable Diffusion (compromis)
+- **Linear** : beta augmente linéairement de 0.0001 à 0.02. Simple mais pas optimal --- le bruit s'accumule trop vite au milieu du processus.
+- **Cosine** : beta suit une courbe cosinus, ce qui ajoute le bruit plus uniformément. Meilleur pour les images haute qualité, car le modèle a plus de "temps" pour travailler sur les détails fins.
+- **Scaled Linear** : variante ajustée utilisée par Stable Diffusion, un compromis entre simplicité et qualité.
 
-Le choix du schedule affecte drastiquement la qualité et la diversité des images générées.
+Le choix du schedule affecte significativement la qualité et la diversité des images. Un mauvais schedule peut produire des images floues (trop de bruit trop vite) ou manquant de détails (pas assez de bruit, le modèle ne détruit pas assez l'image pour apprendre à reconstruire).
 
 ## Classifier-Free Guidance (CFG) : rendre le modèle obéissant
 
 ### Le problème sans guidage
 
-Sans guidance, le modèle génère des images vaguement liées au prompt, mais sans détails, sans cohérence. L'image suit le texte à peine.
+Sans guidance, le modèle génère des images vaguement liées au prompt mais sans précision. Tu demandes "un chat roux sur un toit" et tu obtiens... quelque chose de flou qui ressemble vaguement à un animal. Le modèle est trop "libre" et produit des résultats génériques.
 
-### La solution : entraîner avec dropout du texte
+### La solution : entraîner avec et sans texte
 
-Pendant l'entraînement, le texte conditionnel est aléatoirement remplacé par un token vide (10-20% des données). Le modèle apprend à générer :
-- **Avec** le texte (εcond)
-- **Sans** le texte (εuncond)
+Pendant l'entraînement, le texte conditionnel est aléatoirement remplacé par un token vide (10-20% du temps). Le modèle apprend donc à générer dans deux modes :
+- **Avec** le texte (epsilon_cond) : génération guidée par le prompt
+- **Sans** le texte (epsilon_uncond) : génération libre, non conditionnée
 
-Pendant l'inférence, on combine les deux :
+À l'inférence, on combine les deux prédictions :
 
-```
-ε_guided = ε_uncond + w * (ε_cond - ε_uncond)
-```
+$$\varepsilon_{\text{guided}} = \varepsilon_{\text{uncond}} + w \times (\varepsilon_{\text{cond}} - \varepsilon_{\text{uncond}})$$
 
-**Coin technique intuitive** : ε_uncond est la génération "naturelle" sans guidance. ε_cond est la génération "obéissante" au prompt. La différence (ε_cond - ε_uncond) représente "le bruit qui éloigne de l'image naturelle pour se rapprocher du prompt". On ajoute w fois cette différence.
+**L'intuition** : epsilon_uncond est ce que le modèle génèrerait naturellement sans contrainte. epsilon_cond est ce qu'il génère en suivant le prompt. La différence (epsilon_cond - epsilon_uncond) représente la "direction" qui rapproche l'image du prompt. Le facteur w amplifie cette direction. Plus w est grand, plus on force le modèle à coller au prompt.
 
-### Tuning le guidance scale
+### Régler le guidance scale
 
-- **w=1** : pas de guidance (ignorer le prompt, image générée librement)
-- **w=7-12** : guidance standard (bon compromis qualité/fidélité)
-- **w>15** : guidance fort (très fidèle au prompt, risque d'artefacts visuels)
+- **w=1** : pas de guidance supplémentaire (le modèle suit naturellement le prompt, sans amplification)
+- **w=7-12** : guidance standard (bon compromis entre fidélité au prompt et qualité visuelle)
+- **w>15** : guidance trop forte (le modèle colle au prompt mais produit des couleurs saturées, des artefacts, des textures répétitives)
 
-<Callout type="tip" title="Régler le guidance scale">
-Commencez avec **w=7.5** pour Stable Diffusion et **w=3.5** pour Flux. Augmentez si l'image ne suit pas bien le prompt (trop générique). Diminuez si l'image a des couleurs saturées ou des artefacts bizarres. C'est l'hyperparamètre le plus impactant pour la qualité perçue.
+<Callout type="tip" title="Régler le guidance scale en pratique">
+Commence avec **w=7.5** pour Stable Diffusion et **w=3.5** pour Flux. Si l'image est trop générique et ne suit pas bien le prompt, augmente w. Si l'image a des couleurs saturées ou des artefacts visuels, diminue w. C'est l'hyperparamètre qui a le plus d'impact sur la qualité perçue de l'image --- c'est le premier à ajuster.
 </Callout>
 
-## Latent Diffusion : l'optimisation de Stable Diffusion
+## Latent Diffusion : l'optimisation qui a tout changé
 
-### Le problème : trop de calcul
+### Le problème : diffuser dans l'espace pixel est trop cher
 
-La diffusion sur les pixels directement requiert énormément de calcul. Une image 512×512 en RGB a 512 × 512 × 3 = 786 432 valeurs. Chaque étape de diffusion doit traiter tout ça.
+Faire de la diffusion directement sur les pixels requiert énormément de calcul. Une image 512x512 en RGB contient 512 x 512 x 3 = 786 432 valeurs. Chaque étape de débruitage doit traiter tout ça avec un réseau de neurones lourd.
 
-### La solution : opérer dans un espace compressé
+### La solution : compresser d'abord, diffuser ensuite
 
-Au lieu de diffuser les pixels, diffusez dans un **espace latent compressé** :
+Au lieu de diffuser les pixels, on opère dans un **espace latent compressé** :
 
-1. Un **VAE encoder** compresse l'image : 512×512×3 → 64×64×4 (16 384 valeurs au lieu de 786 432)
-2. La **diffusion** opère dans cet espace compressé (48× plus petit)
+1. Un **VAE encoder** compresse l'image : 512x512x3 -> 64x64x4 (16 384 valeurs au lieu de 786 432)
+2. La **diffusion** opère dans cet espace compressé (48x plus petit)
 3. Un **VAE decoder** reconstruit l'image depuis l'espace latent
 
-Résultat : **48× moins de calcul**, avec pratiquement pas de perte de qualité.
-
-C'est l'innovation clé qui a rendu Stable Diffusion praticable sur du hardware consumer.
+Résultat : **48x moins de calcul** par étape de diffusion, avec une perte de qualité quasi imperceptible. C'est cette innovation qui a rendu Stable Diffusion utilisable sur un GPU grand public --- sans elle, seuls les clusters de datacenter pourraient générer des images.
 
 ## Flow Matching : l'alternative moderne
 
 ### Une formulation plus élégante
 
-Flow Matching (utilisé par Flux, SD3) reformule la diffusion comme un **flux optimal** entre la distribution du bruit et la distribution des images.
+Flow Matching (utilisé par Flux et SD3) reformule la diffusion comme un **flux optimal** entre la distribution de bruit et la distribution d'images. Au lieu de bruiter puis débruiter en 1000 petites étapes stochastiques, on apprend un chemin direct et optimal entre les deux distributions.
 
-Avantages :
-- Plus stable à entraîner (moins d'instabilités numériques)
-- Meilleure qualité avec peu d'étapes (1-4 pour Flux schnell)
-- Formulation mathématique plus élégante
+Avantages concrets :
+- Plus stable à entraîner (moins d'instabilités numériques et de loss qui explosent)
+- Meilleure qualité avec très peu d'étapes (1-4 pour Flux schnell)
+- Formulation mathématique plus propre et plus facile à analyser
 
-C'est la direction que prend la recherche actuellement : remplacer DDPM par Flow Matching comme paradigme d'entraînement standard.
+C'est la direction que prend la recherche : remplacer DDPM par Flow Matching comme paradigme d'entraînement standard pour la génération d'images.
 
-<Callout type="warning" title="La complexité cachée">
-Derrière la simplicité d'utiliser Stable Diffusion ("je rentre un prompt, je reçois une image"), se cache une mathématique sophistiquée. Comprendre les fondements (noise schedule, sampling, guidance) est essentiel pour le fine-tuning et le debugging, mais pas nécessaire pour l'utilisation basique.
+<Callout type="warning" title="La complexité cachée derrière la simplicité d'usage">
+Derrière la simplicité apparente de Stable Diffusion ("je tape un prompt, je reçois une image") se cache une mathématique sophistiquée. Comprendre les fondements --- noise schedule, méthodes de sampling, guidance scale --- est essentiel pour le fine-tuning, le debugging et l'optimisation. Mais pour un utilisateur final, cette complexité est heureusement abstraite.
 </Callout>
 
 ## L'évolution du domaine
 
-Les modèles de diffusion évoluent rapidement vers :
+Les modèles de diffusion évoluent rapidement sur plusieurs fronts :
 
-- **Vitesse** : générateur en 1-4 étapes (Flux schnell)
-- **Qualité** : résolutions 2K+, détails fins
-- **Contrôle** : ControlNet pour la pose, IP-Adapter pour la cohérence
-- **Architectures** : Diffusion Transformers (DiT) remplacent progressivement les UNets
-- **Entraînement** : Flow Matching remplace le DDPM classique
+- **Vitesse** : génération en 1-4 étapes avec Flux schnell et les méthodes de distillation
+- **Qualité** : résolutions 2K+ avec des détails fins impressionnants
+- **Contrôle** : ControlNet pour guider la pose, IP-Adapter pour maintenir la cohérence d'un personnage
+- **Architectures** : les Diffusion Transformers (DiT) remplacent progressivement les UNets traditionnels
+- **Entraînement** : Flow Matching supplante le DDPM classique
 
-Le domaine a atteint un "plateau de qualité" mais continue à optimiser vitesse, contrôle, et efficacité. Les avancées majeures futures seront probablement ailleurs (multimodal, 3D, etc.).
+Le domaine a atteint un "plateau de qualité" pour les images statiques, mais continue d'optimiser la vitesse, le contrôle et l'efficacité. Les prochaines avancées majeures viendront probablement de l'extension vers le multimodal (vidéo, 3D, audio).

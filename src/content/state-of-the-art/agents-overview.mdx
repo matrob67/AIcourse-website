@@ -5,97 +5,104 @@ description: "Vue d'ensemble des agents IA basés sur les LLM : définition, arc
 
 ## Qu'est-ce qu'un agent ?
 
-Un agent IA, c'est un LLM qui **agit** sur le monde. Pas juste un chatbot qui répond — un système qui :
-- Utilise des **outils** (appels API, exécution de code, recherche web)
-- Maintient une **mémoire** (contexte court et long terme)
-- Poursuit des **objectifs** en plusieurs étapes
-- Observe les résultats et s'adapte
+Un agent IA, c'est un LLM qui **agit** sur le monde. Pas juste un chatbot qui répond à vos questions — un système autonome qui :
+- Utilise des **outils** (appels API, exécution de code, recherche web, manipulation de fichiers)
+- Maintient une **mémoire** (contexte de la conversation et connaissances à long terme)
+- Poursuit des **objectifs** en plusieurs étapes, en planifiant et en s'adaptant
+- Observe les résultats de ses actions et corrige sa trajectoire
+
+La différence fondamentale entre un chatbot et un agent, c'est la **boucle de feedback**. Un chatbot reçoit une question, produit une réponse, et c'est fini. Un agent reçoit un objectif, réfléchit, agit, observe le résultat, réfléchit à nouveau, agit autrement si nécessaire, et continue jusqu'à atteindre l'objectif (ou abandonner).
+
+Prenons un exemple concret. Demandez à un chatbot "corrige les bugs dans mon code" : il vous donnera des suggestions textuelles. Demandez à un agent : il lira votre code, exécutera les tests, identifiera les erreurs, modifiera les fichiers, relancera les tests, et itérera jusqu'à ce que tout passe au vert. C'est une différence qualitative majeure.
 
 <Callout type="info" title="La définition minimaliste">
-Agent = LLM + capacité d'agir (outils) + boucle feedback (observe → décide → agit → observe). Sans la boucle, c'est juste un modèle.
+Agent = LLM + capacité d'agir (outils) + boucle de feedback (observe, décide, agit, observe). Sans la boucle, c'est juste un modèle qui génère du texte. Avec la boucle, c'est un système qui résout des problèmes.
 </Callout>
 
-## Architecture simple
+## Architecture d'un agent
 
-**Le cerveau** : le LLM qui raisonne et décide.
+Tout agent, du plus simple au plus complexe, repose sur quatre composants fondamentaux :
 
-**Les outils** : recherche web, exécution de code, appels API, manipulation de fichiers.
+**Le cerveau (LLM)** : le modèle de langage qui raisonne, planifie, et prend les décisions. C'est le chef d'orchestre. La qualité de l'agent dépend directement de la qualité du LLM sous-jacent — un modèle médiocre donnera un agent médiocre, peu importe les outils.
 
-**La mémoire** : court terme (conversation), long terme (base de connaissances).
+**Les outils** : les capacités d'action de l'agent. Recherche web, exécution de code Python, appels API, lecture/écriture de fichiers, envoi d'emails, requêtes SQL... Chaque outil étend ce que l'agent peut faire. Sans outils, l'agent ne peut que parler — avec des outils, il peut agir sur le monde réel.
 
-**La boucle** :
-```
-Objectif → [Réfléchir] → [Agir] → [Observer] → [Réfléchir] → ... → Résultat
-```
+**La mémoire** : court terme (la conversation en cours, les résultats des actions récentes) et long terme (base de connaissances, historique des sessions précédentes, préférences de l'utilisateur). La mémoire permet à l'agent de maintenir un contexte et d'apprendre de ses interactions.
 
-1. Objectif arrive
-2. Agent réfléchit : quel outil appeler ?
-3. Appelle l'outil
-4. Observe le résultat
-5. Décide : suivant ou terminer ?
+**La boucle d'exécution** :
+
+$$\text{Objectif} \rightarrow \text{Réfléchir} \rightarrow \text{Agir} \rightarrow \text{Observer} \rightarrow \text{Réfléchir} \rightarrow \cdots \rightarrow \text{Résultat}$$
+
+1. Un objectif arrive ("déploie cette application")
+2. L'agent réfléchit : quel est le plan ? Quel outil appeler en premier ?
+3. Il appelle l'outil choisi (ex: lire le Dockerfile)
+4. Il observe le résultat (contenu du fichier)
+5. Il décide : continuer (builder l'image), corriger (modifier le Dockerfile), ou terminer
+
+Cette boucle tourne jusqu'à ce que l'objectif soit atteint ou qu'une condition d'arrêt soit remplie (nombre max d'itérations, timeout, erreur irrécupérable).
 
 ## Niveaux d'autonomie
 
-| Niveau | Description | Exemple |
-|---|---|---|
-| L1 : Chat | Conversation | ChatGPT standard |
-| L2 : Tool-use | Utilise des outils sur demande | GPT-4 avec plugins |
-| L3 : Autonome | Planifie et exécute seul | Devin, Claude Code |
-| L4 : Multi-agent | Agents collaborent | AutoGen, CrewAI |
+Les agents ne sont pas tous égaux en autonomie. On peut les classifier sur une échelle :
+
+| Niveau | Description | Exemple | Intervention humaine |
+|---|---|---|---|
+| L1 : Chat | Conversation simple | ChatGPT standard | Chaque message |
+| L2 : Tool-use | Utilise des outils sur demande | GPT-4 avec plugins | Par requête |
+| L3 : Autonome | Planifie et exécute seul | Devin, Claude Code | Par tâche |
+| L4 : Multi-agent | Agents qui collaborent | AutoGen, CrewAI | Par projet |
 
 
 
 ## Patterns de raisonnement courants
 
-**ReAct** : Reasoning + Acting (le plus populaire). Alterne réflexion et action.
+**ReAct (Reasoning + Acting)** : le pattern le plus populaire et le plus prouvé. L'agent alterne explicitement entre réflexion ("je pense que...") et action ("j'appelle l'outil X"). La réflexion est visible dans la trace, ce qui rend le comportement **débogable** — vous voyez pourquoi l'agent a fait chaque choix.
 
+**Plan-and-Execute** : l'agent crée d'abord un plan complet (liste d'étapes numérotées), puis exécute chaque étape séquentiellement. Avantage : vision d'ensemble cohérente. Inconvénient : le plan initial peut devenir obsolète si les résultats intermédiaires sont inattendus. Certaines variantes re-planifient après chaque étape.
 
-**Plan-and-Execute** : Planifie tout d'abord, puis exécute séquentiellement.
+**Réflexion (Reflexion)** : après avoir produit un résultat, l'agent s'auto-évalue : "Est-ce que ma réponse est bonne ? Qu'est-ce que j'aurais pu faire mieux ?". Il utilise cette critique pour itérer et s'améliorer. C'est particulièrement efficace pour des tâches avec un critère de qualité vérifiable (tests qui passent, score mesurable).
 
-**Réflexion** : Auto-évaluation et correction itérative.
-
-<Callout type="tip" title="Commencez simple">
-La plupart des cas d'usage se résolvent avec un agent simple + quelques bons outils. N'ajoutez de la complexité (multi-agents) que si le simple échoue.
+<Callout type="tip" title="Commencez simple, complexifiez si nécessaire">
+La majorité des cas d'usage se résolvent avec un agent simple (ReAct) + quelques bons outils bien définis. N'ajoutez de la complexité (multi-agents, planification élaborée) que si l'approche simple échoue. Un agent simple bien configuré bat souvent un système multi-agents mal conçu.
 </Callout>
 
-## Types d'outils
+## Types d'outils et bonnes pratiques
 
-- **Recherche** : web, RAG, base de données
-- **Computation** : calculatrice, exécution de code
-- **Communication** : email, Slack
-- **Fichiers** : lire, écrire, éditer
-- **APIs** : météo, finance, CRM
+Les outils sont la clé de voûte de l'efficacité d'un agent. Catégories courantes :
+- **Recherche** : web, RAG, base de données, recherche dans des fichiers
+- **Computation** : calculatrice, exécution de code Python/JS, analyse de données
+- **Communication** : email, Slack, notifications
+- **Fichiers** : lire, écrire, éditer, naviguer dans un projet
+- **APIs** : météo, finance, CRM, outils SaaS
 
-Un bon outil a :
-- Nom descriptif et description claire
-- Paramètres bien typés avec descriptions
-- Messages d'erreur informatifs
-- Output structuré et facile à parser
+Un bon outil est comme une bonne API : il a un **nom descriptif** et une **description claire** (le LLM lit ces descriptions pour décider quel outil utiliser), des **paramètres bien typés** avec des descriptions explicites, des **messages d'erreur informatifs** (pas juste "Error 500"), et un **output structuré** facile à parser par le LLM.
 
-## Défis réels
+Investir du temps dans la qualité de vos outils a un impact direct et mesurable sur la performance de l'agent. Un outil avec une mauvaise description sera mal utilisé. Un outil avec des erreurs cryptiques fera dérailler l'agent.
 
-**Fiabilité** : chaque étape peut échouer. 10 étapes à 95% de succès chacune = 60% de succès total.
+## Défis réels en production
 
-```
-0.95^10 = 0.60
-```
+**Fiabilité composée** : chaque étape peut échouer. Si chaque outil réussit à 95%, un workflow de 10 étapes :
 
-**Coût** : chaque itération consomme des tokens. 10 étapes × 2000 tokens × 10$/M tokens = 0.20$ par requête — pas gratuit.
+$$0.95^{10} = 0.60$$
 
-**Sécurité** : un agent qui peut exécuter du code ou accéder aux APIs = risques sérieux. Sandboxing et permissions essentiels.
+Soit **40% d'échec total**. C'est le défi fondamental des agents : la fiabilité se multiplie, elle ne s'additionne pas.
 
-<Callout type="warning" title="Fiabilité composée">
-Si chaque étape réussit à 95%, un workflow de 10 étapes échoue 40% du temps. La robustesse de chaque composant est critique. Investissez dans des outils solides, des prompts clairs, et des mécanismes de recovery.
+**Coût** : chaque itération de la boucle consomme des tokens. 10 étapes x 2000 tokens x 10$/M tokens = 0.20$ par requête. Pour 10 000 requêtes/jour, c'est 2000$/jour. Pas gratuit, surtout comparé à un pipeline déterministe.
+
+**Sécurité** : un agent qui peut exécuter du code ou accéder à des APIs = risques sérieux. Un bug dans le prompt peut mener à des suppressions de fichiers, des envois d'emails non désirés, ou des fuites de données. Sandboxing strict, permissions granulaires, et revue humaine pour les actions critiques sont essentiels.
+
+<Callout type="warning" title="Fiabilité composée : le problème central">
+Si chaque étape réussit à 95%, un workflow de 10 étapes échoue 40% du temps. La robustesse de chaque composant est **critique**. Investissez dans des outils solides (qui gèrent les erreurs gracieusement), des prompts clairs et sans ambiguïté, et des mécanismes de recovery (retry, fallback, demande d'aide humaine). La qualité de l'agent est plafonnée par la qualité de son maillon le plus faible.
 </Callout>
 
 ## Frameworks populaires
 
-| Framework | Approche | Force |
-|---|---|---|
-| LangGraph | Graphe d'états | Contrôle fin, débogable |
-| CrewAI | Multi-agent par rôles | Simple, intuitif |
-| AutoGen | Conversation multi-agent | Flexible, rechercheé |
-| Smolagents | Code-first | Léger, open-source |
-| OpenAI Assistants | API managed | Simple, intégré |
+| Framework | Approche | Force | Idéal pour |
+|---|---|---|---|
+| LangGraph | Graphe d'états | Contrôle fin, débogable | Production |
+| CrewAI | Multi-agent par rôles | Simple, intuitif | Prototypage rapide |
+| AutoGen | Conversation multi-agent | Flexible, recherche | Expérimentation |
+| Smolagents | Code-first | Léger, open-source | Agents simples |
+| OpenAI Assistants | API managed | Simple, intégré | Applications OpenAI |
 
-Les sections suivantes vont approfondir les patterns concrètes (ReAct, Tree of Thoughts), le function calling, et les frameworks d'orchestration.
+Les sections suivantes vont approfondir les patterns concrets (ReAct, Tree of Thoughts), le function calling en détail, et les frameworks d'orchestration multi-agents.

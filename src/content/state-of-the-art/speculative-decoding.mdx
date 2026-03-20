@@ -5,39 +5,44 @@ description: "Utiliser un petit modèle pour prédire et un gros pour vérifier.
 
 ## Le problème de vitesse
 
-Générer du texte, c'est **token par token**, c'est lent et séquentiel. Chaque token demande un forward pass complet du modèle. Pour 70B paramètres, c'est charger 140 Go de poids depuis la mémoire.
+Générer du texte avec un LLM, c'est **token par token**, séquentiel et lent. Chaque token demande un forward pass complet du modèle. Pour un modèle de 70B paramètres, ça signifie charger ~140 Go de poids depuis la mémoire GPU. Pour **un seul token**.
 
-Le GPU doit attendre les données (memory-bound), pas calculer (compute-bound).
+Le GPU passe son temps à **attendre les données** (memory-bound), pas à calculer (compute-bound). C'est comme avoir une Ferrari coincée dans un embouteillage : toute la puissance de calcul est là, mais le goulot d'étranglement c'est la bande passante mémoire.
+
+Pour mettre des chiffres concrets : un GPU A100 peut faire 312 TFLOPS de calcul, mais sa bande passante mémoire est de 2 To/s. Pour 140 Go de poids, ça prend ~70ms juste pour lire les poids. Le calcul lui-même ? Une fraction de ce temps. Le GPU attend, vide à 95-99%.
 
 <Callout type="info" title="Le paradoxe du batch unitaire">
-Un seul token à générer utilise **autant de bande passante mémoire** qu'un batch de tokens. Le GPU est vide à 99%. C'est du gaspillage énorme. Le speculative decoding exploite ce vide.
+Générer un seul token utilise **autant de bande passante mémoire** qu'un batch de tokens, parce que dans les deux cas vous chargez les mêmes 140 Go de poids. Le GPU est sous-utilisé à 99% pour un seul token. C'est du gaspillage colossal. Le speculative decoding exploite ce vide : puisque le GPU peut vérifier K tokens pour le prix d'un seul, autant lui en donner K d'un coup.
 </Callout>
 
 ## L'idée du speculative decoding
 
-
+L'analogie la plus parlante : imaginez un manager senior (le grand modèle) et un assistant junior (le petit modèle). Le junior rédige un brouillon de 5 phrases. Le senior relit et corrige en une seule passe — c'est beaucoup plus rapide que si le senior écrivait chaque phrase from scratch.
 
 ### Le trick
 
-1. Un **petit modèle rapide** propose K tokens candidats (ex: 5-10)
-2. Le **grand modèle** les **vérifie tous en une seule passe parallèle**
-3. On accepte les bons, on rejette les mauvais
-4. On recommence
+1. Un **petit modèle rapide** (ex: 0.5B paramètres) propose K tokens candidats (typiquement 5-10)
+2. Le **grand modèle** (ex: 7B-70B) les **vérifie tous en une seule passe parallèle**
+3. On accepte les bons tokens, on rejette les mauvais
+4. On recommence depuis le premier rejet
 
 ### Pourquoi ça marche
 
-Vérifier K tokens en parallèle coûte à peine plus cher que d'en vérifier 1. La bande passante mémoire l'autorise. Donc : K forward du petit (rapides) + 1 forward du grand = net win.
+Vérifier K tokens en parallèle coûte à peine plus cher que d'en vérifier 1, parce que la bande passante mémoire (le goulot) est la même. Vous chargez les 140 Go de poids une seule fois, et vous traitez les K tokens d'un coup. Donc : K forward passes du petit modèle (très rapides, modèle léger) + 1 forward pass du grand modèle = net win.
+
+Si le petit modèle propose 5 tokens et que 4 sont acceptés, vous venez de générer 4 tokens pour le coût d'environ 1 forward pass du grand modèle. C'est un gain direct de ~4x sur ces tokens.
 
 ### La garantie de qualité
 
-C'est mathématique : le schéma de rejet garantit que chaque token final suit **exactement** la distribution du grand modèle. Pas d'approximation, pas de triche.
+C'est la partie magique : le schéma de rejet garantit mathématiquement que chaque token final suit **exactement** la distribution du grand modèle. Pas d'approximation, pas de dégradation. C'est comme si le grand modèle avait tout généré lui-même.
 
-```
-Si le petit propose token X avec probabilité q(X)
-Le grand accepte avec probabilité min(1, p(X)/q(X))
-En cas de rejet, on sample selon p (la vraie distribution)
-→ Résultat final = exactement p(X)
-```
+Le mécanisme :
+- Si le petit modèle propose token $X$ avec probabilité $q(X)$
+- Le grand modèle l'accepte avec probabilité $\min\left(1, \frac{p(X)}{q(X)}\right)$
+- En cas de rejet, on sample selon la distribution résiduelle normalisée $\max(0, p - q)$
+- Résultat final = exactement la distribution $p(X)$ du grand modèle
+
+C'est un schéma d'acceptation-rejet classique en statistiques, adapté au contexte LLM. La preuve est élégante et garantit l'exactitude.
 
 <ArxivLink id="2302.01318" title="Fast Inference from Transformers via Speculative Decoding (Leviathan et al., 2023)" />
 
@@ -49,23 +54,29 @@ En cas de rejet, on sample selon p (la vraie distribution)
 
 | Petit modèle | Grand modèle | Taux acceptation | Speedup |
 |---|---|---|---|
-| 160M | 7B | 60% | 1.8-2.2× |
-| 1B | 13B | 70% | 2.0-2.5× |
-| 7B | 70B | 75% | 2.5-3.0× |
+| 160M | 7B | 60% | 1.8-2.2x |
+| 1B | 13B | 70% | 2.0-2.5x |
+| 7B | 70B | 75% | 2.5-3.0x |
 
-Plus le petit modèle est proche du grand, mieux c'est.
+Le taux d'acceptation dépend de la proximité des distributions des deux modèles. Plus le petit modèle "pense" comme le grand, plus ses propositions sont acceptées, et plus le speedup est important.
 
 <Callout type="tip" title="Choix du petit modèle">
-Prenez un petit modèle **de la même famille**. Ex: Mistral-0.5B pour Mistral-7B. Les distributions sont proches, meilleur taux d'acceptation. Un modèle complètement différent sera moins accepté.
+Prenez un petit modèle **de la même famille**. Ex: Mistral-0.5B pour Mistral-7B, LLaMA-1B pour LLaMA-70B. Les distributions sont proches car ils ont été entraînés sur des données similaires avec la même tokenization, ce qui donne un meilleur taux d'acceptation. Un modèle complètement différent (ex: GPT-2 pour vérifier LLaMA) aura des distributions trop éloignées et sera moins performant.
 </Callout>
 
-## Variantes
+## Variantes modernes
 
-### Self-Speculative
-Utiliser les **couches intermédiaires** du modèle comme draft. Pas besoin de charger un second modèle en mémoire. Speedup : 1.5-2×.
+### Self-Speculative Decoding
+
+Utiliser les **couches intermédiaires** du modèle lui-même comme draft. Par exemple, prendre la sortie après la couche 8 (sur 32) comme prédiction rapide, puis vérifier avec le modèle complet. Avantage : pas besoin de charger un second modèle en mémoire. Inconvénient : speedup plus modeste (~1.5-2x) car les couches intermédiaires sont moins bonnes qu'un vrai petit modèle.
 
 ### Lookahead Decoding
-Pas de petit modèle du tout. Au lieu de ça, regarder les **n-grams** passés du texte généré pour prédire la suite. Zéro surcoût mémoire.
+
+Pas de petit modèle du tout. L'idée : regarder les **n-grams** déjà apparus dans le texte généré pour prédire la suite. Si le modèle a déjà dit "machine learning" et qu'il commence par "machine", on peut spéculer que "learning" suit. Zéro surcoût mémoire, mais le taux d'acceptation est plus bas et dépend fortement de la répétitivité du texte.
+
+### Medusa
+
+Ajoute des **têtes de prédiction parallèles** au grand modèle. Chaque tête prédit le token à position +1, +2, +3... en parallèle. Plus intégré que le speculative classique, mais nécessite un fine-tuning.
 
 ## Implémentation
 
@@ -85,30 +96,30 @@ outputs = llm.generate(["Explique les trous noirs"])
 
 ### TGI et TensorRT-LLM
 
-Supportent via options de configuration.
+Les deux frameworks majeurs de serving supportent le speculative decoding via options de configuration, rendant l'activation triviale.
 
 ## Considérations pratiques
 
 ### Mémoire supplémentaire
 
-Le petit modèle occupe de la RAM. Mistral-0.5B en FP16 = ~1 Go. Généralement acceptable.
+Le petit modèle occupe de la RAM GPU. Mistral-0.5B en FP16 = ~1 Go. Généralement acceptable sur un GPU de 40-80 Go, mais c'est de la mémoire en moins pour le batching.
 
-### Quand ça aide
+### Quand ça aide beaucoup
 
-- Génération single-token (batch=1)
-- Texte prévisible (prompt, templates, code)
-- Faible température (moins d'incertitude)
+- **Génération single-token** (batch=1) : le GPU est le plus sous-utilisé
+- **Texte prévisible** : templates, code boilerplate, prompts structurés. Le petit modèle devine facilement
+- **Faible température** : distribution plus concentrée, donc plus facile à deviner
 
 ### Quand ça ne sert à rien
 
-- Batch size élevé (GPU déjà bien utilisé)
-- Texte créatif/imprévisible (taux d'acceptation faible)
-- Mémoire GPU serrée (pas de place pour le petit modèle)
+- **Batch size élevé** : le GPU est déjà bien occupé, le goulot n'est plus la bande passante
+- **Texte créatif/imprévisible** : haute température, vocabulaire varié = taux d'acceptation faible
+- **Mémoire GPU serrée** : si ajouter le petit modèle réduit votre batch size, vous perdez en débit global
 
 <Callout type="warning" title="Mesurez toujours">
-Le speculative decoding peut **ralentir** dans certains cas. Testez sur votre cas d'usage réel. Un mauvais petit modèle est contre-productif.
+Le speculative decoding peut **ralentir** dans certains cas. Un mauvais petit modèle qui se fait rejeter à 80% ajoute du travail sans bénéfice. Testez toujours sur votre cas d'usage réel avec des benchmarks. La théorie dit "ça aide", la pratique dit "ça dépend".
 </Callout>
 
 ## Impact réel
 
-Le speculative decoding est devenu standard dans les systèmes de production (vLLM, TGI). Son avantage : accélération sans perte de qualité. C'est facile d'activer et ça marche vraiment.
+Le speculative decoding est devenu standard dans les systèmes de production (vLLM, TGI, TensorRT-LLM). Son avantage unique : c'est le seul truc qui accélère l'inférence **sans aucune perte de qualité** — mathématiquement garanti. Comparé à la quantification (approximation) ou au pruning (suppression), c'est une accélération "gratuite" en qualité. Facile à activer et ça marche vraiment pour les cas d'usage courants.

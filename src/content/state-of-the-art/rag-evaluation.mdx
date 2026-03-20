@@ -5,15 +5,17 @@ description: "Méthodologie complète pour évaluer un système RAG : le framewo
 
 
 
-## Le problème : comment savoir si c'est bon ?
+## Le problème : comment savoir si ton RAG marche vraiment ?
 
-Un système RAG a plein de points faibles :
-- Mauvais découpage des documents → retrieval mauvais
-- Embeddings inadaptés → résultats non pertinents
-- Le LLM hallucine → génération mauvaise
-- La réponse ne répond pas à la question
+Tu as passé des heures à construire ton pipeline RAG. Tu as découpé tes documents, choisi tes embeddings, branché ton LLM. Tu poses une question, tu obtiens une réponse qui a l'air correcte. Mais "a l'air correcte", c'est pas une métrique.
 
-Sans évaluation systématique, vous naviguez à l'aveugle.
+Un système RAG, c'est une chaîne avec plein de maillons faibles. Et chaque maillon peut casser indépendamment :
+- **Mauvais découpage** des documents : le retriever ne retrouve que des bouts incomplets
+- **Embeddings inadaptés** : les résultats sont sémantiquement à côté de la plaque
+- **Le LLM hallucine** : il invente des faits qui ne sont pas dans les documents retrouvés
+- **Hors-sujet** : la réponse est factuellement correcte mais ne répond pas à la question posée
+
+Le pire, c'est que ces problèmes sont souvent invisibles. Le modèle répond avec une confiance imperturbable, même quand il raconte n'importe quoi. Sans évaluation systématique, tu navigues à l'aveugle dans un brouillard de "ça a l'air pas mal".
 
 <Callout type="info" title="Trois dimensions à mesurer">
 **Retrieval** : les bons docs sont-ils retrouvés ? **Fidélité** : la réponse ment-elle ? **Pertinence** : répond-elle vraiment à la question ?
@@ -21,43 +23,47 @@ Sans évaluation systématique, vous naviguez à l'aveugle.
 
 ## RAGAS : le framework standard
 
-RAGAS (Retrieval-Augmented Generation Assessment) est la référence open-source. Un LLM évalue automatiquement 4 métriques.
+RAGAS (Retrieval-Augmented Generation Assessment) est devenu la référence open-source pour évaluer les systèmes RAG. Son idée centrale : utiliser un LLM comme juge automatique pour scorer 4 métriques complémentaires. C'est du "LLM-as-Judge" appliqué à l'évaluation RAG.
 
 ### Fidélité (Faithfulness)
 
-La réponse dit-elle des trucs qu'elle peut justifier avec les docs retrouvés ?
+La question ici : est-ce que la réponse du LLM est **ancrée** dans les documents retrouvés, ou est-ce qu'il invente ?
 
-Processus :
-1. LLM : « Décompose cette réponse en claims individuels »
-2. LLM : « Chaque claim, c'est justifié par un doc ? »
-3. Score = (claims justifiés) / (claims totaux)
+Imagine un étudiant qui passe un oral. Le jury lui donne des documents de référence. S'il dit quelque chose qui n'est dans aucun document, c'est une hallucination.
+
+Le processus concret :
+1. Un LLM décompose la réponse en **claims individuels** (affirmations factuelles)
+2. Pour chaque claim, le LLM vérifie : "Est-ce qu'un des documents retrouvés justifie cette affirmation ?"
+3. Score = (nombre de claims justifiés) / (nombre total de claims)
+
+Un score de 0.8 signifie que 80% des affirmations sont supportées par les documents. Les 20% restants sont potentiellement des hallucinations.
 
 ### Pertinence (Answer Relevancy)
 
-La réponse traite-t-elle vraiment la question ?
+La réponse peut être parfaitement fidèle aux documents... mais complètement hors-sujet. Tu demandes "Quel est le prix du produit X ?" et le RAG te répond avec les spécifications techniques. Fidèle, mais inutile.
 
-Processus :
-1. LLM : « Si j'avais cette réponse, quelles questions je pourrais poser ? »
-2. Comparez ces questions hypothétiques avec la question originale
-3. Score = similarité moyenne
+RAGAS mesure la pertinence de façon astucieuse :
+1. Le LLM génère des **questions hypothétiques** que la réponse pourrait satisfaire
+2. On compare ces questions hypothétiques avec la question originale (via similarité cosinus)
+3. Score = similarité moyenne entre les questions générées et la vraie question
+
+Si la réponse est pertinente, les questions générées ressembleront à la question originale. Si elle est hors-sujet, les questions hypothétiques seront très différentes.
 
 ### Context Precision
 
-Les docs pertinents sont-ils en haut du classement ?
+Les documents pertinents sont-ils bien classés en haut du ranking ? Parce que le LLM accorde plus d'attention aux premiers documents du contexte.
 
-```
-Top 1: Pertinent ✓
-Top 2: Non pertinent ✗
-Top 3: Pertinent ✓
-```
+| Rang | Pertinence |
+|---|---|
+| Top 1 | Pertinent |
+| Top 2 | Non pertinent |
+| Top 3 | Pertinent |
 
-Les pertinents au début comptent plus.
+Un document pertinent en position 1 vaut plus qu'un document pertinent en position 10. Context Precision capture cette notion : les pertinents au début comptent davantage.
 
 ### Context Recall
 
-Avez-vous retrouvé TOUT ce qu'il faut pour répondre ?
-
-Nécessite une réponse de référence (coûteux à annoter). Le LLM vérifie : chaque élément de la réponse de référence, un doc le supporte-t-il ?
+As-tu retrouvé **tout** ce qu'il faut pour répondre correctement ? Cette métrique nécessite une réponse de référence annotée par un humain (c'est ce qui la rend plus coûteuse). Le LLM vérifie : pour chaque élément de la réponse de référence, est-ce qu'au moins un document retrouvé le supporte ?
 
 ```python
 from ragas import evaluate
@@ -70,70 +76,77 @@ results = evaluate(
 ```
 
 <Callout type="tip" title="Commencez par fidélité et pertinence">
-Ces deux métriques ne nécessitent pas de réponses annotées. Context recall, oui. Déployez d'abord les deux faciles, puis investissez dans l'annotation si c'est pertinent.
+Ces deux métriques ne nécessitent pas de réponses annotées manuellement. Context Recall, si. Déployez d'abord les deux faciles pour avoir un feedback rapide, puis investissez dans l'annotation humaine si votre cas le justifie.
 </Callout>
 
-## Métriques classiques
+## Métriques classiques de retrieval
 
-**Recall@10** : Proportion des docs pertinents retrouvés dans le top 10
+Au-delà de RAGAS, les métriques classiques d'Information Retrieval restent très utiles pour évaluer la qualité du retriever seul, indépendamment du LLM.
 
-```
-Recall@10 = (docs pertinents trouvés) / (docs pertinents totaux)
-```
+**Recall@K** : quelle proportion des documents pertinents apparaît dans le top K résultats ?
 
-**Mean Reciprocal Rank** : À quel rang moyenne le premier bon doc apparaît ?
+$$\text{Recall@10} = \frac{\text{docs pertinents trouves dans le top 10}}{\text{docs pertinents totaux}}$$
 
-**NDCG@K** : Qualité du ranking en tenant compte de la position
+Un Recall@10 de 0.9 signifie que 90% des documents pertinents sont dans tes 10 premiers résultats. C'est la métrique la plus importante pour le retriever.
 
-## Construire un benchmark
+**Mean Reciprocal Rank (MRR)** : à quel rang en moyenne le premier bon document apparaît-il ? Si le premier document pertinent est toujours en position 1, MRR = 1. S'il est en position 3 en moyenne, MRR = 1/3.
 
-### Étape 1 : Questions variées
+**NDCG@K** : une métrique plus sophistiquée qui tient compte de la qualité complète du ranking, pas seulement du premier résultat pertinent.
 
-Sources :
-- Questions réelles (logs production)
-- Synthétiques (générées par LLM à partir des docs)
-- D'experts du domaine
-- Adversariales (pour tester les limites)
+## Construire un benchmark solide
 
-### Étape 2 : Annoter les réponses
+Un bon benchmark RAG, c'est comme un bon examen : il doit couvrir les cas simples, les cas ambigus, et les cas pièges.
 
-Pour chaque question :
-- Réponse attendue (ground truth)
-- Passages pertinents
-- Difficulté (simple/moyen/complexe)
+### Etape 1 : Collecte de questions variées
 
-### Étape 3 : Taille
+- **Questions réelles** issues des logs de production (les meilleures, car représentatives)
+- **Questions synthétiques** générées par un LLM à partir de tes documents
+- **Questions d'experts** du domaine (pour les cas subtils)
+- **Questions adversariales** (pour tester les limites : questions hors-scope, ambiguës, multi-hop)
 
-- **Minimal** : 50 questions (détecter gros problèmes)
-- **Recommandé** : 200-500 (résultats statistiquement solides)
-- **Complet** : 1000+ (couverture exhaustive)
+### Etape 2 : Annotation
 
-<Callout type="paper" title="Génération auto de benchmarks">
-RAGAS et DeepEval peuvent générer auto des questions à partir de vos docs. C'est un bon point de départ, à compléter par des questions manuelles pour les cas limites.
+Pour chaque question, annote :
+- La **réponse attendue** (ground truth)
+- Les **passages pertinents** dans la base documentaire
+- Le **niveau de difficulté** (simple / moyen / complexe)
+
+### Etape 3 : Taille du benchmark
+
+- **Minimal** : 50 questions (suffisant pour détecter les gros problèmes)
+- **Recommandé** : 200-500 questions (résultats statistiquement fiables)
+- **Complet** : 1000+ (couverture exhaustive, nécessaire pour la production)
+
+<Callout type="paper" title="Génération automatique de benchmarks">
+RAGAS et DeepEval peuvent générer automatiquement des questions d'évaluation à partir de vos documents. C'est un excellent point de départ, mais complétez toujours avec des questions manuelles pour couvrir les cas limites que le LLM ne saura pas anticiper.
 </Callout>
 
 ## Monitoring en production
 
+Un benchmark statique, c'est bien pour le développement. Mais en production, tes documents changent, les questions des utilisateurs évoluent, et la qualité peut se dégrader silencieusement. Il faut monitorer en continu.
+
 | Métrique | Source | Fréquence |
 |---|---|---|
-| Fidélité | RAGAS, échantillon | Quotidien |
-| Taux « Je ne sais pas » | Logs production | Temps réel |
-| Feedback user | Thumbs ↑/↓ | Continu |
-| Latence P50/P99 | Monitoring | Temps réel |
+| Fidélité | RAGAS sur échantillon | Quotidien |
+| Taux "Je ne sais pas" | Logs production | Temps réel |
+| Feedback utilisateur | Thumbs up/down | Continu |
+| Latence P50/P99 | Monitoring infra | Temps réel |
 
 ### A/B testing
 
-Comparez deux RAGs en production. Mesurez les métriques. Statcheck significativité. Déployez progressivement le meilleur.
+Tu veux comparer deux configurations RAG (chunking différent, embeddings différents, prompt différent) ? Mets-les en parallèle en production, mesure les métriques sur chaque variante, vérifie la significativité statistique, puis déploie progressivement le gagnant.
 
-<Callout type="warning" title="LLM-as-Judge a des biais">
-RAGAS utilise un LLM pour évaluer. Ce LLM peut biaiser vers des réponses longues, bien formatées, ou identiques à son style. Croisez régulièrement avec l'humain pour calibrer.
+<Callout type="warning" title="LLM-as-Judge a ses biais">
+RAGAS utilise un LLM pour évaluer. Ce LLM juge n'est pas neutre : il tend à favoriser les réponses longues, bien formatées, ou écrites dans un style similaire au sien. Croisez régulièrement avec des évaluations humaines pour calibrer et détecter les angles morts.
 </Callout>
 
-## Autres frameworks
+## Autres frameworks d'évaluation
 
-- **DeepEval** : framework complet, métriques personnalisables
-- **TruLens** : évaluation + monitoring avec tracing
-- **Phoenix** : observabilité LLM
-- **LangSmith** : plateforme LangChain
+RAGAS n'est pas le seul outil. L'écosystème s'est étoffé :
 
-L'évaluation n'est pas un événement ponctuel — c'est continu. Un RAG de production nécessite un pipeline d'évaluation auto qui détecte les régressions et guide les améliorations.
+- **DeepEval** : framework complet avec métriques personnalisables et intégration CI/CD
+- **TruLens** : évaluation + monitoring avec tracing détaillé du pipeline
+- **Phoenix (Arize)** : observabilité LLM avec visualisation des embeddings
+- **LangSmith** : plateforme d'évaluation intégrée à l'écosystème LangChain
+
+L'évaluation d'un RAG n'est pas un événement ponctuel qu'on fait une fois avant le déploiement. C'est un processus continu. Un RAG en production nécessite un pipeline d'évaluation automatisé qui détecte les régressions au fil du temps et guide les améliorations itératives.

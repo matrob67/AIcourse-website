@@ -3,113 +3,120 @@ title: "RoPE : la rotation qui a changé les LLM"
 description: "RoPE (Rotary Position Embedding) expliqué simplement : comment encoder la position avec juste des rotations. L'encodage positionnel des LLM modernes."
 ---
 
-## Intro : l'encodage qui a gagné
+## L'encodage positionnel qui a gagné la guerre
 
-RoPE est utilisé par LLaMA, Mistral, Qwen, DeepSeek, Gemma, Phi... quasiment tous les LLM modernes. Pourquoi ? Parce que c'est elegant et ça marche.
+RoPE est utilisé par LLaMA, Mistral, Qwen, DeepSeek, Gemma, Phi... en fait, quasiment **tous** les LLM modernes. Pourquoi cette domination absolue ? Parce que c'est à la fois élégant mathématiquement et redoutablement efficace en pratique.
 
 <ArxivLink id="2104.09864" title="RoFormer: Enhanced Transformer with Rotary Position Embedding" />
 
 
 
-## L'idée de base : tourner le vecteur
+## L'idée fondamentale : encoder la position par rotation
 
-Au lieu de rajouter une valeur "position 42" au token, **tournez le vecteur query/key de manière à inclure l'information de position dans la géométrie elle-même**.
+Les encodages positionnels classiques (sinusoïdaux du Transformer original, ou appris comme dans GPT-2) **ajoutent** un vecteur de position à l'embedding du token. C'est comme coller une étiquette "position 42" sur le token.
 
-Pour deux dimensions consécutives, une rotation d'angle `m×theta` :
+RoPE fait les choses différemment : au lieu d'ajouter une information, il **tourne** (rotate) le vecteur query/key dans l'espace. La position du token est encodée dans la **géométrie même du vecteur**, pas dans un ajout externe.
 
-```
-[ q1' ]   [ cos(m×theta)  -sin(m×theta) ] [ q1 ]
-[ q2' ] = [ sin(m×theta)   cos(m×theta) ] [ q2 ]
-```
+Concrètement, pour deux dimensions consécutives du vecteur, on applique une rotation d'angle $m \times \theta$ :
 
-Où `m` est la position du token, `theta` est une fréquence.
+$$
+\begin{bmatrix} q_1' \\ q_2' \end{bmatrix} = \begin{bmatrix} \cos(m\theta) & -\sin(m\theta) \\ \sin(m\theta) & \cos(m\theta) \end{bmatrix} \begin{bmatrix} q_1 \\ q_2 \end{bmatrix}
+$$
 
-<Callout type="info" title="L'analogie : horloge multidimensionnelle">
-Imaginez chaque paire de dimensions comme les aiguilles d'une horloge. La position du token détermine combien de tours chaque aiguille a fait. Chaque aiguille tourne à une vitesse différente (fréquences différentes).
+Où $m$ est la position du token dans la séquence, et $\theta$ est une fréquence propre à cette paire de dimensions.
+
+<Callout type="info" title="L'analogie de l'horloge multidimensionnelle">
+Imagine que chaque paire de dimensions du vecteur est une aiguille d'horloge. La position du token dans la séquence détermine combien chaque aiguille a tourné. Les aiguilles tournent à des vitesses différentes : certaines font un tour complet en quelques tokens (haute fréquence, position locale fine), d'autres mettent des milliers de tokens pour un tour (basse fréquence, position globale). Ensemble, elles encodent la position de manière unique.
 </Callout>
 
 ## Extension à toutes les dimensions
 
-Pour un vecteur de dimension `d`, on traite les dimensions par **paires**. Chaque paire a sa propre fréquence :
+Pour un vecteur de dimension $d$, on traite les dimensions par **paires**. Chaque paire $(2i, 2i+1)$ a sa propre fréquence de rotation :
 
-```
-theta[i] = base^(-2i/d)
-```
+$$
+\theta_i = \text{base}^{-2i/d}
+$$
 
-où `base = 10000` par défaut.
+où $\text{base} = 10000$ par défaut. Cela crée un spectre de fréquences qui couvre toutes les échelles de distance :
 
-```
-D1-D2 : fréquence ≈ 1.0    (tour rapide, position locale fine)
-D3-D4 : fréquence ≈ 0.1    (tour moyen)
-D5-D6 : fréquence ≈ 0.01   (tour lent)
-...
-D127-D128 : fréquence très petite (tour ultra-lent, position globale)
-```
+| Paire de dimensions | Fréquence | Comportement |
+|---|---|---|
+| D1-D2 | $\approx 1.0$ | Rotation rapide, encode la position locale fine |
+| D3-D4 | $\approx 0.1$ | Rotation moyenne |
+| D5-D6 | $\approx 0.01$ | Rotation lente |
+| ... | ... | ... |
+| D127-D128 | Très petite | Rotation ultra-lente, encode la position globale |
 
-C'est comme un spectre complet d'horloges qui tournent à des vitesses différentes.
+C'est comme un système de coordonnées multi-échelle : les premières paires de dimensions distinguent les tokens voisins, les dernières distinguent les tokens séparés par des milliers de positions.
 
-## Le vrai génie : positions relatives
+## Le vrai génie de RoPE : les positions relatives émergent naturellement
 
-Voici le magic trick. Si vous calculez le produit scalaire entre une query à la position `m` et une key à la position `n` **après** les rotations :
+Voici la propriété mathématique qui fait toute la magie. Quand on calcule le produit scalaire entre une query à la position $m$ et une key à la position $n$, **après** les rotations :
 
-```
-<rotate(Q_m), rotate(K_n)> dépend seulement de (m - n) !
-```
+$$
+\langle \text{rotate}(Q_m),\; \text{rotate}(K_n) \rangle \text{ ne dépend que de } (m - n) \text{ !}
+$$
 
-Pas de `m` seul, pas de `n` seul. Juste la différence. C'est une propriété mathématique pure des rotations.
+Pas de $m$ seul, pas de $n$ seul. Uniquement la **différence** $m - n$. C'est une propriété mathématique pure des rotations : quand on fait tourner deux vecteurs de deux angles différents, le produit scalaire ne dépend que de la différence des angles.
 
-<Callout type="paper" title="Pourquoi c'est cool">
-L'attention encode **positions relatives**, pas absolues. "Suis-je 3 tokens avant celui-ci ?" plutôt que "Suis-je à la position 2012 ?". Ça généralise BEAUCOUP mieux pour différentes longueurs de contexte.
+En pratique, ça signifie que l'attention encode automatiquement des **positions relatives** : "ce token est 3 positions avant celui-ci" plutôt que "ce token est à la position 2012". C'est beaucoup plus utile pour comprendre la structure du texte.
+
+<Callout type="paper" title="Pourquoi les positions relatives sont supérieures">
+L'attention avec positions relatives généralise bien mieux à des longueurs de contexte différentes de celles vues à l'entraînement. "Suis-je 3 tokens avant celui-ci ?" est une information stable et réutilisable. "Suis-je à la position 2012 ?" est un artefact de la longueur de séquence spécifique.
 </Callout>
 
-## Implementation efficace
+## Implémentation efficace avec les nombres complexes
 
-Les rotations sont implémentées avec des **nombres complexes**.
+En pratique, les rotations sont implémentées avec des **nombres complexes**, ce qui est à la fois élégant et rapide.
 
-Chaque paire `(q[2i], q[2i+1])` devient un nombre complexe :
-```
-q_complexe = q[2i] + i×q[2i+1]
-RoPE(q, m) = q_complexe × e^(i×m×theta)
-```
+Chaque paire $(q_{2i}, q_{2i+1})$ est interprétée comme un nombre complexe :
+$$
+\begin{aligned}
+q_{\text{complexe}} &= q_{2i} + i \cdot q_{2i+1} \\
+\text{RoPE}(q, m) &= q_{\text{complexe}} \times e^{i \cdot m \cdot \theta}
+\end{aligned}
+$$
 
-Une multiplication complexe = 4 multiplications réelles + 2 additions. Très rapide sur GPU.
+Multiplier par $e^{i \cdot m \cdot \theta}$ = tourner de l'angle $m \cdot \theta$. Une multiplication complexe se traduit en 4 multiplications réelles + 2 additions. C'est très rapide sur GPU, et la plupart des frameworks ont des implémentations optimisées.
 
-<Callout type="tip" title="Détail d'implémentation">
-RoPE s'applique **avant** le cache. Les queries et keys stockées dans le cache sont déjà rotées. Zéro surcoût d'inférence.
+<Callout type="tip" title="Détail d'implémentation important">
+RoPE s'applique aux queries et keys **avant** qu'elles ne soient stockées dans le KV cache. Les K/V dans le cache sont donc déjà "rotées". Résultat : zéro surcoût d'inférence. La rotation est calculée une seule fois par token, au moment de son traitement.
 </Callout>
 
-## Avantages de RoPE
+## Les avantages concrets de RoPE
 
-1. **Fonctionne pour n'importe quelle longueur** : les rotations marchent à toute position entière
-2. **Compatible KV cache** : rotation appliquée une fois, réutilisée partout
-3. **Peu coûteux** : juste quelques multiplications par dimension
-4. **Gracieux** : pas de rupture discrète, les positions voisines ont des angles voisins
+1. **Fonctionne pour n'importe quelle longueur** : les rotations sont définies pour toute position entière, pas de limite théorique
+2. **Compatible avec le KV cache** : la rotation est appliquée une fois, puis le cache est réutilisé sans recalcul
+3. **Coût négligeable** : quelques multiplications par dimension, perdu dans le bruit du calcul d'attention
+4. **Continuité naturelle** : les positions voisines ont des angles voisins, donc des représentations proches. Pas de rupture artificielle.
 
-## Les problèmes (et les solutions)
+## Les limites (et les solutions)
 
-### L'extrapolation échoue
-RoPE entraîné sur 4K tokens ne généralise pas bien à 16K. Les hautes fréquences produisent des rotations jamais vues.
+### L'extrapolation ne marche pas directement
 
-**Solutions** : YaRN, NTK-aware scaling (voir section extension de contexte).
+Un modèle entraîné avec RoPE sur des contextes de 4K tokens ne généralise pas bien à 16K tokens. Pourquoi ? Les paires de dimensions à haute fréquence produisent des angles de rotation jamais vus pendant l'entraînement. Le modèle rencontre des configurations géométriques inédites.
+
+**Les solutions** : YaRN et NTK-aware scaling modifient les fréquences de rotation pour "étirer" les positions de manière cohérente. C'est traité en détail dans la section sur l'extension de contexte.
 
 ### Le choix de la base
-Par défaut `base = 10000`. Les travaux récents utilisent des bases beaucoup plus grandes (500K pour LLaMA 3) pour les longues séquences.
 
-<Callout type="warning" title="Limitation fondamentale">
-RoPE force une certaine structure (spectre de fréquences logarithmique). Vous ne pouvez pas arbitrairement redéfinir comment les positions marchent. C'est un compromis.
+Par défaut, $\text{base} = 10000$. Mais les travaux récents montrent qu'augmenter massivement la base (500K pour LLaMA 3, par exemple) permet de mieux gérer les longues séquences. Une base plus grande = des fréquences plus basses = des rotations plus lentes = le modèle "distingue" des positions plus éloignées.
+
+<Callout type="warning" title="Une limitation structurelle">
+RoPE impose une structure fixe : un spectre de fréquences logarithmique dicté par la base. Tu ne peux pas redéfinir arbitrairement comment les positions fonctionnent. C'est un compromis assumé : on échange de la flexibilité contre de l'élégance et de l'efficacité.
 </Callout>
 
-## Qui l'utilise ?
+## Qui utilise RoPE ?
 
-- LLaMA (1, 2, 3) ✓
-- Mistral / Mixtral ✓
-- Qwen ✓
-- DeepSeek ✓
-- Gemma ✓
-- Phi ✓
+- LLaMA (1, 2, 3)
+- Mistral / Mixtral
+- Qwen
+- DeepSeek
+- Gemma
+- Phi
 
-Pratiquement 100% des LLM modernes.
+Pratiquement 100% des LLM modernes open-source. C'est le standard de facto incontesté.
 
-<Callout type="info" title="L'encodage positionnel du futur">
-RoPE a remplacé les encodages sinusoïdaux absolus (Transformer original 2017) et les relatifs appris (T5). C'est le standard qui va rester pour un moment. Simple, élégant, ça marche.
+<Callout type="info" title="L'encodage positionnel du futur (et du présent)">
+RoPE a remplacé les encodages sinusoïdaux absolus du Transformer original (2017) et les positions relatives apprises de T5. C'est le standard qui va vraisemblablement rester pour un bon moment. Simple à implémenter, mathématiquement élégant, efficace en pratique, compatible avec le KV cache. Difficile de faire mieux.
 </Callout>

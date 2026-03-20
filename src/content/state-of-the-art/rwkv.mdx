@@ -7,124 +7,128 @@ description: "Étude de RWKV, l'architecture combinant les avantages des RNN et 
 
 ## Le rêve de réconcilier deux mondes opposés
 
-Les **RNN** (réseaux récurrents comme LSTM, GRU) ont dominé le NLP pendant des années. Leur force : une inférence efficace avec un état de taille fixe, comme une mémoire de travail constante. Leur problème : ils ne peuvent pas être entraînés en parallèle — chaque token attend le précédent. Sur GPU, c'est catastrophique.
+Les **RNN** (réseaux récurrents : LSTM, GRU) ont dominé le NLP pendant presque une décennie. Leur force : une inférence efficace avec un état de taille fixe — comme une mémoire de travail constante qui se met à jour à chaque mot. Leur problème fatal : ils ne peuvent pas être entraînés en parallèle. Chaque token attend que le précédent soit traité. Sur les GPU modernes, conçus pour le parallélisme massif, c'est catastrophique.
 
-Les **Transformers** ont résolu le problème de parallélisation avec l'attention. Entraînement 10x à 100x plus rapide. Mais à l'inférence : un KV cache qui grossit indéfiniment, une mémoire qui explose avec le contexte.
+Les **Transformers** ont résolu le problème de parallélisation avec l'attention. L'entraînement est devenu 10x à 100x plus rapide. Mais à l'inférence, le prix à payer est lourd : un KV cache qui grossit avec chaque token généré, une mémoire qui explose avec la longueur du contexte, et un coût par token qui augmente au lieu de rester constant.
 
-**RWKV** (prononcé "RWaKuV") est la tentative la plus aboutie de combiner les deux : s'entraîner comme un Transformer, inférer comme un RNN.
+**RWKV** (prononcé "RWaKuV") est la tentative la plus aboutie de réconcilier ces deux mondes : s'entraîner en parallèle comme un Transformer, inférer efficacement comme un RNN. Le tout porté par une communauté open-source remarquablement active.
 
 <ArxivLink id="2305.13048" title="RWKV: Reinventing RNNs for the Transformer Era" />
 
 ## Les quatre lettres de RWKV
 
-Le nom décrit les quatre composants clés du mécanisme, analogues à l'attention mais restructurés pour être calculables récursivement :
+Le nom n'est pas un acronyme mystérieux — il décrit les quatre composants clés du mécanisme, chacun jouant un rôle analogue à un élément de l'attention classique :
 
-- **R (Receptance)** : analogue à la Query dans l'attention. C'est un gate sigmoïde qui contrôle combien d'information passée accepter dans la sortie courante.
-- **W (Weight)** : facteur de décroissance temporelle. Un vecteur de paramètres appris qui contrôle à quelle vitesse le modèle "oublie" les tokens passés.
-- **K (Key)** : analogue aux clés de l'attention. Représente le contenu du token courant.
-- **V (Value)** : analogue aux valeurs de l'attention. Contient l'information à propager vers la sortie.
+- **R (Receptance)** : analogue à la Query. Un gate sigmoïde qui contrôle combien d'information accumulée accepter dans la sortie courante. C'est le filtre de sortie — il décide ce qui mérite d'être communiqué.
+- **W (Weight)** : le facteur de décroissance temporelle. Un vecteur de paramètres appris qui contrôle à quelle vitesse le modèle "oublie" les tokens passés. C'est l'horloge interne du modèle.
+- **K (Key)** : analogue aux clés de l'attention. Représente le "contenu" du token courant — ce qu'il apporte à la mémoire collective.
+- **V (Value)** : analogue aux valeurs de l'attention. Contient l'information concrète à propager vers les positions futures.
 
 ## Le mécanisme WKV : le coeur de RWKV
 
 Le Time Mixing de RWKV remplace l'attention par le mécanisme WKV :
 
-```
-wkv_t = (somme_i[exp(-(t-1-i)*w + k_i) * v_i] + exp(u + k_t) * v_t)
-        / (somme_i[exp(-(t-1-i)*w + k_i)] + exp(u + k_t))
-```
+$$
+\text{wkv}_t = \frac{\sum_i \exp(-(t-1-i) \cdot w + k_i) \cdot v_i \;+\; \exp(u + k_t) \cdot v_t}{\sum_i \exp(-(t-1-i) \cdot w + k_i) \;+\; \exp(u + k_t)}
+$$
 
-Décortiquons ça :
-- `exp(-(t-1-i)*w)` : décroissance exponentielle selon la distance au token courant. Les tokens récents ont plus de poids que les tokens anciens — automatiquement.
-- `u + k_t` : un bonus spécial pour le token courant (le paramètre `u` est un "prime de fraîcheur").
-- La division normalise pour que les poids somment à 1.
+La formule paraît intimidante, mais l'intuition est claire :
+- `exp(-(t-1-i)*w)` : décroissance exponentielle selon la distance. Les tokens récents pèsent beaucoup plus que les tokens anciens — c'est automatique et systématique.
+- `k_i` : la "clé" de chaque token module son importance. Un token avec une clé élevée reste influent même de loin.
+- `u + k_t` : un bonus spécial pour le token courant. Le paramètre `u` est une "prime de fraîcheur" — le token qu'on vient de lire a un avantage systématique.
+- La division normalise les poids pour qu'ils somment à 1, comme le softmax dans l'attention classique.
 
-<Callout type="info" title="La décroissance exponentielle : un parti pris fort">
-Contrairement à l'attention standard où chaque token peut avoir un poids arbitraire quelle que soit sa distance, RWKV impose une structure : les tokens récents comptent davantage que les tokens anciens, de façon exponentielle. C'est un biais inductif fort qui peut aider (la majorité des dépendances sont locales) ou limiter (les dépendances à très longue distance sont difficiles à capturer).
+<Callout type="info" title="La décroissance exponentielle : un parti pris assumé">
+Contrairement à l'attention standard où chaque token peut avoir un poids arbitraire quelle que soit sa distance, RWKV impose une structure rigide : les tokens récents comptent davantage, de façon exponentielle. C'est un biais inductif fort. Il aide dans la majorité des cas (la plupart des dépendances linguistiques sont locales), mais il peut limiter les performances sur les tâches qui exigent de rappeler un détail précis mentionné très loin dans le texte.
 </Callout>
 
 ### Le Channel Mixing : remplacer le feed-forward
 
 En plus du Time Mixing, chaque bloc RWKV contient un **Channel Mixing** — l'équivalent de la couche feed-forward du Transformer :
 
-```
-r_t = sigma( W_r * (mu_r * x_t + (1 - mu_r) * x_(t-1)) )
-k_t = W_k * (mu_k * x_t + (1 - mu_k) * x_(t-1))
-o_t = r_t * (W_v * max(k_t, 0)^2)
-```
+$$
+\begin{aligned}
+r_t &= \sigma\!\bigl(W_r \cdot (\mu_r \cdot x_t + (1 - \mu_r) \cdot x_{t-1})\bigr) \\
+k_t &= W_k \cdot (\mu_k \cdot x_t + (1 - \mu_k) \cdot x_{t-1}) \\
+o_t &= r_t \cdot \bigl(W_v \cdot \max(k_t, 0)^2\bigr)
+\end{aligned}
+$$
 
-Le **token shift** est une caractéristique distinctive de RWKV : chaque couche mélange le token courant avec le token précédent selon des coefficients appris (`mu_r`, `mu_k`). Cela donne une fenêtre de contexte local minimal de 2 tokens à chaque couche, empilé sur toutes les couches pour une couverture plus large.
+La particularité distinctive de RWKV est visible ici : le **token shift**. Chaque couche mélange le token courant avec le token précédent selon des coefficients appris (`mu_r`, `mu_k`). Ce mélange donne à chaque couche une fenêtre de contexte local minimale de 2 tokens. Empilées sur 24 ou 32 couches, ces micro-fenêtres se composent pour couvrir des portées de plus en plus larges — un peu comme un réseau convolutionnel dont le champ réceptif grandit avec la profondeur.
 
 ## La dualité entraînement/inférence : pourquoi ça fonctionne
 
 ### Mode entraînement : tout en parallèle
 
-À l'entraînement, on connaît tous les tokens à l'avance. La formulation WKV peut être reformulée pour être calculée en parallèle sur toute la séquence via des opérations tensorisées — exactement comme l'attention. Pas de récurrence séquentielle, GPU content.
+À l'entraînement, on connaît tous les tokens de la séquence à l'avance. La formulation WKV peut être reformulée pour être calculée en parallèle via des opérations tensorisées — exactement comme une multiplication matricielle. Chaque position peut être traitée simultanément. Pas de récurrence séquentielle, le GPU tourne à plein régime.
 
 ### Mode inférence : état fixe, coût constant
 
-À l'inférence, RWKV fonctionne comme un RNN pur. L'état récurrent se réduit à deux vecteurs :
+À l'inférence, RWKV se transforme en RNN pur. L'état récurrent se réduit à seulement deux vecteurs par couche :
 
-```
-a_t = exp(-w) * a_(t-1) + exp(k_t) * v_t
-b_t = exp(-w) * b_(t-1) + exp(k_t)
-wkv_t = a_t / b_t
-```
+$$
+\begin{aligned}
+a_t &= \exp(-w) \cdot a_{t-1} + \exp(k_t) \cdot v_t \\
+b_t &= \exp(-w) \cdot b_{t-1} + \exp(k_t) \\
+\text{wkv}_t &= \frac{a_t}{b_t}
+\end{aligned}
+$$
 
-Chaque nouveau token est traité en **O(1)** : une multiplication, une addition, une division. Pas de KV cache. L'état reste de taille fixe quelle que soit la longueur du contexte.
+Chaque nouveau token est traité en **O(1)** : une multiplication, une addition, une division. Pas de KV cache. L'état reste de taille fixe quelle que soit la longueur du contexte — 100 tokens ou 100 000 tokens, même coût par token.
 
 <Callout type="tip" title="L'avantage pratique de RWKV">
-Pour un chatbot déployé sur mobile ou sur un serveur contraint en mémoire, RWKV peut générer un token en un temps constant, que le contexte fasse 100 ou 100 000 tokens. Le débit à l'inférence est indépendant de la longueur du contexte — contrairement aux Transformers où chaque token généré nécessite de lire un KV cache de plus en plus grand.
+Pour un chatbot déployé sur mobile ou sur un serveur à budget mémoire serré, RWKV est idéal. Le débit de génération est constant — le 50 000ème token est généré aussi vite que le premier. Pas de ralentissement progressif, pas de KV cache qui grossit, pas de seuil de mémoire qui force à tronquer le contexte. C'est la prédictibilité des coûts d'inférence que les Transformers ne peuvent pas offrir.
 </Callout>
 
 ## RWKV-5 (Eagle) et RWKV-6 (Finch) : les évolutions
 
 ### RWKV-5 Eagle : vers le multi-tête
 
-RWKV-5 introduit plusieurs améliorations inspirées des avancées récentes :
+RWKV-5 introduit plusieurs améliorations inspirées des avancées récentes dans les SSM et l'attention :
 
-- **Multi-head WKV** : comme le Multi-Head Attention, avec des paramètres de décroissance `w` distincts par tête. Différentes têtes peuvent se spécialiser sur des portées temporelles différentes.
-- **États matriciels** : l'état caché devient une **matrice** au lieu d'un vecteur. Plus de capacité de représentation, mais coût mémoire légèrement plus élevé.
-- **Meilleure initialisation** : inspirée des travaux sur les SSM (HiPPO-like).
+- **Multi-head WKV** : comme le Multi-Head Attention, RWKV-5 organise le mécanisme WKV en plusieurs têtes avec des paramètres de décroissance `w` distincts. Chaque tête peut se spécialiser sur une échelle temporelle différente — une tête attentive aux mots adjacents, une autre aux phrases récentes, une troisième aux paragraphes précédents.
+- **États matriciels** : l'état caché passe d'un vecteur à une **matrice**, augmentant significativement la capacité de représentation au prix d'un coût mémoire légèrement plus élevé.
+- **Meilleure initialisation** : inspirée des travaux HiPPO sur les SSM, pour une meilleure capture des dépendances longues dès le début de l'entraînement.
 
 ### RWKV-6 Finch : la sélectivité arrive
 
-RWKV-6 fait une évolution cruciale en s'inspirant de Mamba : rendre les paramètres **dépendants de l'entrée** (data-dependent).
+RWKV-6 fait une évolution cruciale en s'inspirant directement de Mamba : rendre les paramètres **dépendants de l'entrée**.
 
-- **Data-dependent decay** : le facteur de décroissance `w` n'est plus fixe — il est calculé à partir du token courant. Certains tokens "méritent" d'être mémorisés plus longtemps selon le contexte.
-- **Data-dependent token shift** : les coefficients de mélange `mu` deviennent adaptatifs.
+- **Data-dependent decay** : le facteur de décroissance `w` n'est plus fixe — il est calculé à partir du token courant. Un mot-clé important peut se voir attribuer un taux de décroissance lent (il sera mémorisé longtemps), tandis qu'un mot de liaison banal sera oublié rapidement.
+- **Data-dependent token shift** : les coefficients de mélange `mu` deviennent adaptatifs, ajustant le mélange entre token courant et précédent selon le contexte.
 
 <Callout type="paper" title="Convergence avec Mamba">
-RWKV-6 et Mamba arrivent indépendamment à la même conclusion : les paramètres de transition d'état doivent être **adaptatifs** pour des performances optimales. RWKV vient du monde des RNN et ajoute de la sélectivité. Mamba vient des SSM et ajoute aussi de la sélectivité. La convergence suggère que c'est vraiment la bonne direction.
+RWKV-6 et Mamba arrivent indépendamment à la même conclusion fondamentale : les paramètres de transition d'état doivent être **adaptatifs** pour atteindre des performances optimales. RWKV vient du monde des RNN et y ajoute de la sélectivité. Mamba vient des SSM et y ajoute la même sélectivité. Cette convergence indépendante est un signal fort que la sélectivité n'est pas un détail d'implémentation — c'est un principe fondamental.
 </Callout>
 
 ## Modèles disponibles et performances
 
-RWKV a été entraîné à des échelles conséquentes par une communauté open-source très active :
+RWKV se distingue par une communauté open-source remarquablement active, qui a entraîné des modèles à des échelles impressionnantes pour un projet communautaire :
 
 - **RWKV-4** : de 169M à 14B paramètres
 - **RWKV-5 Eagle** : de 400M à 7B paramètres
 - **RWKV-6 Finch** : de 1,6B à 14B paramètres
 
-Sur les benchmarks standard de langage, RWKV se positionne de manière compétitive face aux Transformers de taille similaire. Le léger désavantage apparaît sur les tâches de recall à très longue distance — là où la compression de l'historique pénalise.
+Sur les benchmarks standard de langage, RWKV se positionne de manière compétitive face aux Transformers de taille similaire. Le léger désavantage apparaît, sans surprise, sur les tâches de recall à très longue distance — là où la compression de l'historique dans un état fixe pénalise face au KV cache exact des Transformers.
 
 ## Avantages et limitations en clair
 
 **Ce que RWKV fait bien :**
 - Inférence en O(1) par token, indépendante de la longueur du contexte
 - Pas de KV cache : mémoire d'inférence fixe et prévisible
-- Entraînement parallèle : aussi rapide qu'un Transformer
-- Communauté open-source très active, modèles librement disponibles
+- Entraînement parallèle aussi rapide qu'un Transformer
+- Communauté open-source très active avec modèles librement disponibles et régulièrement mis à jour
 
 <Callout type="warning" title="Ce que RWKV fait moins bien">
-Comme tous les modèles récurrents, RWKV compresse l'historique dans un état de taille fixe. Pour retrouver avec précision une information mentionnée 5 000 tokens plus tôt (une date, un nom propre, un chiffre exact), il est en difficulté par rapport à un Transformer qui conserve l'accès exact via le KV cache. Les tâches de question-réponse sur de très longs documents peuvent en souffrir.
+Comme tous les modèles récurrents, RWKV compresse l'historique dans un état de taille fixe. Retrouver avec précision un nom propre ou un chiffre exact mentionné 5 000 tokens plus tôt est difficile — l'information est là sous forme compressée, mais les détails fins sont perdus. Les tâches de question-réponse sur de très longs documents ou le few-shot learning avec des exemples complexes peuvent en souffrir par rapport à un Transformer de même taille.
 </Callout>
 
 **Ce qu'il fait moins bien :**
-- Recall précis sur de longues distances
-- Few-shot in-context learning (apprendre d'exemples dans le prompt)
-- Adoption industrielle encore limitée comparée aux Transformers
-- Moins d'outils d'inférence optimisés disponibles
+- Recall précis sur de longues distances (noms, dates, chiffres exacts)
+- Few-shot in-context learning (apprendre d'exemples complexes dans le prompt)
+- Adoption industrielle encore limitée comparée à l'écosystème Transformer
+- Moins d'outils d'inférence optimisés et de frameworks de déploiement disponibles
 
 ## Conclusion
 
-RWKV prouve qu'on peut construire des modèles de langage à milliards de paramètres compétitifs sans mécanisme d'attention quadratique. Son approche pragmatique — prendre le meilleur des RNN et des Transformers — en fait une alternative sérieuse pour les déploiements où l'efficacité d'inférence prime. L'évolution vers la sélectivité dans RWKV-6 confirme que toutes les familles d'architectures séquentielles convergent vers les mêmes principes fondamentaux.
+RWKV prouve qu'on peut construire des modèles de langage compétitifs à milliards de paramètres sans mécanisme d'attention quadratique. Son approche pragmatique — prendre le meilleur des RNN (inférence constante) et des Transformers (entraînement parallèle) — en fait une alternative sérieuse pour les déploiements où l'efficacité d'inférence et la prévisibilité des coûts sont prioritaires. L'évolution vers la sélectivité dans RWKV-6 confirme la tendance de fond : toutes les familles d'architectures séquentielles convergent vers les mêmes principes — paramètres adaptatifs, multi-tête, et mécanismes de gating contextuels.

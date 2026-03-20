@@ -3,132 +3,139 @@ title: "Attention linéaire : abolir le softmax pour O(L)"
 description: "Attention linéaire : remplacez softmax par un kernel simple, refactorisez les multiplications, et boom : complexité O(L) au lieu de O(L²)."
 ---
 
-## Le problème du softmax
+## Le problème fondamental du softmax
 
-L'attention standard :
+L'attention standard du Transformer :
 
-```
-Attention = softmax(QK^T) × V
-```
+$$
+\text{Attention} = \text{softmax}(QK^\top) \times V
+$$
 
-Le softmax lie ensemble toutes les paires (q_i, k_j). Impossible de refactoriser. Vous êtes coincés en `O(L²)`.
+Le softmax est le coupable. Il lie ensemble **toutes** les paires de tokens $(q_i, k_j)$ dans une dépendance globale. Pour calculer le poids d'attention d'un seul token, il faut connaitre les scores de TOUS les autres tokens (à cause de la normalisation du softmax). Résultat : impossible de factoriser le calcul. On est coincés en $O(L^2)$.
 
-## L'astuce : swapper softmax pour un kernel
+Pour une séquence de 100K tokens, ça donne $10^{10}$ opérations juste pour l'attention. L'attention linéaire propose une solution élégante : remplacer le softmax par quelque chose de factorisable.
 
-Au lieu du softmax, utilisez une fonction kernel `φ` :
+## L'astuce : remplacer le softmax par un kernel
 
-```
-LinAttn = φ(Q) × φ(K)^T × V / normalisateur
-```
+Au lieu du softmax, on utilise une fonction kernel $\varphi$ qui transforme les queries et keys indépendamment :
 
-Le trick : **reordonner les multiplications** :
+$$
+\text{LinAttn} = \frac{\varphi(Q) \times \varphi(K)^\top \times V}{\text{normalisateur}}
+$$
 
-```
-AVANT : compute QK^T (L×L matrice), puis softmax, puis multiplie par V
-APRÈS : compute φ(K)^T V (petit résumé), puis multiplie par φ(Q)
-```
+Jusque-là, rien n'a changé en termes de complexité. Le vrai trick, c'est de **réordonner les multiplications matricielles**.
 
-Le résumé `φ(K)^T V` est juste de dimension `d_phi × d_v`. Réutilisable pour tous les queries. Boom : `O(L)`.
+**AVANT (softmax)** : on calcule $QK^\top$ (une matrice $L \times L$, gigantesque), puis on applique le softmax, puis on multiplie par $V$. Complexité : $O(L^2 \times d)$.
 
-<Callout type="info" title="Le kernel trick de l'attention">
-C'est littéralement le kernel trick de la théorie kernels appliqué à l'attention. Au lieu de composer deux opérations L² dont une est softmax, factorisez via un intermédiaire plus petit.
+**APRES (kernel)** : on calcule d'abord $\varphi(K)^\top V$ (une petite matrice $d_\varphi \times d_v$), puis on multiplie par $\varphi(Q)$. Complexité : $O(L \times d^2)$.
+
+Le résumé $\varphi(K)^\top V$ est un petit tenseur de dimension $d_\varphi \times d_v$, indépendant de la longueur de séquence $L$. Il encode une sorte de "résumé compressé" de toute l'information clé-valeur. Chaque query n'a plus qu'à consulter ce résumé au lieu de regarder chaque token individuellement.
+
+<Callout type="info" title="Le kernel trick appliqué à l'attention">
+C'est littéralement le kernel trick de la théorie des noyaux, appliqué au mécanisme d'attention. Au lieu de calculer une matrice $L \times L$ explicite, on passe par un espace intermédiaire de dimension fixe. La même idée qui permet aux SVM de travailler en dimension infinie sans exploser en calcul.
 </Callout>
 
 ## Les approches principales
 
 ### Linear Transformer (ELU + 1)
 
-Utilisez `φ(x) = elu(x) + 1`. Pourquoi ? Elu est lisse, +1 garantit la positivité (les poids d'attention doivent être ≥ 0).
+La version la plus simple : utiliser $\varphi(x) = \text{elu}(x) + 1$ comme kernel.
 
-Simple, différentiable, ça marche.
+Pourquoi elu + 1 ? Deux raisons : l'ELU est lisse et différentiable partout (bon pour l'entraînement), et ajouter 1 garantit que les valeurs sont strictement positives (nécessaire car les poids d'attention doivent être non-négatifs).
+
+Simple, élégant, facile à implémenter. Le point de départ de toute la famille.
 
 ### Performer (Random Fourier Features)
 
-Utilisez des features aléatoires pour approximer le softmax :
+Le Performer prend une approche plus rigoureuse mathématiquement. Il utilise des features aléatoires de Fourier pour **approximer** le softmax :
 
-```
-softmax(QK^T) ≈ φ(Q) × φ(K)^T
-```
+$$
+\text{softmax}(QK^\top) \approx \varphi(Q) \times \varphi(K)^\top
+$$
 
-où `φ` utilise des sinusoides aléatoires (Fourier).
+où $\varphi$ utilise des sinusoïdes aléatoires tirées d'une distribution spécifique.
 
-Algorithme FAVOR+ : features orthogonales pour réduire la variance. `O(Lmd)` où m = nombre de features.
+L'algorithme FAVOR+ améliore cette approximation avec des features orthogonales pour réduire la variance. Complexité : $O(Lmd)$ où $m$ est le nombre de features (typiquement $m \ll L$).
 
-<Callout type="paper" title="Performer">
-Le Performer montre qu'on peut approximer le softmax via random features sans introduire beaucoup d'erreur. C'est mathématiquement rigoureux.
+<Callout type="paper" title="Performer : une approximation rigoureuse">
+Le Performer montre qu'on peut approximer le kernel softmax via des features aléatoires avec des garanties théoriques sur l'erreur d'approximation. C'est la version la plus "mathématiquement propre" de l'attention linéaire.
 </Callout>
 
 ### cosFormer
 
-Kernel cosinus avec biais positionnel :
+Une approche qui combine attention linéaire et biais positionnel local :
 
-```
-A[i,j] = ReLU(Q_i) × ReLU(K_j) × cos(π/2 × (i-j)/L)
-```
+$$
+A_{i,j} = \text{ReLU}(Q_i) \times \text{ReLU}(K_j) \times \cos\!\left(\frac{\pi}{2} \cdot \frac{i-j}{L}\right)
+$$
 
-Combine attention linéaire + biais local (tokens proches favorisés).
+Le terme cosinus favorise les tokens proches (petite distance $i-j$) et pénalise les tokens lointains. C'est une manière élégante d'incorporer un biais de localité sans revenir au $O(L^2)$.
 
 ### Gated Linear Attention (GLA)
 
-Ajoutez un gate (comme dans les RNN) :
+L'évolution la plus prometteuse. On ajoute un gate (porte) inspiré des RNN :
 
-```
-state[t] = gate[t] ⊙ state[t-1] + K[t]^T V[t]
-output[t] = Q[t] × state[t]
-```
+$$
+\begin{aligned}
+\text{state}[t] &= \text{gate}[t] \odot \text{state}[t-1] + K[t]^\top V[t] \\
+\text{output}[t] &= Q[t] \times \text{state}[t]
+\end{aligned}
+$$
 
-Ressemble à un SSM. La boucle récurrente capture la mémoire.
+Le gate contrôle combien d'information passée on conserve. C'est exactement le rôle du "forget gate" dans un LSTM. L'état récurrent capture la mémoire à long terme.
 
 <Callout type="tip" title="Convergence SSM et attention linéaire">
-Les travaux récents montrent que SSM et attention linéaire c'est presque la même chose, juste formulées différemment. Mamba-2 unifie les deux via un framework commun.
+Les travaux récents révèlent que SSM (comme Mamba) et attention linéaire sont fondamentalement le même objet mathématique, juste formulé différemment. Mamba-2 a d'ailleurs unifié les deux dans un seul framework. GLA, c'est de l'attention linéaire qui ressemble à un SSM. Mamba, c'est un SSM qui ressemble à de l'attention linéaire.
 </Callout>
 
 
 
 ## La formulation récurrente
 
-L'attention linéaire peut s'écrire aussi comme une récurrence :
+L'attention linéaire peut aussi s'écrire comme une récurrence, ce qui est crucial pour l'inférence :
 
-```
-S[n] = S[n-1] + φ(K[n])^T V[n]
-z[n] = z[n-1] + φ(K[n])
-output[n] = φ(Q[n]) × S[n] / (φ(Q[n]) × z[n])
-```
+$$
+\begin{aligned}
+S_n &= S_{n-1} + \varphi(K_n)^\top V_n \\
+z_n &= z_{n-1} + \varphi(K_n) \\
+\text{output}_n &= \frac{\varphi(Q_n) \times S_n}{\varphi(Q_n) \times z_n}
+\end{aligned}
+$$
 
-`S` est une matrice d'état. Vous pouvez exécuter ça en boucle au lieu de calculer en batch.
+$S$ est une matrice d'état de taille fixe ($d_\varphi \times d_v$). A chaque nouveau token, on met à jour $S$ et on calcule la sortie. Pas besoin de KV cache qui grandit avec la séquence. L'état a une taille constante.
 
-C'est quasiment un SSM : même récurrence, même état caché.
+C'est exactement la structure d'un RNN/SSM : un état caché mis à jour récursivement. L'attention linéaire et les SSM sont les deux faces d'une même pièce.
 
-## Le gros problème : qualité
+## Le problème majeur : la qualité
 
-L'attention linéaire est systématiquement pire que softmax sur les LLM. Pourquoi ?
+Malgré ses avantages en complexité, l'attention linéaire est systématiquement **moins performante** que le softmax sur les tâches de langage. Pourquoi ?
 
-Le softmax crée une distribution **piquée** (peaked) : beaucoup de poids sur quelques tokens clés, quasi-zéro ailleurs. C'est très efficace pour "sélectionner" l'info pertinente.
+Le softmax crée une distribution **piquée** (peaked) : il met beaucoup de poids sur quelques tokens clés et quasi-zéro sur les autres. C'est extrêmement efficace pour "sélectionner" précisément l'information pertinente dans une longue séquence.
 
-Les kernels linéaires produisent des distributions plus **uniformes**. Moins de sélectivité. La capacité du modèle en souffre.
+Les kernels linéaires produisent des distributions plus **diffuses** et uniformes. Le modèle a du mal à ignorer les tokens non pertinents. C'est comme essayer de suivre une conversation dans une pièce bruyante sans pouvoir "filtrer" les voix parasites.
 
-<Callout type="warning" title="La sélectivité manquante">
-Avec softmax, un token peut dire "j'écoute JUSTE CE token, zéro poids sur les autres". Avec une kernel linéaire, c'est difficile. Le modèle doit apprendre à ignorer les distractions manuellement. Perte d'expressivité.
+<Callout type="warning" title="La sélectivité : le talon d'Achille">
+Avec le softmax, un token peut dire "j'écoute UNIQUEMENT ce token-là, zéro poids sur tous les autres". Avec un kernel linéaire, cette sélectivité parfaite est mathématiquement impossible. Le modèle doit apprendre à ignorer les distractions indirectement, ce qui coûte en expressivité et en performance.
 </Callout>
 
-## Benchmarks
+## Benchmarks comparatifs
 
-| Approche | Complexité | Qualité vs softmax | État infér. |
+| Approche | Complexité | Qualité vs softmax | Etat d'inférence |
 |----------|-----------|---|---|
-| Softmax classique | O(L²) | 100% | O(L) cache |
-| Linear Transformer | O(L) | ~95% | État fixe |
-| Performer | O(Lm) | ~93% | État fixe |
-| GLA | O(L) | ~97% | État fixe |
+| Softmax classique | O(L^2) | 100% (référence) | O(L) cache (KV cache) |
+| Linear Transformer | O(L) | ~95% | Etat fixe |
+| Performer | O(Lm) | ~93% | Etat fixe |
+| GLA | O(L) | ~97% | Etat fixe |
 
 ## Pertinence actuelle
 
-L'attention linéaire pure ? Morte pour les LLM. Supplantée par les SSM sélectifs (Mamba) qui restaurent la sélectivité tout en restant linéaires.
+L'attention linéaire "pure" ? Elle a perdu la bataille contre le softmax pour les LLM. Elle a été supplantée par les SSM sélectifs (Mamba) qui restaurent la sélectivité tout en restant en complexité linéaire.
 
-Mais les concepts sont vivants :
-- **GLA** apparaît dans les architectures hybrides
-- **RetNet** utilise attention linéaire + decay
-- **Mamba-2** unifie SSM et attention linéaire
+Mais les concepts de l'attention linéaire sont bien vivants et omniprésents :
+- **GLA** apparait dans les architectures hybrides modernes
+- **RetNet** combine attention linéaire avec un facteur de décroissance temporelle
+- **Mamba-2** unifie formellement SSM et attention linéaire
 
-<Callout type="info" title="Le legacy">
-L'attention linéaire a révélé une vérité : le bottleneck n'est pas vraiment la complexité O(L²), c'est la **sélectivité** que softmax offre. Les successeurs (SSM) résolvent ça mieux.
+<Callout type="info" title="L'héritage de l'attention linéaire">
+L'attention linéaire a révélé une vérité profonde : le bottleneck de l'attention n'est pas vraiment la complexité $O(L^2)$, c'est la **sélectivité** que le softmax procure. Les successeurs (SSM sélectifs, architectures hybrides) ont appris cette leçon et résolvent le problème différemment, en restaurant la sélectivité sans passer par le softmax.
 </Callout>

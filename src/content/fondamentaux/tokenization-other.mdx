@@ -5,133 +5,124 @@ description: "Au-delà de BPE : les autres algorithmes de tokenization et leurs 
 
 ## Au-delà de BPE : le paysage des tokenizers
 
-BPE est dominant, mais il n'est pas seul. Différents modèles utilisent différents algorithmes :
+BPE est dominant, mais il n'est pas seul. En fait, selon le modèle que tu utilises, le tokenizer sous le capot peut être complètement différent :
 
 - **BERT** : WordPiece
 - **T5, ALBERT, XLNet** : SentencePiece + Unigram
 - **GPT-2/3/4** : BPE via tiktoken
 - **LLaMA, Mistral** : BPE via SentencePiece
 
-Pourquoi plusieurs ? Parce que chaque algorithme a des forces différentes. Choisir le bon tokenizer pour votre cas d'usage affecte la performance.
+Pourquoi autant de variété ? Parce que chaque algorithme fait des compromis différents. Certains privilégient la cohérence linguistique, d'autres l'universalité multilingue, d'autres encore la robustesse probabiliste. Choisir le bon tokenizer pour ton cas d'usage a un impact direct sur la performance du modèle, la vitesse d'entraînement, et même le coût d'utilisation de l'API.
 
-
+Voyons ce que chacun apporte de différent.
 
 ## WordPiece : l'algorithme de BERT
 
-Développé par Google pour la reconnaissance vocale, puis adopté pour BERT. C'est lui qui propulse BERT et ses variantes (DistilBERT, ALBERT, RoBERTa).
+Développé initialement par Google pour la reconnaissance vocale, WordPiece a ensuite été adopté pour BERT et toute sa famille (DistilBERT, ALBERT, RoBERTa). C'est un cousin très proche de BPE, mais avec une philosophie de fusion subtilement différente.
 
 ### Différence clé : le critère de fusion
 
-BPE fusionne les paires les plus **fréquentes**. WordPiece fusionnne les paires avec la meilleure **vraisemblance**.
+BPE fusionne les paires les plus **fréquentes**. WordPiece fusionne les paires avec la meilleure **vraisemblance**. La nuance est importante.
 
-```
-BPE:        fusionne (a, b) si frequence(a, b) est maximale
-WordPiece:  fusionne (a, b) si P(AB) / (P(A) × P(B)) est maximale
-```
+| Algorithme | Critère de fusion |
+|---|---|
+| BPE | Fusionne (a, b) si $\text{freq}(a, b)$ est maximale |
+| WordPiece | Fusionne (a, b) si $\frac{P(AB)}{P(A) \times P(B)}$ est maximale |
 
-Traduction : WordPiece favorise les fusions où A et B "vont ensemble" plus que le hasard ne le suggère. Résultat : sous-mots plus **linguistiquement cohérents**.
+Traduction intuitive : WordPiece se demande "est-ce que A et B apparaissent ensemble **plus souvent que le hasard ne le prédirait** ?" C'est une mesure d'association statistique, pas juste de fréquence brute. Imagine que "a" et "s" apparaissent souvent ensemble, mais c'est surtout parce que "a" et "s" sont individuellement très fréquents. Leur co-occurrence n'est pas surprenante. En revanche, "i" et "ng" apparaissent ensemble bien plus que ce que leurs fréquences individuelles suggèrent : c'est le suffixe verbal "-ing", une vraie unité linguistique.
 
-Exemple :
-- BPE : fusionne (a, s) parce qu'elle est fréquente
-- WordPiece : fusionne (i, ng) parce que "ing" (suffixe verbal) est une association naturelle, même si moins fréquente
+Exemple concret :
+- BPE : fusionne (a, s) parce que cette paire est la plus fréquente dans le corpus
+- WordPiece : fusionne (i, ng) parce que "ing" est une association **statistiquement surprenante**, même si elle est moins fréquente en nombre absolu
+
+Le résultat : des sous-mots plus **linguistiquement cohérents**. WordPiece a tendance à découvrir les vrais morphèmes (préfixes, suffixes, racines) plutôt que des fragments arbitraires.
 
 ### Le marqueur ## pour la position
 
-WordPiece marque les sous-mots non-initiaux avec `##` :
+WordPiece utilise un marqueur `##` pour indiquer qu'un sous-mot n'est **pas en début de mot** :
 
-```
-"tokenization" → ["token", "##ization"]
-"unhappiness" → ["un", "##happi", "##ness"]
-```
+| Mot | Tokens WordPiece |
+|---|---|
+| "tokenization" | ["token", "##ization"] |
+| "unhappiness" | ["un", "##happi", "##ness"] |
 
-Cela préserve l'info de position du mot. Simple mais efficace pour distinguer "cat" (début de "cat") de "##cat" (fin de "tomcat").
+Pourquoi c'est utile ? Parce que ça préserve l'information de position dans le mot original. Le modèle sait que "cat" en début de mot (le mot "cat" tout seul) et "##cat" en fin de mot (comme dans "tomcat") sont deux choses différentes. Simple mais redoutablement efficace pour la compréhension linguistique.
 
 Vocabulaires typiques :
 - BERT anglais : ~30k tokens
-- BERT multilingue : ~119k tokens (104 langues)
+- BERT multilingue : ~119k tokens (pour couvrir 104 langues)
 
 ## SentencePiece : la solution universelle
 
-Développé par Google. Plus qu'un algorithme, c'est un **framework complet** pour la tokenization.
+Développé par Google, SentencePiece n'est pas juste un algorithme de tokenization. C'est un **framework complet** qui résout un problème que BPE et WordPiece ignorent.
 
 ### Le problème fondamental : la pré-tokenization
 
-BPE et WordPiece supposent que vous découpez d'abord le texte en mots (par les espaces). Mais :
+BPE et WordPiece supposent que tu découpes d'abord le texte en mots (typiquement en séparant par les espaces). Ça marche bien pour le français ou l'anglais. Mais cette hypothèse pose trois problèmes sérieux :
 
-**Problème 1** : certaines langues ne mettent pas d'espaces (chinois, japonais, thaï).
+**Problème 1** : certaines langues ne mettent pas d'espaces entre les mots. Le chinois, le japonais, le thaï écrivent tout collé. Comment séparer "猫は寝ている" en mots sans connaître la grammaire japonaise ?
 
-```
-Français:  "Le chat dort" (espaces clairs)
-Chinois:   "猫は寝ている" (zéro espaces)
-```
+| Langue | Exemple | Espaces |
+|---|---|---|
+| Français | "Le chat dort" | Espaces clairs entre les mots |
+| Chinois | "猫は寝ている" | Zéro espace, mots collés |
 
-**Problème 2** : la pré-tokenization introduit des biais culturels.
+**Problème 2** : la pré-tokenization introduit des **biais culturels**. Les langues à espaces sont avantagées, les langues agglutinantes (turc, finnois) ou sans espaces sont pénalisées dès la première étape.
 
-**Problème 3** : les implémentations varient, créant des incohérences.
+**Problème 3** : les implémentations de pré-tokenization varient d'un système à l'autre (gestion des apostrophes, des tirets, de la ponctuation), créant des **incohérences** subtiles mais réelles entre les modèles.
 
 ### La solution : traiter le texte RAW
 
-**SentencePiece** traite le texte brut, sans supposer aucune structure de mots. Les espaces sont juste un caractère comme un autre, représenté par `▁` (underscore) :
+**SentencePiece** contourne tout ça en traitant le texte brut comme un flux de caractères, sans supposer aucune structure de mots. Les espaces ne sont pas des séparateurs spéciaux : ils sont juste un caractère comme un autre, représenté par `▁` (un underscore spécial) :
 
-```
-Français: "Je mange une pomme"
-→ ["▁Je", "▁mange", "▁une", "▁pomme"]
+| Langue | Texte | Tokens SentencePiece |
+|---|---|---|
+| Français | "Je mange une pomme" | ["▁Je", "▁mange", "▁une", "▁pomme"] |
+| Chinois | "猫は寝ている" | ["▁猫", "は", "▁寝", "ている"] |
 
-Chinois: "猫は寝ている"
-→ ["▁猫", "は", "▁寝", "ている"]
-```
+L'espace est **dans** le token, pas entre les tokens. Le résultat : même algorithme, même code, même pipeline fonctionne pour toutes les langues du monde. Zéro cas spéciaux, zéro heuristiques dépendantes de la langue.
 
-**Résultat** : même algorithme, même code, fonctionne pour toutes les langues. Zéro cas spéciaux.
+### SentencePiece, c'est plus qu'un algo
 
-### SentencePiece c'est plus qu'un algo
+Concrètement, SentencePiece est un **framework Python/C++** qui implémente plusieurs algorithmes à l'intérieur :
 
-C'est un **framework Python/C++** qui implémente plusieurs algorithmes :
-
-- **BPE** (utilisé par LLaMA)
+- **BPE** (utilisé par LLaMA, Mistral)
 - **Unigram** (utilisé par T5, ALBERT, XLNet)
 
-Même framework, même normalisation Unicode, même gestion des espaces. Juste différents algorithmes de fusion à l'intérieur.
+Même framework, même normalisation Unicode, même gestion des espaces. Juste des algorithmes de segmentation différents sous le capot. C'est pour ça que tu vois souvent "SentencePiece + BPE" ou "SentencePiece + Unigram" : SentencePiece gère la partie universelle (traitement du texte brut), et l'algorithme choisi gère la segmentation.
 
 ## Unigram : l'algorithme probabiliste
 
-Approche radicalement différente de BPE.
+Unigram prend une approche radicalement différente de BPE. Là où BPE construit son vocabulaire en fusionnant des paires, Unigram fait exactement l'inverse.
 
 ### Construction : top-down, pas bottom-up
 
-BPE part petit et fusionne. Unigram part énorme et élimine :
+BPE part petit et fusionne progressivement (bottom-up). Unigram part avec un vocabulaire **gigantesque** et élague (top-down) :
 
-```
-Etape 1 : Créer TOUS les sous-mots possibles du corpus
-         ("t", "th", "the", "they", etc.)
+1. **Étape 1** : Créer TOUS les sous-mots possibles du corpus ("t", "th", "the", "they", "he", "hey", etc.) — on commence avec un vocabulaire énorme, parfois des millions d'entrées
+2. **Étape 2** : Calculer la probabilité optimale de chaque sous-mot (via l'algorithme EM)
+3. **Étape 3** : Enlever itérativement le sous-mot dont la suppression fait **le moins de mal** à la vraisemblance du corpus entier
+4. **Étape 4** : Répéter jusqu'à atteindre la taille de vocabulaire désirée (typiquement 30-100k)
 
-Etape 2 : Calculer quelle probabilité chaque sous-mot devrait avoir
-
-Etape 3 : Enlever itérativement le sous-mot dont la suppression
-         fait le moins de mal à la vraisemblance du corpus
-
-Etape 4 : Continuer jusqu'à atteindre la taille de vocab désirée
-```
-
-Penser « bottom-up suppression » vs « BPE top-up building ».
+C'est comme un sculpteur qui part d'un bloc de marbre et enlève ce qui ne sert pas, plutôt qu'un maçon qui empile des briques.
 
 ### Force : la probabilité
 
-Chaque sous-mot a une **probabilité**. Pour un mot donné, plusieurs découpages sont possibles, avec probabilités différentes :
+Chaque sous-mot dans le vocabulaire Unigram a une **probabilité** associée. Pour un mot donné, plusieurs découpages sont possibles, chacun avec sa propre probabilité :
 
-```
-Mot "running" :
-  Découpage 1: ["run", "##ning"]   Probabilité: 0.7
-  Découpage 2: ["ru", "##nn", "##ing"] Probabilité: 0.2
-  Découpage 3: ["r", "u", "##nn", "##ing"] Probabilité: 0.1
-```
+| Découpage de "running" | Tokens | Probabilité |
+|---|---|---|
+| Découpage 1 | ["run", "##ning"] | 0.7 |
+| Découpage 2 | ["ru", "##nn", "##ing"] | 0.2 |
+| Découpage 3 | ["r", "u", "##nn", "##ing"] | 0.1 |
 
-À l'inférence, l'algorithme de Viterbi choisit le chemin le plus probable.
+BPE ne te donne qu'un seul découpage (déterministe). Unigram te donne une **distribution de probabilité** sur tous les découpages possibles. À l'inférence, l'algorithme de Viterbi choisit le chemin le plus probable (le plus vraisemblable globalement).
 
 ### Bonus : subword regularization
 
-Pendant l'entraînement, au lieu de toujours utiliser le découpage le plus probable, vous **échantillonnez** des découpage alternatifs. Cela rend le modèle robuste aux variations de tokenization.
+C'est là qu'Unigram brille vraiment. Pendant l'entraînement, au lieu de toujours utiliser le découpage le plus probable, tu peux **échantillonner** des découpages alternatifs. Le même mot est parfois découpé en 2 tokens, parfois en 3, parfois en 4. Cette variabilité force le modèle à ne pas dépendre d'un découpage spécifique.
 
-Amélioration de généralisation à coût zéro. Elegant.
+Le résultat : le modèle devient plus **robuste** aux variations de tokenization. Si un mot apparaît dans un contexte légèrement différent et se retrouve découpé différemment, le modèle sait quand même le gérer. Amélioration de généralisation à coût zéro. Élégant.
 
 ### Comparaison directe
 
@@ -140,23 +131,23 @@ Amélioration de généralisation à coût zéro. Elegant.
 | Direction | Bottom-up (fusion) | Top-down (élagage) |
 | Critère | Fréquence | Vraisemblance |
 | Découpage | Déterministe (1 seul) | Probabiliste (plusieurs) |
-| Regularisation native | Non | Oui (subword regularisation) |
+| Régularisation native | Non | Oui (subword regularisation) |
 | Utilisé par | GPT, RoBERTa, LLaMA | T5, ALBERT, XLNet |
 
 ## tiktoken : l'implémentation pro d'OpenAI
 
-Ce n'est pas un nouvel algorithme. C'est une **implémentation ultra-optimisée** de byte-level BPE en Rust, utilisée par GPT-3.5, GPT-4 et l'API d'OpenAI.
+tiktoken n'est pas un nouvel algorithme. C'est une **implémentation ultra-optimisée** de byte-level BPE écrite en Rust, utilisée par GPT-3.5, GPT-4 et toute l'API d'OpenAI. L'algorithme est le même que BPE, mais le code est nettement plus rapide (10-100x) que les implémentations Python classiques.
 
 ### Plusieurs encodages disponibles
 
-tiktoken propose plusieurs **encodages** (vocabulaires différents) :
+tiktoken propose plusieurs **encodages** (c'est-à-dire des vocabulaires différents, entraînés sur des données différentes) :
 
 | Encodage | Modèle | Vocab size |
 |---|---|---|
 | cl100k_base | GPT-3.5, GPT-4 | ~100k tokens |
 | o200k_base | GPT-4o | ~200k tokens |
 
-Chaque modèle OpenAI a son propre encodage. Utiliser le mauvais pour compter les tokens = résultats incorrects. Important pour le budget d'API.
+Attention : chaque modèle OpenAI a son propre encodage. Utiliser le mauvais encodage pour compter les tokens donne des résultats incorrects. C'est crucial quand tu estimes ton budget API : la différence peut être de 20-30% sur le nombre de tokens.
 
 ### Comment l'utiliser
 
@@ -176,52 +167,50 @@ decoded = enc.decode(tokens)
 print(decoded)
 ```
 
-Outil essentiel avant d'appeler l'API d'OpenAI, pour comprendre les coûts réels.
+Outil indispensable avant d'appeler l'API d'OpenAI, pour estimer les coûts réels et éviter les mauvaises surprises sur la facture.
 
 ## L'impact caché du tokenizer
 
-Le choix du tokenizer affecte **tout** de manière invisible :
+Le choix du tokenizer affecte **tout** de manière invisible. Voici les trois domaines où ça fait le plus mal :
 
 ### Fertilité : la malédiction du tokenizer non-natif
 
-Un tokenizer entraîné 90% sur anglais nécessite 2-3× plus de tokens pour le français, l'arabe, le chinois.
+Un tokenizer entraîné à 90% sur de l'anglais va nécessiter 2 à 3 fois plus de tokens pour encoder du français, de l'arabe ou du chinois. C'est ce qu'on appelle la **fertilité** du tokenizer.
 
-```
-Français "Bonjour" :
-  BPE (basé anglais) : ["Bon", "##jour"]      2 tokens
-  BPE (basé français) : ["Bonjour"]          1 token
+| Tokenizer | "Bonjour" | Nombre de tokens |
+|---|---|---|
+| BPE (entraîné sur anglais) | ["Bon", "##jour"] | 2 tokens |
+| BPE (entraîné sur français) | ["Bonjour"] | 1 token |
 
-Votre contexte de 4000 tokens ? Effectivement 2000-2500 tokens en français.
-Coûts augmentent, performance diminue.
-```
+Les conséquences sont concrètes : ton contexte de 4000 tokens ? En pratique, il ne contient que 2000-2500 tokens de "vrai contenu" en français. Les coûts d'API augmentent proportionnellement, et la performance du modèle diminue parce que le contexte utile est compressé. C'est un des facteurs expliquant pourquoi GPT-4 est généralement meilleur en anglais qu'en français.
 
 ### Arithmétique
 
-Les modèles sont mauvais en math en partie à cause du tokenizer. "380" pourrait tokenize :
+Les LLM sont notoirement mauvais en math, et le tokenizer y est pour quelque chose. Le nombre "380" peut être tokenisé de différentes façons selon le contexte :
 
-```
-Option 1: ["3", "80"]      (le 3 est seul, 80 ensemble)
-Option 2: ["38", "0"]      (38 ensemble, 0 seul)
-Option 3: ["380"]          (tout ensemble)
-```
+| Option | Tokens pour "380" | Description |
+|---|---|---|
+| Option 1 | ["3", "80"] | Le 3 est isolé, 80 ensemble |
+| Option 2 | ["38", "0"] | 38 ensemble, 0 isolé |
+| Option 3 | ["380"] | Tout en un seul token |
 
-Le modèle voit des tokenizations différentes pour les mêmes chiffres. Pas de structure apparente. Les opérations mathématiques deviennent chaotiques.
+Le modèle voit des tokenisations différentes pour les mêmes chiffres selon le contexte. Il n'y a pas de structure cohérente : "3" dans "380" et "3" dans "3000" ne sont pas représentés de la même façon. Les opérations arithmétiques deviennent chaotiques, parce que le modèle ne voit jamais les chiffres de manière uniforme.
 
 ### Code
 
-Les espaces et l'indentation consomment énormément de tokens en tokenizers naïfs. C'est pourquoi il y a des tokenizers spécialisés pour le code.
+Les espaces et l'indentation consomment énormément de tokens avec des tokenizers naïfs. Un fichier Python bien indenté peut perdre 30-40% de ses tokens juste sur les espaces. C'est pourquoi les tokenizers modernes (comme celui de GPT-4) ont des optimisations spécifiques pour le code : ils regroupent les espaces consécutifs en un seul token. C'est aussi pourquoi des modèles spécialisés code (CodeLlama, StarCoder) utilisent des tokenizers entraînés spécifiquement sur du code.
 
 ## Le verdict : pas de vainqueur universel
 
-Chaque tokenizer excelle dans un domaine :
+Chaque tokenizer excelle dans un domaine, et c'est pour ça qu'ils coexistent :
 
-- **WordPiece** : compréhension (BERT), cohérence linguistique
-- **SentencePiece** : multilingue (T5, LLaMA), universel
-- **Unigram** : robustesse via probabilités et régularisation
-- **BPE/tiktoken** : GPT/population générale, byte-level universel
+- **WordPiece** : compréhension (BERT), sous-mots linguistiquement cohérents
+- **SentencePiece** : universalité multilingue (T5, LLaMA), zéro hypothèse sur la langue
+- **Unigram** : robustesse via probabilités et régularisation, flexibilité de découpage
+- **BPE/tiktoken** : modèles GPT et grand public, byte-level universel, ultra-optimisé
 
 ## Pourquoi c'est important
 
-Le tokenizer est le **premier maillon critique** de la chaîne. Ses choix se propagent partout dans le modèle. C'est invisible, mais **c'est là que les bugs s'cachent**.
+Le tokenizer est le **premier maillon critique** de la chaîne. Avant que le modèle ne voie quoi que ce soit, le texte passe par le tokenizer. Ses choix se propagent dans tout le réseau : un mauvais découpage, une fertilité trop élevée, un vocabulaire inadapté, et les performances se dégradent de manière invisible.
 
-Quand votre modèle déraille, vérifiez la tokenization avant le reste.
+Quand ton modèle déraille sur une tâche, le réflexe classique est de blâmer l'architecture ou les données. Mais souvent, le coupable se cache au tout début du pipeline. Vérifie la tokenization avant le reste.

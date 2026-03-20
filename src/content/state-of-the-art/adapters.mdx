@@ -5,91 +5,100 @@ description: "Les adapter modules, introduits en 2019, sont les pionniers du Par
 
 ## Avant LoRA, il y avait les Adapters
 
-LoRA est partout aujourd'hui. Mais en 2019, avant qu'on le découvre, il y avait déjà une idée: les **adapters**. Google Research a dit "pourquoi modifier les poids existants? Et si on ajoutait juste de petits modules entraînables entre les couches?"
+LoRA est partout aujourd'hui. Mais en 2019, bien avant que LoRA ne devienne la star, une équipe de Google Research a eu une idée élégante : au lieu de modifier les poids existants du modèle (ce qui revient à tout ré-entraîner), pourquoi ne pas simplement **insérer de petits modules entraînables** entre les couches existantes ?
+
+C'est le principe des **adapters** : tu gardes le gros modèle pré-entraîné complètement gelé, et tu ajoutes de minuscules réseaux de neurones qui apprennent la spécialisation. Le modèle de base ne bouge pas d'un pouce.
 
 <ArxivLink id="1902.00751" title="Parameter-Efficient Transfer Learning for NLP (Houlsby et al., 2019)" />
 
-## L'idée simple: des mini-modules en parallèle
+## L'idée simple : des mini-modules en goulot d'étranglement
 
-Au lieu de changer les gros poids du modèle pré-entraîné, vous insérez des petits réseaux entraînables. Le modèle original reste gelé. C'est comme ajouter des "écluses" de spécialisation.
+Imagine un tuyau large (768 dimensions pour BERT) dans lequel passe l'information. Un adapter, c'est un rétrécissement temporaire de ce tuyau : on compresse l'info dans un espace beaucoup plus petit, on la transforme, puis on la ré-élargit.
 
 ### Structure d'un adapter
 
-Un adapter est un petit réseau en forme de **goulot d'étranglement**:
+Un adapter est un petit réseau en forme de **bottleneck** :
 
-1. Prenez l'entrée (dimension d, ex: 768 pour BERT)
-2. Réduisez-la à dimension m (ex: 64) — down-projection
-3. Appliquez une activation (ReLU/GELU)
-4. Agrandissez-la back à d — up-projection
-5. Ajoutez le résultat à l'entrée (skip connection)
+1. **Down-projection** : prenez l'entrée (dimension $d$, ex: 768 pour BERT) et réduisez-la à dimension $m$ (ex: 64)
+2. **Activation** : appliquez une non-linéarité (ReLU ou GELU) pour transformer l'information
+3. **Up-projection** : ré-élargissez à la dimension $d$ originale
+4. **Skip connection** : ajoutez le résultat à l'entrée originale (comme dans ResNet)
 
-```
-adapter(x) = x + up_proj(activation(down_proj(x)))
-```
+$$\text{adapter}(x) = x + \text{up\_proj}(\text{activation}(\text{down\_proj}(x)))$$
 
-<Callout type="info" title="Les chiffres">
-Pour BERT-base (d=768, m=64): seulement 2 × 768 × 64 = 98 304 paramètres par adapter. C'est de la dinde pour une couche Transformer complète qui en a des millions.
+La skip connection est cruciale : elle garantit qu'au début de l'entraînement (quand les poids de l'adapter sont proches de zéro), le module se comporte comme une identité. Il ne perturbe pas le modèle. L'adapter "apprend progressivement à intervenir".
+
+<Callout type="info" title="Les chiffres qui comptent">
+Pour BERT-base ($d=768$, $m=64$) : seulement $2 \times 768 \times 64 = 98\,304$ paramètres par adapter. Comparé aux millions de paramètres d'une couche Transformer complète, c'est une fraction infime. On parle de moins de 4% des paramètres totaux.
 </Callout>
 
-### Où les mettre?
+### Où les placer dans le Transformer ?
 
-Deux adapters par couche Transformer:
-1. Après l'attention (après la projection de sortie)
+Dans l'architecture originale de Houlsby, on insère **deux adapters par couche** Transformer :
+1. Après le bloc d'attention multi-têtes (après la projection de sortie)
 2. Après le FFN (feed-forward network)
 
-Mais un seul adapter après le FFN suffit souvent, selon les travaux ultérieurs.
+Des travaux ultérieurs ont montré qu'un seul adapter après le FFN suffit souvent, avec une perte de performance négligeable. Moins de paramètres, même résultat : c'est le genre de simplification qu'on aime.
 
-## Pourquoi les adapters fonctionnent?
+## Pourquoi ça fonctionne si bien ?
 
-Le pré-entraînement apprend des **représentations générales** du langage. Fine-tuner ne veut pas dire tout recommencer. Ça veut dire: apprenez de petites **transformations** pour adapter ces représentations à votre tâche.
+L'intuition profonde est la suivante : le pré-entraînement apprend des **représentations générales** du langage (grammaire, sémantique, raisonnement de base). Fine-tuner pour une tâche spécifique ne nécessite pas de repartir de zéro. Il suffit d'apprendre de petites **transformations** qui redirigent ces représentations vers ta tâche.
 
-<Callout type="paper" title="Résultats réels">
-Sur GLUE, les adapters avec seulement 3,6% des paramètres de BERT atteignent 99,6% des performances du fine-tuning complet. Ça démontre que la majorité des paramètres n'a pas besoin de bouger.
+C'est comme un couteau suisse déjà assemblé. Tu n'as pas besoin de refondre tout le couteau pour ajouter un tire-bouchon. Tu ajoutes juste le module manquant.
+
+<Callout type="paper" title="Résultats concrets">
+Sur le benchmark GLUE, les adapters avec seulement 3,6% des paramètres de BERT atteignent 99,6% des performances du fine-tuning complet. Autrement dit : la quasi-totalité des paramètres du modèle n'a pas besoin de bouger pour s'adapter à une nouvelle tâche.
 </Callout>
 
-## Adapters vs LoRA: le match
+## Adapters vs LoRA : le match des titans
+
+Voici le duel qui explique pourquoi LoRA a finalement pris le dessus :
 
 | Aspect | Adapters | LoRA |
 |---|---|---|
-| Ajout | Modules entre couches | Matrices low-rank dans couches |
-| Latence inférence | Augmentée (modules séquentiels) | Aucune (peut fusionner) |
-| Paramètres (7B) | 0,3% | 0,1% |
-| Non-linéarité | Oui (activation) | Non (linéaire) |
-| Fusion possible | Non | Oui |
+| Mécanisme | Modules insérés entre couches | Matrices low-rank à l'intérieur des couches |
+| Latence inférence | Augmentée (modules séquentiels) | Aucune (fusion possible dans les poids) |
+| Paramètres (modèle 7B) | ~0,3% | ~0,1% |
+| Non-linéarité | Oui (activation ReLU/GELU) | Non (purement linéaire) |
+| Fusion dans le modèle | Impossible | Possible |
 
-<Callout type="warning" title="L'inconvénient: latence">
-Les adapters **ajoutent du temps d'inférence** car ce sont des couches extra qui calculent séquentiellement. Avec LoRA, vous pouvez "fusionner" et faire disparaître le coût. Impossible avec adapters (à cause de la non-linéarité). C'est pourquoi LoRA a gagné.
+<Callout type="warning" title="L'inconvénient fatal : la latence">
+Les adapters **ajoutent du temps d'inférence** car ce sont des couches supplémentaires qui calculent séquentiellement. Avec LoRA, tu peux "fusionner" les matrices low-rank dans les poids originaux et faire disparaitre tout surcoût. Avec les adapters, c'est impossible à cause de la non-linéarité (l'activation ReLU/GELU empêche la fusion). C'est cette différence qui a fait pencher la balance en faveur de LoRA.
 </Callout>
 
 ## Des descendants intéressants
 
-**AdapterFusion**: combinez plusieurs adapters entraînés sur différentes tâches. Un mécanisme d'attention apprend à les mélanger. Puissant pour multi-tâche.
+L'idée des adapters a engendré des variantes puissantes :
 
-**AdapterHub**: une plateforme communautaire où partager des adapters. Chacun code une compétence (langue, domaine, tâche) et on les compose.
+**AdapterFusion** : tu entraînes plusieurs adapters sur différentes tâches (sentiment, NER, traduction...), puis un mécanisme d'attention apprend automatiquement à les combiner. C'est du multi-tâche sans ré-entraîner les adapters individuels.
 
-## Cas d'usage clé: multilingue
+**AdapterHub** : une plateforme communautaire où chacun partage ses adapters. Un adapter "français", un adapter "juridique", un adapter "résumé"... et tu les composes comme des briques LEGO.
 
-Adapter brille particulièrement pour la traduction croisée:
-1. Modèle de base: entraîné sur l'anglais
-2. Language adapter pour le français (capture la syntaxe francophone)
-3. Task adapter pour NER
-4. Combinaison: NER en français sans données NER en français!
+## Le cas d'usage star : le multilingue
 
-<Callout type="tip" title="Composition de compétences">
-C'est l'avantage majeur des adapters: **modularité**. Adapter "français" + Adapter "NER" = NER en français. Sans entraîner directement ce mix. Ça, LoRA ne le fait pas aussi élégamment.
+C'est ici que les adapters brillent vraiment, et que LoRA n'a pas de réponse aussi élégante :
+
+1. **Modèle de base** : entraîné sur l'anglais
+2. **Language adapter** : adapter "français" qui capture la syntaxe et les particularités du français
+3. **Task adapter** : adapter "NER" (reconnaissance d'entités) entraîné sur des données anglaises
+4. **Combinaison** : on empile les deux adapters et on obtient du NER en français, **sans jamais avoir eu de données NER en français** !
+
+<Callout type="tip" title="Composition de compétences = superpouvoir">
+C'est l'avantage majeur et unique des adapters : la **modularité compositionnelle**. Adapter "français" + Adapter "NER" = NER en français. Adapter "allemand" + Adapter "sentiment" = analyse de sentiment en allemand. Cette composition zero-shot de compétences, LoRA ne le fait pas aussi proprement.
 </Callout>
 
 
 
-## Héritage: les fondations du PEFT
+## L'héritage : les fondations du PEFT moderne
 
-Bien que LoRA domine aujourd'hui, les adapters ont établi les principes:
-- Geler le modèle de base
-- N'entraîner que de petits ajouts
-- Initialiser près de l'identité pour ne pas perturber
+Bien que LoRA domine aujourd'hui, les adapters ont établi les trois principes fondateurs du PEFT (Parameter-Efficient Fine-Tuning) :
 
-La bibliothèque `adapters` (ex-AdapterHub) reste vivante et supporte adapters classiques, prefix tuning, LoRA, et leurs mélanges.
+- **Geler le modèle de base** : ne touchez pas aux poids pré-entraînés
+- **N'entraîner que de petits ajouts** : quelques pourcents des paramètres suffisent
+- **Initialiser près de l'identité** : les modules ajoutés ne doivent pas perturber le modèle au départ
+
+La bibliothèque `adapters` (anciennement AdapterHub) reste activement maintenue et supporte les adapters classiques, le prefix tuning, LoRA, et leurs combinaisons.
 
 ---
 
-**Perspective historique**: Les adapters n'ont pas gagné la bataille contre LoRA (cause latence). Mais ils ont gagné la guerre conceptuelle: le PEFT existe aujourd'hui parce que les adapters ont prouvé que ça fonctionne.
+**Perspective historique** : Les adapters n'ont pas gagné la bataille contre LoRA (à cause de la latence en inférence). Mais ils ont gagné la guerre conceptuelle : le PEFT existe aujourd'hui parce que les adapters ont prouvé en 2019 qu'on pouvait adapter un modèle géant en ne touchant qu'une fraction de ses paramètres. Toutes les techniques modernes leur doivent cette intuition fondatrice.

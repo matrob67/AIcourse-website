@@ -7,58 +7,59 @@ description: "Les modèles vision-langage combinent la compréhension visuelle e
 
 ## Le grand rêve : comprendre les images ET le texte
 
-Pendant longtemps, les modèles IA étaient spécialisés : soit ils comprenaient du texte, soit des images. Comme si vous aviez une personne qui ne pouvait que lire et une autre qui ne pouvait que regarder. **Les Vision-Language Models (VLM) c'est l'union** : un seul modèle qui comprend simultanément images et texte, peut décrire une photo, répondre à des questions visuelles, analyser un document scanné.
+Pendant longtemps, les modèles IA étaient des spécialistes isolés : soit ils comprenaient du texte, soit des images, mais jamais les deux en même temps. C'est comme avoir une personne qui peut lire n'importe quel document mais est aveugle, et une autre qui voit parfaitement mais ne sait pas lire. Aucune des deux ne peut analyser une facture, interpréter un graphique, ou décrire ce qu'elle voit dans une photo.
+
+**Les Vision-Language Models (VLM)** sont l'union de ces deux capacités : un seul modèle qui comprend simultanément images et texte. Tu peux lui montrer une photo et lui poser des questions dessus, lui demander de décrire une scène, d'analyser un document scanné, ou d'interpréter un graphique.
 
 <ArxivLink id="2304.08485" title="Visual Instruction Tuning (Liu et al., 2023) - LLaVA" />
 
 <Callout type="info" title="Le blueprint d'un VLM moderne">
-La plupart des VLM suivent la même architecture en trois étapes : un **encodeur visuel** (un Vision Transformer pré-entraîné qui transforme l'image en vecteurs), un **module de projection** qui aligne ces vecteurs visuels avec la "langue" que le LLM comprend, et un **LLM** qui traite les tokens visuels et textuels ensemble.
+La plupart des VLM suivent la même recette en trois ingrédients : un **encodeur visuel** (un Vision Transformer pré-entraîné qui transforme l'image en une séquence de vecteurs), un **module de projection** qui traduit ces vecteurs visuels dans le "langage" que le LLM comprend, et un **LLM** qui traite les tokens visuels et textuels ensemble pour produire une réponse. C'est simple en apparence, mais chaque composant cache une complexité réelle.
 </Callout>
 
 ## Comment ça marche : l'architecture
 
 ### Le pipeline simplifié
 
-```
-Image → [Encodeur Vision (ViT)] → tokens visuels
-                                      ↓
-                              [Couche de projection]
-                                      ↓
-Texte → [Tokenizer] → tokens texte → [Grand modèle de langage] → Réponse
-```
+1. **Image** &rarr; Encodeur Vision (ViT) &rarr; tokens visuels
+2. Tokens visuels &rarr; **Couche de projection** &rarr; tokens visuels dans l'espace du LLM
+3. **Texte** &rarr; Tokenizer &rarr; tokens texte
+4. Tokens visuels projetés + tokens texte &rarr; **Grand modèle de langage** &rarr; **Réponse**
 
-L'image est convertie en nombres, la couche de projection les traduit en "langage LLM", et le LLM peut enfin les traiter comme du texte.
+L'idée clé : l'image est convertie en une séquence de "tokens" numériques, exactement comme du texte. La couche de projection sert de traducteur entre le "langage visuel" de l'encodeur et le "langage textuel" du LLM. Une fois cette traduction faite, le LLM peut traiter les tokens visuels comme s'ils étaient du texte --- il n'a même pas besoin de "savoir" qu'il regarde une image.
 
 ### Exemple concret : LLaVA
 
-LLaVA (Large Language and Vision Assistant), créé par Liu et al. en 2023, est l'exemple le plus influent en open-source :
+LLaVA (Large Language and Vision Assistant), créé par Liu et al. en 2023, est le VLM open-source le plus influent. Son architecture est devenue un modèle de référence :
 
-- **Vision Encoder** : CLIP ViT-L/14 (un modèle pré-entraîné)
-- **Projection** : une simple couche linéaire (LLaVA 1.0) ou un petit réseau (LLaVA 1.5+)
-- **LLM** : LLaMA ou Vicuna
+- **Vision Encoder** : CLIP ViT-L/14 (un modèle pré-entraîné pour aligner images et textes)
+- **Projection** : une simple couche linéaire dans LLaVA 1.0, remplacée par un petit réseau MLP dans LLaVA 1.5+ pour une meilleure expressivité
+- **LLM** : LLaMA ou Vicuna comme backbone de langage
 - **Entraînement en deux phases** :
-  1. Phase 1 : alignment (558K paires image-texte, seule la projection apprend)
-  2. Phase 2 : instruction tuning (665K exemples d'instructions visuelles, la projection et le LLM apprennent)
+  1. **Phase 1 (alignment)** : 558K paires image-texte. Seule la couche de projection apprend. Le but : aligner l'espace visuel avec l'espace du LLM. C'est rapide (quelques heures).
+  2. **Phase 2 (instruction tuning)** : 665K exemples d'instructions visuelles. La projection ET le LLM apprennent ensemble. Le modèle apprend à suivre des instructions impliquant des images.
 
 ### Variantes architecturales
 
-**Cross-attention** (Flamingo) : les tokens visuels interagissent profondément avec le LLM via des couches d'attention insérées dans le LLM.
+Il existe trois grandes familles d'intégration vision-langage :
 
-**Early fusion** (LLaVA) : les tokens visuels sont simplement concaténés aux tokens texte à l'entrée du LLM. Plus simple.
+**Cross-attention** (Flamingo) : des couches d'attention spéciales sont insérées dans le LLM pour que les tokens texte puissent "regarder" les tokens visuels à chaque couche. Puissant mais coûteux et complexe à implémenter.
 
-**Multimodal natif** (GPT-4V, Gemini, Claude) : le modèle est pré-entraîné sur texte + image + audio depuis le départ. Plus intégré.
+**Early fusion** (LLaVA) : les tokens visuels sont simplement concaténés aux tokens texte à l'entrée du LLM. Le LLM traite tout via son attention standard. Plus simple, étonnamment efficace.
 
-<Callout type="tip" title="Early fusion est devenu le standard open-source">
-L'approche LLaVA (juste concaténer les tokens visuels en entrée) est la plus simple à implémenter et donne d'excellents résultats. C'est devenu l'approche de référence pour les VLM open-source, copiée par InternVL, Qwen-VL, etc.
+**Multimodal natif** (GPT-4V, Gemini, Claude) : le modèle est pré-entraîné dès le départ sur un mélange de texte, images et parfois audio. L'intégration est la plus profonde, mais nécessite un budget d'entraînement colossal.
+
+<Callout type="tip" title="L'early fusion est devenu le standard open-source">
+L'approche LLaVA --- juste concaténer les tokens visuels aux tokens texte en entrée --- est la plus simple à implémenter et donne d'excellents résultats. C'est devenu l'approche de référence pour les VLM open-source, adoptée par InternVL, Qwen-VL, et bien d'autres. La simplicité gagne souvent.
 </Callout>
 
 
 
 ## Entraîner un VLM
 
-### Les données qu'il faut
+### Les données multimodales nécessaires
 
-Les VLM ont besoin de données multimodales variées :
+Les VLM ont besoin de données variées qui couvrent différents types d'interaction vision-langage :
 
 | Type | Exemples | Volume typique |
 |---|---|---|
@@ -68,72 +69,74 @@ Les VLM ont besoin de données multimodales variées :
 | Instructions visuelles | LLaVA-Instruct, ShareGPT4V | 100K-1M paires |
 | Données entrelacées | MMC4, OBELICS | 10-100 millions |
 
+Les "données entrelacées" sont particulièrement intéressantes : ce sont des documents web où texte et images alternent naturellement (articles illustrés, pages de produits). Elles apprennent au modèle à comprendre le lien entre le texte et les images dans un contexte réaliste.
+
 ### Pipeline d'entraînement
 
-1. **Pré-entraînement visuel** : l'encodeur visuel apprend sur ImageNet ou des données similaires
-2. **Alignment** : la couche de projection apprend à mapper les features visuelles vers l'espace du LLM (phase rapide)
-3. **Instruction tuning** : fine-tuning sur des instructions mixtes texte-image pour que le modèle soit conversationnel
+1. **Pré-entraînement visuel** : l'encodeur visuel apprend à représenter les images sur ImageNet ou des données similaires (souvent fait en amont, on utilise un ViT pré-entraîné)
+2. **Alignment** : la couche de projection apprend à mapper les features visuelles vers l'espace du LLM. Phase rapide (quelques heures) mais critique.
+3. **Instruction tuning** : fine-tuning sur des instructions mixtes texte-image pour rendre le modèle conversationnel et capable de suivre des consignes visuelles
 
-## La résolution d'image : le dilemme
+## La résolution d'image : le dilemme qualité vs coût
 
-### Plus haute résolution = plus de détails mais plus coûteux
+### Plus de pixels = plus de détails, mais beaucoup plus cher
 
-Plus la résolution est élevée, plus le modèle voit de détails, mais chaque pixel supplémentaire crée plus de "tokens visuels" à traiter (donc plus lent et plus cher) :
+Plus la résolution d'entrée est élevée, plus le modèle capte de détails dans l'image. Mais chaque pixel supplémentaire crée plus de tokens visuels à traiter --- et le coût de l'attention croit quadratiquement :
 
-- **224×224** : 256 tokens (rapide, mais détails manquants)
-- **336×336** : 576 tokens (bon compromis qualité/vitesse)
-- **672×672** : 2304 tokens (haute résolution, beaucoup plus coûteux)
-- **Résolution dynamique** : adapter automatiquement selon l'image
+- **224x224** : 256 tokens (rapide, mais perd les détails fins --- impossible de lire du texte petit)
+- **336x336** : 576 tokens (bon compromis général)
+- **672x672** : 2304 tokens (haute résolution, mais le coût explose)
+- **Résolution dynamique** : adapter automatiquement selon l'image et la tâche
 
-### Comment résoudre ce dilemme
+### La solution élégante : le tiling
 
 <Callout type="paper" title="AnyRes : la solution de LLaVA-NeXT">
-LLaVA-NeXT introduit "AnyRes" : au lieu d'une seule résolution fixe, on découpe l'image en tuiles de résolution standard, on encode chaque tuile, et on ajoute une vue globale basse résolution. Résultat : on traite des images de n'importe quelle résolution et ratio d'aspect, sans perte d'information, sans surcoût excessif.
+LLaVA-NeXT introduit "AnyRes" : au lieu d'imposer une résolution fixe (et donc de redimensionner toutes les images), on découpe l'image en tuiles de taille standard, on encode chaque tuile séparément, et on ajoute une vue globale basse résolution pour le contexte d'ensemble. Résultat : on peut traiter des images de n'importe quelle résolution et ratio d'aspect, sans perte d'information, et sans surcoût excessif. C'est une solution pragmatique et efficace adoptée par de nombreux VLM modernes.
 </Callout>
 
 ## Ce que les VLM modernes savent faire
 
 ### Compréhension d'images
 
-- Décrire des scènes en détail
-- Identifier des objets et des personnes
-- Lire du texte dans les images (OCR)
-- Comprendre des graphiques et tableaux
+- Décrire des scènes en détail (personnes, objets, contexte, ambiance)
+- Identifier des objets, des lieux, des situations
+- Lire du texte dans les images (OCR intégré --- panneaux, enseignes, documents)
+- Comprendre des graphiques, tableaux et diagrammes
 
 ### Raisonnement visuel
 
-- Répondre à des questions sur les relations spatiales ("est-ce devant ou derrière ?")
-- Compter des objets
-- Raisonner logiquement sur le contenu visuel
-- Comparer deux images
+- Répondre à des questions sur les relations spatiales ("est-ce que le chat est devant ou derrière le vase ?")
+- Compter des objets (avec une précision encore imparfaite)
+- Raisonner logiquement sur le contenu visuel ("pourquoi cette personne a-t-elle l'air surprise ?")
+- Comparer deux images et identifier les différences
 
-### Applications pratiques
+### Applications pratiques qui changent la donne
 
-- Analyser des documents (factures, contrats, rapports)
-- Assister les malvoyants (décrire une image)
-- Analyser des screenshots d'interface
-- Diagnostic visuel en médecine ou en industrie
+- Analyser des documents complexes (factures, contrats, rapports financiers)
+- Assister les personnes malvoyantes en décrivant leur environnement
+- Analyser des screenshots d'interface pour le testing automatisé
+- Diagnostic visuel en médecine (radiographies, dermatologie) ou en industrie (contrôle qualité)
 
 ## Les benchmarks d'évaluation
 
-| Benchmark | Description | Meilleur score (environ) |
+| Benchmark | Ce qu'il mesure | Meilleur score (environ) |
 |---|---|---|
-| MMMU | Questions multi-disciplinaires avec images | 70% (GPT-4o) |
+| MMMU | Questions multi-disciplinaires nécessitant des images | 70% (GPT-4o) |
 | MathVista | Raisonnement mathématique à partir d'images | 65% |
 | DocVQA | Questions sur des documents scannés | 95% |
 | ChartQA | Questions sur des graphiques et tableaux | 85% |
-| TextVQA | Questions nécessitant de lire du texte fin | 82% |
+| TextVQA | Questions nécessitant de lire du texte fin dans les images | 82% |
 
 <Callout type="warning" title="Attention aux hallucinations visuelles">
-Les VLM **halucinent** : ils décrivent des objets qui ne sont pas dans l'image, inventent du texte qui n'existe pas, font des erreurs de comptage. POPE (Polling-based Object Probing Evaluation) mesure spécifiquement ce problème. C'est une limitation importante à garder à l'esprit.
+Les VLM **hallucinent** : ils peuvent décrire des objets qui ne sont pas dans l'image, inventer du texte qui n'existe pas, ou faire des erreurs de comptage. C'est l'équivalent visuel des hallucinations textuelles des LLM. Le benchmark POPE (Polling-based Object Probing Evaluation) mesure spécifiquement ce problème. En pratique, il faut toujours vérifier les réponses des VLM sur des tâches critiques --- la confiance du modèle n'est pas un indicateur fiable de sa précision.
 </Callout>
 
 ## Les modèles open-source notables
 
-- **LLaVA-NeXT** : la famille LLaVA avec haute résolution dynamique
-- **InternVL** : modèles très puissants (jusqu'à 76 milliards de paramètres)
-- **Qwen-VL** : la série Qwen avec vision, excellente performance
-- **Idefics 2/3** : VLM de Hugging Face, open-source
-- **Pixtral** : VLM de Mistral AI (section dédiée)
+- **LLaVA-NeXT** : la famille LLaVA avec résolution dynamique et performances état de l'art
+- **InternVL** : modèles très puissants allant jusqu'à 76 milliards de paramètres, parmi les meilleurs open-source
+- **Qwen-VL** : la série Qwen avec vision, excellente performance et bonne couverture multilingue
+- **Idefics 2/3** : VLM de Hugging Face, entièrement open-source avec une documentation exemplaire
+- **Pixtral** : VLM de Mistral AI, combinant vision et les forces de Mistral en langage
 
-Les VLM sont l'une des avancées les plus transformatrices de 2023-2024 : elles ouvrent la voie à des assistants IA véritablement multimodaux qui comprennent le monde visuel, pas juste des mots.
+Les VLM sont l'une des avancées les plus transformatrices de 2023-2025 : ils ouvrent la voie à des assistants IA véritablement multimodaux qui comprennent le monde visuel avec la même aisance que le texte. La frontière entre "voir" et "comprendre" s'estompe.

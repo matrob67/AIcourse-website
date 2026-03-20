@@ -5,134 +5,153 @@ description: "Les autoencoders variationnels, le reparameterization trick, la fo
 
 ## Du classique au probabiliste
 
-Autoencoder classique = "je compresse et je reconstruit". Mais l'espace latent ? Chaotique. Deux z proches ne font pas x similaires. Et tu ne peux pas générer en échantillonnant z aléatoire.
+Un autoencoder classique fait deux choses : il **compresse** une entrée (par exemple une image) en un vecteur compact z (l'espace latent), puis il **reconstruit** l'entrée à partir de z. Le problème ? L'espace latent qui en résulte est chaotique. Deux points z proches dans cet espace ne correspondent pas nécessairement à des images similaires. Et si tu échantillonnes un z au hasard, tu obtiens du bruit, pas une image cohérente. L'autoencoder classique est un compresseur, pas un générateur.
 
-**VAE** (Kingma et Welling 2013) : ajoute une **structure probabiliste**. L'encodeur produit pas un z, mais une **distribution** sur z.
+Le **VAE** (Variational Autoencoder), proposé par Kingma et Welling en 2013, résout ce problème en ajoutant une **structure probabiliste** à l'espace latent. Au lieu de produire un unique point z, l'encodeur produit les paramètres d'une **distribution** sur z. C'est cette nuance qui transforme un simple compresseur en un véritable modèle génératif.
 
 <ArxivLink id="1312.6114" title="Auto-Encoding Variational Bayes" />
 
+<ImageWithSource
+  src="/images/admin/img-1774011088432.png"
+  alt="Schéma d'un Autoencoder Variationnel (VAE)"
+  source="https://learnopencv.com/variational-autoencoder-in-tensorflow/"
+  caption="Ce schéma illustre l'architecture d'un Autoencoder Variationnel (VAE), montrant comment une image d'entrée est encodée en un vecteur latent puis décodée pour reconstruire une image prédite. Il met en évidence le processus de sampling du vecteur latent à partir d'une distribution normale."
+  size="large"
+/>
 
+## Intuition : un modèle génératif probabiliste
 
-## Intuition : modèle génératif probabiliste
+L'idée fondamentale du VAE est de modéliser le processus de **génération** des données. On suppose que chaque donnée (image, texte, etc.) a été "générée" par un processus en deux étapes :
 
-VAE = pas déterministe, probabiliste.
+1. La nature choisit un vecteur latent $z$ selon une distribution simple : $z \sim \mathcal{N}(0, I)$ (gaussienne standard)
+2. Ce vecteur z est transformé en une donnée observable $x$ par un processus complexe : $x \sim p(x | z)$
 
-Processus génération :
-1. Échantillonner z ~ N(0, I) (gaussienne standard)
-2. Générer x ~ p(x | z) via le décodeur
-
-L'objectif : apprendre un décodeur qui, partant de z, produit des x réalistes.
+Le décodeur du VAE apprend ce processus de génération : étant donné un z, il produit un x réaliste. Pour générer une nouvelle image, il suffit de tirer un z au hasard et de le passer dans le décodeur. Simple et élégant.
 
 ### Le rôle de l'encodeur
 
-L'encodeur aproxime la **postérieure** p(z | x). Dire "vu cette image, quelle distribution de z l'a générée ?" Comme l'inverse : "vu l'image, recréer le processus génératif".
+Mais pour entraîner ce système, on a besoin de l'inverse : étant donné une image x, quel z l'a générée ? C'est le rôle de l'encodeur, qui approxime la **distribution a posteriori** $p(z | x)$.
 
-Encodeur produit pas z, mais **paramètres d'une distribution** :
-```
-q(z | x) = N(mu(x), sigma^2(x))
-```
+Concrètement, l'encodeur ne produit pas un unique z mais les **paramètres d'une distribution gaussienne** :
 
-Vecteur de moyennes, vecteur de variances. Chaque image → sa propre distribution sur z.
+$$q(z | x) = \mathcal{N}(\mu(x), \sigma^2(x))$$
 
+Pour chaque image en entrée, l'encodeur calcule un vecteur de **moyennes** $\mu$ et un vecteur de **variances** $\sigma^2$. Chaque image a donc sa propre distribution dans l'espace latent. Un visage souriant aura sa distribution centrée quelque part, un visage neutre ailleurs, et les deux distributions se chevauchent si les visages se ressemblent.
 
-
-<Callout type="info" title="Pourquoi distribu">
-Distributions structurent l'espace latent. Images similaires → distributions chevauchantes → z proches. Régions intermédiaires = données intermédiaires valides. Permet génération et interpolation. C'est ça qui magique.
+<Callout type="info" title="Pourquoi des distributions ?">
+Utiliser des distributions plutôt que des points fixes est ce qui **structure** l'espace latent. Des images similaires produisent des distributions qui se chevauchent, créant des régions continues dans l'espace latent. Entre un "3" et un "8" manuscrits, il existe des formes intermédiaires valides. C'est ça qui rend possible la génération et l'interpolation -- et c'est ce qui manquait aux autoencoders classiques.
 </Callout>
 
-## Le problème du gradient : reparameterization trick
+## Le problème du gradient : le reparameterization trick
 
-### Pourquoi c'est hard
+### Pourquoi c'est un problème
 
-Pendant entraînement, tu dois échantillonner z ~ N(mu, sigma^2). Mais l'échantillonnage est **stochastique, non-différentiable**. Tu ne peux pas faire backprop à travers un tirage aléatoire !
+Pendant l'entraînement, on doit échantillonner $z \sim \mathcal{N}(\mu, \sigma^2)$ entre l'encodeur et le décodeur. Mais l'échantillonnage est une opération **stochastique** et **non-différentiable**. Or, la rétropropagation (backpropagation) a besoin de calculer des dérivées à travers tout le réseau.
+
+Le problème est clair : comment faire passer un gradient à travers un tirage aléatoire ? Si tu tires z = 3.7 d'une gaussienne, quelle est la "dérivée" de ce tirage par rapport aux paramètres $\mu$ et $\sigma$ ? Ce n'est pas défini de manière standard.
 
 ### La solution : externaliser l'aléa
 
-Au lieu de z ~ N(mu, sigma^2), tu fais :
-```
-z = mu + sigma * epsilon,  où epsilon ~ N(0, I)
-```
+Le reparameterization trick est une astuce mathématique simple mais brillante. Au lieu de tirer directement $z \sim \mathcal{N}(\mu, \sigma^2)$, on décompose le tirage en deux parties :
 
-epsilon = aléa pur, indépendant. z = transformation **déterministe** de mu, sigma, epsilon. Gradient coule à travers mu et sigma. L'aléa est "externalisé".
+$$z = \mu + \sigma \cdot \epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
 
-<Callout type="tip" title="C'est juste du reparamétrisation">
-Mathématiquement équivalent à la distribution originale. Mais numériquement ? Différentiable. C'est comment tu peux entraîner des VAE avec SGD. Sans ça, il faudrait des estimateurs gradients bizarres et lents.
+L'aléa est "externalisé" dans $\epsilon$, qui est un bruit pur indépendant des paramètres du réseau. La variable z est maintenant une **transformation déterministe** de $\mu$, $\sigma$ et $\epsilon$. Le gradient peut couler librement à travers $\mu$ et $\sigma$ car ce sont des opérations standard (multiplication, addition).
+
+L'analogie : au lieu de dire "tire un nombre aléatoire entre 3 et 7" (opération opaque), on dit "prends 5 (la moyenne) et ajoute le bruit fois 2 (l'écart-type)". Le résultat est le même statistiquement, mais la deuxième formulation permet de calculer comment le résultat change si on modifie la moyenne ou l'écart-type.
+
+<Callout type="tip" title="Mathématiquement équivalent, numériquement différentiable">
+Le reparameterization trick ne change rien à la distribution de z -- c'est exactement la même gaussienne $\mathcal{N}(\mu, \sigma^2)$. Mais il rend le calcul **différentiable**, ce qui permet d'entraîner le VAE avec la descente de gradient standard (SGD, Adam, etc.). Sans cette astuce, il faudrait recourir à des estimateurs de gradient par Monte Carlo (comme REINFORCE), qui sont beaucoup plus bruités et lents à converger.
 </Callout>
 
-## La perte ELBO : le cœur
+## La perte ELBO : le coeur du VAE
 
 ### Qu'est-ce qu'on optimise ?
 
-Maximiser log p(x) (vraisemblance des données). Impossible analytiquement. À la place : optimiser une **borne inférieure** = **ELBO** (Evidence Lower Bound).
+L'objectif idéal serait de maximiser la log-vraisemblance des données : $\log p(x)$. En langage simple : "la probabilité que notre modèle génère des données qui ressemblent aux vraies données doit être maximale".
 
-```
-ELBO = E_q[log p(x | z)] - KL(q(z | x) || p(z))
-```
+Malheureusement, calculer $p(x)$ exactement est impossible (il faudrait intégrer sur tous les z possibles). À la place, on optimise une **borne inférieure** appelée **ELBO** (Evidence Lower Bound) :
 
-Ou minimiser la loss :
-```
-L = -E_q[log p(x | z)] + KL(q(z | x) || p(z))
-```
+$$\text{ELBO} = \mathbb{E}_{q}[\log p(x | z)] - D_{KL}(q(z | x) \| p(z))$$
 
-### Les deux termes
+Ou, en version "loss à minimiser" :
 
-**Terme 1 : Reconstruction** -E_q[log p(x | z)]
+$$\mathcal{L} = \underbrace{-\mathbb{E}_{q}[\log p(x | z)]}_{\text{Reconstruction}} + \underbrace{D_{KL}(q(z | x) \| p(z))}_{\text{Régularisation}}$$
 
-Qualité de reconstruction. En pratique : MSE ou BCE (même que autoencoders classiques), moyenné sur plusieurs z échantillonnés. Encourage : "encode assez d'info pour reconstruire".
+### Les deux termes en détail
 
-**Terme 2 : Régularisation (KL divergence)** KL(q(z | x) || p(z))
+**Terme 1 : Reconstruction** ($-\mathbb{E}_q[\log p(x | z)]$)
 
-Distance entre q(z | x) appris et p(z) = N(0, I) prior. Force : "reste proche d'une gaussienne standard". Structure l'espace.
+Ce terme mesure la qualité de la reconstruction. Concrètement, on échantillonne un z depuis $q(z|x)$, on le passe dans le décodeur, et on mesure à quel point la sortie ressemble à l'entrée. En pratique, c'est une MSE (Mean Squared Error) pour des images en niveaux de gris ou une BCE (Binary Cross-Entropy) pour des images binaires.
 
-Pour gaussiennes, forme analytique simple :
-```
-KL = -0.5 * somme_j (1 + log(sigma_j^2) - mu_j^2 - sigma_j^2)
-```
+Ce terme pousse l'encodeur à mettre **assez d'information** dans z pour que le décodeur puisse reconstruire fidèlement. Si z ne contient pas assez d'info, la reconstruction est floue.
 
-<Callout type="info" title="La tension">
-Reconstruction veut : codes précis et informatifs. KL veut : codes lisses et réguliers. Entraînement = équilibre. Bonne recon + espace bien structuré.
+**Terme 2 : Régularisation KL** ($D_{KL}(q(z | x) \| p(z))$)
+
+C'est la divergence de Kullback-Leibler entre la distribution apprise $q(z|x)$ et le prior $p(z) = \mathcal{N}(0, I)$. Elle mesure à quel point la distribution encodée s'éloigne d'une gaussienne standard.
+
+Ce terme force l'espace latent à rester **régulier et structuré**. Sans lui, l'encodeur pourrait placer chaque image dans un point isolé de l'espace (variance → 0), ce qui détruirait la continuité nécessaire à la génération.
+
+Pour deux gaussiennes, la KL a une forme analytique simple et rapide à calculer :
+
+$$D_{KL} = -\frac{1}{2} \sum_{j} \left(1 + \log(\sigma_j^2) - \mu_j^2 - \sigma_j^2\right)$$
+
+<Callout type="info" title="La tension fondamentale">
+Les deux termes de la loss sont en **conflit**. Le terme de reconstruction veut des codes précis et informatifs (variance petite, positions éloignées les unes des autres). Le terme KL veut des codes lisses et réguliers (proche de $\mathcal{N}(0,I)$, distributions qui se chevauchent). L'entraînement du VAE est un exercice d'équilibre : assez d'information pour reconstruire, assez de régularité pour générer.
 </Callout>
 
 ## Problème : posterior collapse
 
-### Ça peut dérailler
+### Quand le modèle triche
 
-Parfois, le modèle apprend à **ignorer z**. Décodeur génère les données seules, z unused. Distribution q s'effondre vers p(z) = N(0, I). KL → 0. Meh.
+Parfois, le modèle trouve un raccourci indésirable : il apprend à **ignorer complètement z**. Le décodeur, s'il est suffisamment puissant (par exemple un décodeur autorégressif), peut générer des données plausibles sans utiliser l'information de z. L'encodeur, n'ayant aucune raison de mettre de l'info dans z, voit sa distribution $q(z|x)$ s'effondrer vers le prior $\mathcal{N}(0,I)$. La KL tombe à 0, la reconstruction est correcte, mais z est devenu inutile.
+
+C'est le **posterior collapse** : le VAE dégénère en un autoencoder classique sans les propriétés génératives souhaitées.
 
 ### Solutions
 
-- **KL annealing** : augmente progressivement le poids de KL (commence à 0)
-- **Free bits** : impose un minimum KL par dimension
-- **beta-VAE** : poids beta devant KL (beta < 1 = recon, beta > 1 = structure)
-- **Décodeur faible** : si décodeur trop puissant (autorégressif massif), il peut ignorer z
+- **KL annealing** : on augmente progressivement le poids du terme KL pendant l'entraînement. On commence avec un poids de 0 (l'encodeur apprend d'abord à encoder de l'information utile), puis on monte graduellement vers 1 (pour régulariser)
+- **Free bits** : on impose un minimum de KL par dimension latente (le modèle doit utiliser au moins X bits d'information par dimension)
+- **beta-VAE** : on met un coefficient $\beta$ devant le terme KL. $\beta < 1$ favorise la reconstruction, $\beta > 1$ favorise la structure de l'espace latent (et encourage les représentations "disentangled")
+- **Décodeur faible** : intentionnellement limiter la capacité du décodeur pour qu'il ait besoin de z
 
-## Génération et exploration
+## Génération et exploration de l'espace latent
 
-### Générer nouvelles données
+### Générer de nouvelles données
 
-1. Échantillonner z ~ N(0, I)
-2. Passer dans décodeur : x = decoder(z)
+C'est la raison d'être du VAE. Une fois entraîné :
 
-KL régularise que le prior couvre l'espace, donc z aléatoire → x cohérent.
+1. Tirer un z aléatoire depuis le prior : $z \sim \mathcal{N}(0, I)$
+2. Passer z dans le décodeur : $x = \text{decoder}(z)$
+
+Grâce à la régularisation KL, le prior $\mathcal{N}(0, I)$ couvre bien l'espace latent. Un z tiré au hasard a donc de bonnes chances de correspondre à une donnée cohérente.
 
 ### Interpolation
 
-1. Encoder deux images : z_1 = mu(x_1), z_2 = mu(x_2)
-2. Interpoler : z_alpha = alpha * z_1 + (1 - alpha) * z_2
-3. Décoder : decoder(z_alpha)
+L'interpolation est une des propriétés les plus satisfaisantes du VAE :
 
-Transitions lisses et sémantiques. Prouve que VAE apprend une représentation continue.
+1. Encoder deux images en prenant leurs moyennes : $z_1 = \mu(x_1)$, $z_2 = \mu(x_2)$
+2. Interpoler linéairement : $z_\alpha = \alpha \cdot z_1 + (1 - \alpha) \cdot z_2$ pour $\alpha$ de 0 à 1
+3. Décoder chaque point intermédiaire : $\text{decoder}(z_\alpha)$
+
+Tu obtiens des transitions **lisses et sémantiquement cohérentes**. Entre un "3" et un "8" manuscrits, tu verras progressivement le 3 se transformer en 8, en passant par des formes intermédiaires plausibles. C'est la preuve que le VAE a appris une représentation continue et structurée.
 
 ### Arithmétique latente
 
-Comme les word embeddings : z_smile - z_neutral + z_autre_neutral ≈ z_autre_smile
+Comme avec les word embeddings (roi - homme + femme = reine), on peut faire de l'arithmétique dans l'espace latent :
 
-Pas garanti, mais parfois marche. Espace latent a structure sémantique.
+$$z_{\text{sourire}} - z_{\text{neutre}} + z_{\text{autre\_neutre}} \approx z_{\text{autre\_sourire}}$$
 
-<Callout type="paper" title="Extensions">
-**Conditional VAE (CVAE)** : conditionne sur une classe ou label. **VQ-VAE** : espace latent discret (base de DALL-E). **Hierarchical VAE** : variables latentes multi-échelles. Innovations sur innovations.
+Ce n'est pas garanti de fonctionner parfaitement, mais quand ça marche, c'est la preuve que l'espace latent a capturé des **facteurs sémantiques** interprétables. Le "vecteur sourire" est une direction dans l'espace latent qu'on peut appliquer à n'importe quel visage.
+
+<Callout type="paper" title="Extensions et évolutions">
+Le VAE a engendré une riche famille de modèles :
+- **Conditional VAE (CVAE)** : conditionne la génération sur un label ou une classe (génère un "5" sur demande)
+- **VQ-VAE** : remplace l'espace latent continu par un espace **discret** (un codebook de vecteurs). C'est la base de DALL-E 1 et de nombreux modèles audio
+- **Hierarchical VAE** : variables latentes à plusieurs échelles (global → local), pour capturer à la fois la structure générale et les détails fins
+- **Diffusion VAE** : des travaux récents lient les VAE et les modèles de diffusion dans un cadre théorique unifié
 </Callout>
 
 ## Résumé final
 
-VAE = autoencoder + probabilités. Encodeur produit distributions, pas points. Reparameterization trick rend ça trainable. ELBO = recon + structure. Permet génération réelle et interpolation. Limite : recons flous (optimise pixel par pixel). Les modèles de diffusion ont résolu ça en sacrifiant la vitesse (mieux la qualité). Fondateur quand même.
+Le VAE transforme l'autoencoder classique en modèle génératif grâce à une idée simple : remplacer les points par des distributions dans l'espace latent. Le reparameterization trick rend ça entraînable par descente de gradient. La perte ELBO équilibre reconstruction fidèle et espace latent structuré. Le résultat : un modèle capable de générer de nouvelles données, d'interpoler entre elles, et de naviguer dans un espace de représentations continues. Sa limitation principale -- des reconstructions parfois floues (car la loss pixel-par-pixel ne capture pas la perception humaine) -- a motivé le développement des modèles de diffusion, qui ont largement pris le relais pour la génération d'images de haute qualité.

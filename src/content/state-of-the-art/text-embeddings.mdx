@@ -7,40 +7,36 @@ description: "Les modèles d'embeddings transforment le texte en vecteurs denses
 
 ## Qu'est-ce qu'un embedding ?
 
-Un texte → un vecteur (liste de nombres). Deux textes similaires = vecteurs proches. Mesurez la proximité avec la **similarité cosinus** (angle entre vecteurs).
+Un embedding, c'est une traduction du langage humain vers le langage des maths. Vous donnez une phrase, le modèle vous rend un **vecteur** — une liste de nombres. Le truc génial : deux textes qui parlent de la même chose donnent des vecteurs proches dans l'espace. On mesure cette proximité avec la **similarité cosinus** (l'angle entre les deux vecteurs : plus il est petit, plus les textes se ressemblent).
 
-Exemple simplifié : "chat" → [0.8, 0.2, 0.1, ...] et "tigre" → [0.75, 0.25, 0.15, ...] sont proches. "chaise" → [0.1, 0.9, 0.05, ...] est loin.
+Exemple concret : "chat" → [0.8, 0.2, 0.1, ...] et "tigre" → [0.75, 0.25, 0.15, ...] se retrouvent proches (ce sont des félins). "chaise" → [0.1, 0.9, 0.05, ...] est très loin (rien à voir). C'est comme si le modèle plaçait les mots sur une carte géographique où les concepts proches sont voisins.
 
 <Callout type="info" title="Du mot à la phrase">
-Vieux embeddings (Word2Vec) : un vecteur par **mot**. Modernes : un vecteur par **phrase ou paragraphe entier**, qui capture le contexte. C'est plus puissant.
+Les vieux embeddings (Word2Vec, 2013) produisaient un vecteur par **mot** isolé — "banque" avait le même vecteur qu'il s'agisse de la banque du poisson ou de la banque financière. Les modèles modernes produisent un vecteur par **phrase ou paragraphe entier**, qui capture le contexte. C'est infiniment plus puissant pour la recherche sémantique.
 </Callout>
 
 ## Comment ça fonctionne
 
-Vous prenez un **Transformer encoder** (type BERT), vous le passez le texte. Le dernier token [CLS] ou la moyenne de tous les tokens = votre embedding.
+Le processus repose sur un **Transformer encoder** (type BERT). Vous lui passez le texte, il produit une représentation pour chaque token. Pour obtenir un seul vecteur par phrase, on prend soit le token spécial [CLS], soit la moyenne de tous les tokens (mean pooling).
 
-Pour que ça soit bon, vous entraînez le modèle avec une loss **contrastive** : paires (texte A, texte B similaire) doivent avoir des embeddings proches, paires dissimilaires doivent être loin.
+Mais un BERT brut ne produit pas de bons embeddings de phrases. Il faut l'entraîner spécifiquement avec une **loss contrastive** : des paires de textes similaires (question + réponse pertinente) doivent produire des vecteurs proches, et des paires dissimilaires doivent être éloignées.
 
-```
-Loss = -log(exp(sim(A, B_positif)/T) / sum(exp(sim(A, B_*/T)))
-```
+$$\mathcal{L} = -\log \frac{\exp(\text{sim}(A, B_{\text{positif}}) / T)}{\sum \exp(\text{sim}(A, B_*) / T)}$$
 
-Température T=0.05 typiquement. C'est du classification softmax qui force les positifs proches et les négatifs loin.
+La température T (typiquement 0.05) contrôle la "dureté" de la séparation. C'est du softmax sur les similarités : on force les positifs proches et les négatifs loin, comme un tri magnétique qui attire les paires similaires et repousse les autres.
 
 ## Architectures
 
 ### Bi-encoders (dominant)
-Query et document **codés séparément**, puis comparés. Rapide (tu pré-encodes tous les documents offline). Moins précis (pas d'interaction entre query et doc).
+La query et le document sont **encodés séparément**, puis comparés par similarité cosinus. L'avantage majeur : vous pouvez pré-encoder tous vos documents offline et ne calculer que l'embedding de la query en temps réel. C'est ce qui rend la recherche rapide sur des millions de documents. La contrepartie : pas d'interaction directe entre query et document, donc légèrement moins précis qu'un cross-encoder.
 
 ### Récent : instructions et task-awareness
-Des modèles comme E5 et GritLM acceptent des **instructions** :
+Des modèles comme E5 et GritLM acceptent des **instructions** qui orientent l'embedding :
 
-```
-"Instruction : retrouver des documents pertinents pour cette query"
-"Query : Qu'est-ce que la photosynthèse ?"
-```
+- **Instruction** : "retrouver des documents pertinents pour cette query"
+- **Query** : "Qu'est-ce que la photosynthèse ?"
 
-Ça aide énormément le modèle à adapter ses embeddings selon le rôle (query vs document vs résumé).
+L'instruction dit au modèle quel "rôle" jouer. Un même texte peut produire des embeddings différents selon qu'il est encodé comme une question à poser ou comme un document à indexer. C'est un gain de qualité significatif.
 
 ## Modèles populaires et pratiques
 
@@ -52,42 +48,45 @@ Des modèles comme E5 et GritLM acceptent des **instructions** :
 | OpenAI small | 1536 | 8191 | Bon (62) | Simple, payant |
 
 <Callout type="tip" title="Choix pragmatique">
-Prototypage rapide ? **all-MiniLM** (c'est gratuit et léger).
-Production, multilingue ? **BGE-M3** (open-source, excellent).
-Qualité maximale, budget illimité ? **text-embedding-3-large** (OpenAI, payant mais très bon).
+Prototypage rapide ? **all-MiniLM** (gratuit, léger, tourne partout).
+Production multilingue ? **BGE-M3** (open-source, excellent en français).
+Qualité maximale, budget illimité ? **text-embedding-3-large** (OpenAI, payant mais état de l'art).
 </Callout>
 
-## MTEB : le benchmark
+## MTEB : le benchmark de référence
 
-**MTEB** (Massive Text Embedding Benchmark) teste les modèles sur 56+ tâches : retrieval, STS (similarité), classification, clustering, reranking.
+**MTEB** (Massive Text Embedding Benchmark) teste les modèles sur 56+ tâches réparties en catégories : retrieval, STS (similarité de phrases), classification, clustering, reranking.
 
-Un modèle peut être excellent en retrieval mais moyen en STS. Regardez les scores par **catégorie** selon votre cas d'usage.
+Attention : un modèle peut être excellent en retrieval mais médiocre en classification. Le score global est une moyenne — regardez les scores par **catégorie** selon votre cas d'usage réel. Un modèle avec un score MTEB global de 62 mais un score retrieval de 70 peut être meilleur pour votre RAG qu'un modèle à 66 global mais 64 en retrieval.
 
 <Callout type="paper" title="Le leaderboard compte">
-Hugging Face a un leaderboard MTEB public. C'est votre source de vérité pour comparer. Les papiers d'université sont souvent biaisés vers leurs modèles.
+Hugging Face maintient un leaderboard MTEB public et constamment mis à jour. C'est votre source de vérité pour comparer les modèles. Les papiers académiques sont souvent biaisés vers leurs propres modèles — le leaderboard est neutre.
 </Callout>
 
 ## Considérations pratiques
 
 ### Dimensions et stockage
-384 dimensions × 4 bytes = 1.5 Ko par embedding.
-1M documents × 1.5 Ko = 1.5 Go stockage.
-Avec 3072 dimensions : 12 Go.
+Le nombre de dimensions impacte directement le stockage :
+- 384 dimensions x 4 bytes = 1.5 Ko par embedding
+- 1M documents x 1.5 Ko = **1.5 Go** de stockage
+- Avec 3072 dimensions : **12 Go** pour le même corpus
+
+Avant de choisir un modèle à 4096 dimensions, demandez-vous si le gain de qualité justifie 8x plus de stockage et de temps de recherche.
 
 ### Normalisation
-La plupart des modèles produisent des vecteurs normalisés (norme L2 = 1). Similarité cosinus = simple produit scalaire. Compatible avec toutes les bases vectorielles.
+La plupart des modèles produisent des vecteurs normalisés (norme L2 = 1). Dans ce cas, la similarité cosinus se réduit à un simple produit scalaire — opération ultra-rapide et compatible avec toutes les bases vectorielles.
 
 ### Matryoshka Embeddings
-Certains modèles permettent de **tronquer** les vecteurs (prendre les 256 premières dimensions sur 1024). Perte graduelle de qualité mais économie massive en stockage.
+Certains modèles récents permettent de **tronquer** les vecteurs : prendre les 256 premières dimensions d'un vecteur de 1024. La qualité se dégrade graduellement, mais l'économie en stockage et en latence est massive. C'est comme une poupée russe : chaque sous-ensemble contient l'essentiel de l'information.
 
-### Quantification
-Compresser les embeddings en INT8 ou binaire (1 bit/dimension) pour l'index. Dégradation mineure, économie énorme.
+### Quantification des embeddings
+On peut aussi compresser les embeddings eux-mêmes en INT8 ou même en binaire (1 bit par dimension). La dégradation est mineure pour le retrieval, mais l'économie est énorme — un index binaire prend 32x moins de place qu'un index float32.
 
 ## Fine-tuning sur vos données
 
-Pour un domaine spécifique (médical, juridique), fine-tuner un embedding sur vos données améliore drastiquement le retrieval.
+Pour un domaine spécifique (médical, juridique, technique), fine-tuner un modèle d'embedding sur vos propres données améliore drastiquement la qualité du retrieval. Le modèle apprend le vocabulaire et les relations spécifiques à votre domaine.
 
-Il vous faut : quelques milliers de paires (query, document pertinent) + un framework (Sentence Transformers) + une loss (MultipleNegativesRankingLoss).
+Il vous faut : quelques milliers de paires (query, document pertinent), un framework (Sentence Transformers), et une loss adaptée (MultipleNegativesRankingLoss).
 
 ```python
 from sentence_transformers import SentenceTransformer, losses, models
@@ -96,10 +95,10 @@ model = SentenceTransformer('bgge-base')
 # Entraîner avec vos paires...
 ```
 
-**Attention** : après fine-tuning, vous devez **réindexer** tous les documents avec le nouveau modèle.
+**Attention** : après fine-tuning, les anciens embeddings sont invalides. Vous devez **réindexer** tout votre corpus avec le nouveau modèle.
 
 <Callout type="warning" title="Réindexation critique">
-Si vous changez le modèle d'embeddings, les vieux embeddings sont invalides. Prévoir du downtime ou une double indexation. Pour les gros corpus, c'est un coût opérationnel non-trivial.
+Si vous changez le modèle d'embeddings, tous les anciens vecteurs deviennent inutilisables (les espaces vectoriels sont incompatibles). Prévoyez du downtime ou une double indexation. Pour un corpus de millions de documents, c'est un coût opérationnel non-trivial.
 </Callout>
 
-La qualité d'un RAG dépend à 50% du modèle d'embeddings. Passer d'un modèle faible à un bon modèle améliore souvent plus que toute autre optimisation. C'est votre première priorité.
+La qualité d'un RAG dépend à **50% du modèle d'embeddings**. Passer d'un modèle faible à un bon modèle améliore souvent plus que toute autre optimisation en aval. C'est votre première priorité d'investissement.

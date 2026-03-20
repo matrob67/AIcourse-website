@@ -3,148 +3,164 @@ title: "Word2Vec : les mots expliqués par leurs voisins"
 description: "Comment donner des mots une représentation numérique en les entraînant à prédire leurs voisins. Word2Vec demystifié avec CBOW, Skip-gram et negative sampling."
 ---
 
-## Un mot, c'est ses copains — ou comment deviner le sens sans dictionnaire
+## Un mot, c'est ses copains -- ou comment deviner le sens sans dictionnaire
 
-Imagine que ton ami te montre un mot inconnu: "zythophile". Tu n'as pas de définition. Mais tu le vois utilisé comme ça: "Ce zythophile aime les brasseries", "Les zythophiles débattent des houblons", "Vrai zythophile, il collectionne les bières rares". Au bout de trois phrases, tu devines que c'est quelqu'un qui aime la bière — pas besoin de dictionnaire.
+Imagine que ton ami te montre un mot inconnu : "zythophile". Tu n'as pas de définition. Mais tu le vois utilisé comme ça : "Ce zythophile aime les brasseries", "Les zythophiles débattent des houblons", "Vrai zythophile, il collectionne les bières rares". Au bout de trois phrases, tu devines que c'est quelqu'un qui aime la bière -- pas besoin de dictionnaire, juste le contexte.
 
 **C'est exactement le truc de Word2Vec.**
 
+En 1957, le linguiste John Firth a formulé cette idée : **tu comprends un mot par ses voisins**. Word2Vec (créé par Tomas Mikolov chez Google en 2013) a traduit cette intuition linguistique en algorithme : si tu montres à un modèle 10 milliards de phrases, il peut apprendre le "sens" des mots uniquement en regardant quels mots apparaissent à côté de quels autres.
 
+Exemple concret : "chat" et "chien" apparaissent systématiquement dans des contextes similaires -- après "Le", avant "dort", à côté de "caresser", "nourrir", "vétérinaire". Ils sont tellement similaires contextuellement que l'algorithme en conclut : "Ces deux mots doivent avoir des sens proches." Et il a raison.
 
-En 1957, le linguiste John Firth l'a codé: *"You shall know a word by the company it keeps"* — **tu comprends un mot par ses voisins**. Word2Vec (créé par Google en 2013) a appliqué cette idée folle à l'apprentissage automatique: si tu montres à un modèle 10 milliards de phrases, il peut apprendre le sens des mots juste en regardant qui traîne avec qui.
+## De l'abstraction à l'algèbre : les embeddings de mots
 
-Exemple: "chat" et "chien" apparaissent toujours après "Le", avant "dort", accompagnés de "caresser", "aboie/miaule". Ils sont tellement similaires contextuellement qu'un algorithme peut dire: "Ah, ces deux trucs se ressemblent."
+Avant Word2Vec, la façon classique de représenter un mot pour un ordinateur était le **one-hot encoding** : "chat" = un vecteur de 100 000 dimensions avec un seul 1 et 99 999 zéros. Le problème ? Deux mots sont toujours à la même distance l'un de l'autre. "Chat" et "chien" sont aussi éloignés que "chat" et "philosophie". Aucune notion de similarité.
 
-## De l'abstraction à l'algèbre: les embeddings de mots
+Word2Vec fait quelque chose de radicalement différent : il **transforme chaque mot en une liste de nombres** (un vecteur dense, aussi appelé "embedding") de petite dimension. "Chat" n'est plus un index, c'est : [0.2, -0.5, 0.8, 0.1, -0.3, ...] sur 300 dimensions.
 
-Normalement, pour représenter un mot, tu utiliserais une catégorie: "chat" = animal numéro 1000. Nul. Ça ne te dit rien sur la relation entre "chat" et "tigre".
+Chaque dimension capture un "trait" du mot. On ne sait pas exactement ce que chaque nombre signifie individuellement (c'est appris automatiquement, pas défini manuellement), mais collectivement, ces 300 nombres encodent le sens du mot de manière exploitable par les maths. Des mots similaires se retrouvent proches dans cet espace à 300 dimensions, et des mots différents sont éloignés.
 
-Word2Vec fait un truc malin: **transforme chaque mot en liste de nombres** (appelée vecteur ou embedding). "chat" n'est pas un nombre. C'est: [0.2, -0.5, 0.8, 0.1, -0.3, ...]  sur 300 dimensions. C'est genre des "traits" du mot: "dimension 1 = félinité", "dimension 2 = petitesse", etc. (on ne sait pas exactement ce que chaque nombre signifie, mais les maths le savent).
-
-**La magie**: avec ces vecteurs, tu peux faire de l'algèbre! "Chat + férocité ≈ Tigre". Les maths captent le sens.
+**La magie** : avec ces vecteurs, tu peux faire de l'**algèbre sur le sens**. "Chat + férocité" donne un vecteur proche de "Tigre". Les maths captent les relations sémantiques.
 
 <ArxivLink id="1301.3781" title="Efficient Estimation of Word Representations in Vector Space" />
 
-## Deux stratégies opposées: CBOW vs Skip-gram
+## Deux stratégies opposées : CBOW vs Skip-gram
 
-Imagine un jeu où tu vois une phrase avec un trou: "Le [???] noir dort". Tu dois deviner le mot manquant. C'est facile pour "chat", non?
+Word2Vec propose deux variantes qui abordent le problème sous des angles opposés.
 
-**CBOW** (Continuous Bag of Words) joue exactement ça. Il regarde les voisins ["Le", "noir", "dort"] et prédit le mot du milieu. C'est rapide, naturel, mais il a un problème: pour un mot rare, tu vois peu d'exemples, et le modèle apprend mal.
+### CBOW : deviner le mot du milieu
 
-### Le jeu inverse: Skip-gram
+Imagine un jeu où tu vois une phrase avec un trou : "Le [???] noir dort". Tu dois deviner le mot manquant. C'est facile : "chat", évidemment.
 
-Maintenant, inverse le jeu. Tu vois le mot "chat" et tu dois deviner les voisins: "Le", "noir", "dort", etc.
+**CBOW** (Continuous Bag of Words) joue exactement ce jeu. Il prend les mots du contexte ["Le", "noir", "dort"], fait la **moyenne** de leurs vecteurs, et utilise ce vecteur moyen pour prédire le mot central "chat". C'est rapide et naturel.
 
-**Skip-gram** fait ça. Pour chaque voisin, c'est une prédiction séparée. Ça veut dire: un mot courant comme "chat" génère plein d'exemples d'entraînement (un par voisin). Les mots rares? Même petit corpus, mais plus d'exemples proportionnellement.
+Mais CBOW a un défaut : pour un mot rare, il y a peu d'exemples d'entraînement (peu de contextes où ce mot apparaît au centre), et le modèle apprend mal sa représentation. Les mots fréquents sont bien représentés, les mots rares mal.
 
-Résultat: **Skip-gram produit de meilleurs embeddings pour les mots rares**.
+### Le jeu inverse : Skip-gram
 
-```
-CBOW:   Contexte ["Le", "noir"] → Moyenne → Prédire "chat"
-Skip-gram: Mot "chat" → Prédire "Le" (exemple 1)
-           Mot "chat" → Prédire "noir" (exemple 2)
-           Mot "chat" → Prédire "dort" (exemple 3)
-```
+Maintenant, inverse le jeu. Tu vois le mot "chat" et tu dois deviner chacun de ses voisins : "Le", "noir", "dort".
+
+**Skip-gram** fait exactement ça. Pour chaque voisin, c'est une prédiction séparée. Ça veut dire qu'un seul mot "chat" au centre génère **plusieurs exemples d'entraînement** (un par voisin dans la fenêtre de contexte). Et un mot rare ? Même s'il apparaît peu souvent, chaque apparition génère proportionnellement plus d'exemples.
+
+Résultat : **Skip-gram produit de meilleurs embeddings pour les mots rares**. C'est la variante la plus utilisée en pratique.
+
+En résumé :
+- **CBOW** : Contexte ["Le", "noir"] -> Moyenne -> Prédire "chat" (rapide, bon pour les mots fréquents)
+- **Skip-gram** : Mot "chat" -> Prédire "Le" (exemple 1), Prédire "noir" (exemple 2), Prédire "dort" (exemple 3) (plus lent, meilleur pour les mots rares)
 
 <Callout type="tip" title="Le double intérêt de Skip-gram">
-Non seulement tu obtiens plus d'exemples, mais le modèle apprend à discriminer chaque contexte. "Le" a une relation sujet-article avec "chat", tandis que "noir" est un adjectif. Skip-gram capture ces nuances.
+Non seulement Skip-gram produit plus d'exemples d'entraînement, mais il force le modèle à discriminer chaque relation contextuelle individuellement. "Le" a une relation sujet-article avec "chat", tandis que "noir" est un adjectif descriptif. Skip-gram capture ces nuances relationnelles que CBOW écrase en faisant la moyenne.
 </Callout>
 
-## Coin technique: le problème de l'inférence — et le trick qui sauve tout
+## Coin technique : le problème computationnel -- et le trick qui sauve tout
 
-Ici, il faut parler des maths. Pour chaque prédiction, Word2Vec voudrait calculer une probabilité pour **tous les mots du vocabulaire** — disons 100 000 mots. C'est:
+Pour comprendre pourquoi Word2Vec a été une percée, il faut saisir le défi technique qu'il a résolu.
 
-```
-Probabilite(mot_x | contexte) = exp(vecteur_mot_x · vecteur_contexte) /
-                                 somme sur 100k mots de exp(...)
-```
+Pour chaque prédiction, le modèle voudrait idéalement calculer une probabilité pour **tous les mots du vocabulaire** -- disons 100 000 mots. La formule exacte (un softmax) est :
 
-Ce dénominateur avec 100 000 termes? C'est une tuerie computationnelle. Calculer ça pour chaque mot de chaque phrase d'un corpus de 10 milliards de mots = affaire de mois sur GPU.
+$$
+P(\text{mot}_x \mid \text{contexte}) = \frac{\exp(\vec{v}_{\text{mot}_x} \cdot \vec{v}_{\text{contexte}})}{\sum_{w=1}^{100\,000} \exp(\vec{v}_w \cdot \vec{v}_{\text{contexte}})}
+$$
 
-### Negative Sampling: le trick du siècle
+Le dénominateur demande de calculer un produit scalaire et une exponentielle pour **chacun des 100 000 mots**. Et ça, pour chaque mot de chaque phrase d'un corpus de 10 milliards de mots. Le calcul prendrait des mois, même sur GPU. C'est un mur computationnel.
 
-**Negative sampling** résout ça en changeant complètement le jeu. Au lieu de prédire le vrai mot parmi 100 000, fais simplement:
+### Negative Sampling : le trick du siècle
 
-"Est-ce que ce mot est le vrai contexte du mot courant, ou un bruit aléatoire?"
+**Negative sampling** contourne ce mur en reformulant complètement le problème. Au lieu de calculer "quel mot est le plus probable parmi 100 000 ?", on pose une question beaucoup plus simple :
 
-Pour la paire réelle ("chat", "noir"):
-- **Exemple positif**: ("chat", "noir", label=1) — c'est vrai
-- **Exemples négatifs**: ("chat", "pomme", label=0), ("chat", "philosophie", label=0), ... (5-15 faux mots aléatoires)
+"Est-ce que ces deux mots apparaissent vraiment ensemble, ou est-ce du bruit aléatoire ?"
 
-Le modèle apprend juste une **régression logistique binaire** — distinguer signal du bruit. Coût: une couche de classification au lieu d'une softmax coûteuse.
+Concrètement, pour la paire réelle ("chat", "noir") :
+- **Exemple positif** : ("chat", "noir", label=1) -- oui, ils apparaissent ensemble
+- **Exemples négatifs** : ("chat", "pomme", label=0), ("chat", "philosophie", label=0), ("chat", "escalier", label=0) -- tirés aléatoirement, ce sont de faux contextes
 
-**Résultat**: 50-100x plus rapide.
+On génère 5 à 15 exemples négatifs pour chaque exemple positif. Le modèle apprend juste une **classification binaire** : vrai contexte ou bruit ? C'est une simple régression logistique au lieu d'un softmax sur 100 000 classes.
 
-### Le raffinage: ne pas tirer les mots uniformément
+**Résultat** : 50-100x plus rapide. C'est cette astuce qui a permis d'entraîner Word2Vec sur des corpus de milliards de mots en quelques heures au lieu de mois.
 
-Si tu tires les mots négatifs complètement au hasard, tu vas tirer "le", "de", "et" (les super courants) la plupart du temps. Le modèle apprend: "Ok, si c'est un mot courant, c'est probablement du bruit". Logique inutile.
+### Le raffinage : ne pas tirer les négatifs uniformément
 
-Solution: tirer les négatifs selon une **distribution modifiée**:
+Si tu tires les mots négatifs complètement au hasard (uniformément), tu vas surtout tirer "le", "de", "et", "un" -- les mots ultra-fréquents. Le modèle apprend alors une distinction triviale : "Si c'est un mot courant, c'est probablement du bruit." Ce n'est pas utile.
 
-```
-Probabilite(word) ∝ freq(word)^(3/4)
-```
+La solution de Mikolov : tirer les négatifs selon une **distribution modifiée** :
 
-L'exposant 3/4 c'est du voodoo calibré empiriquement, mais ça marche: "le" reste un peu sur-représenté, mais pas écrasant. Les mots moyens et rares ont plus de chances. Résultat: meilleurs embeddings globaux.
+$$
+P(\text{word}) \propto \text{freq}(\text{word})^{3/4}
+$$
 
-<Callout type="info" title="Pourquoi 3/4 et pas 1?">
-Si tu utilisais freq(word)^1 (la vraie fréquence), les mots courants domineraient toujours. freq(word)^(1/2) serait trop compressif. 3/4 c'est le Goldilocks: assez de balance pour que le modèle apprenne les vraies relations tout en dominant les niveaux de bruit.
+L'exposant 3/4 est un choix empirique (testé et validé expérimentalement) qui atteint un équilibre subtil : les mots très fréquents restent sur-représentés (car ils sont utiles comme négatifs), mais pas de manière écrasante. Les mots moyennement fréquents et rares ont plus de chances d'être tirés, ce qui force le modèle à apprendre des distinctions plus fines.
+
+<Callout type="info" title="Pourquoi 3/4 et pas 1 ?">
+Avec l'exposant 1 (la vraie fréquence), "le" serait tiré 10 000 fois plus souvent que "cosmonaute". Avec l'exposant 0.5, la compression serait trop forte et les mots courants perdraient leur importance. L'exposant 3/4 est le "Goldilocks" : assez de rééquilibrage pour que le modèle apprenne les vraies relations sémantiques, sans noyer les mots rares dans le bruit des mots courants.
 </Callout>
 
-## Le miracle des vecteurs: l'algèbre du sens
+## Le miracle des vecteurs : l'algèbre du sens
 
-Voilà le moment où tu dis "Attends, c'est vrai?". Une fois que Word2Vec a entraîné ses vecteurs, tu peux faire de l'algèbre **géométrique** sur le sens:
+C'est le moment le plus étonnant de l'histoire de Word2Vec. Une fois les vecteurs entraînés, tu découvres qu'on peut faire de l'**algèbre géométrique sur le sens des mots** :
 
-```
-roi - homme + femme ≈ reine
-Paris - France + Italie ≈ Rome
-scientifique - homme + femme ≈ chercheure
-```
+$$
+\vec{\text{roi}} - \vec{\text{homme}} + \vec{\text{femme}} \approx \vec{\text{reine}}
+$$
 
-Aucun label, aucun exemple d'entraînement sur les analogies. Le modèle a juste regardé les contextes pendant des mois. Et soudain: **les relations sémantiques deviennent des formes géométriques**.
+$$
+\vec{\text{Paris}} - \vec{\text{France}} + \vec{\text{Italie}} \approx \vec{\text{Rome}}
+$$
 
-Pourquoi ça marche? Parce que dans les corpus, "roi" et "reine" apparaissent dans des contextes très similaires (royauté, power, décisions), et la différence "roi - reine" (le vecteur qui les sépare) reflète une qualité universelle: le genre. Quand tu ajoutes la même différence à "homme", tu atterris près de "femme". Géométrie du langage.
+$$
+\vec{\text{scientifique}} - \vec{\text{homme}} + \vec{\text{femme}} \approx \vec{\text{chercheure}}
+$$
+
+Personne n'a demandé au modèle d'apprendre les analogies. Aucun label, aucun exemple d'entraînement spécifique. Le modèle a juste observé des contextes pendant des heures, et soudain : les relations sémantiques deviennent des **formes géométriques** dans l'espace vectoriel.
+
+Pourquoi ça marche ? Parce que dans les corpus, "roi" et "reine" apparaissent dans des contextes très similaires (royauté, pouvoir, couronne), et la différence entre leurs vecteurs reflète exactement ce qui les distingue : le genre. Cette différence "roi - reine" est approximativement le même vecteur que "homme - femme". Les relations sémantiques sont encodées comme des **directions** dans l'espace vectoriel.
 
 <Callout type="tip" title="Les propriétés linéaires du sens">
-Certaines propriétés du langage sont **linéaires** dans l'espace des embeddings. Genre, capitalité, aspect temporel — ils se manifestent comme des directions. Pas tous les sens (certains sont très non-linéaires), mais assez pour créer ces "tours de magie" vectoriels.
+Certaines relations sémantiques sont remarquablement **linéaires** dans l'espace des embeddings. Le genre (homme/femme), la capitalité (pays/capitale), le temps verbal (présent/passé) se manifestent comme des directions cohérentes. Pas tous les aspects du sens sont linéaires (certaines relations sont très non-linéaires), mais suffisamment pour créer ces "tours de magie" vectoriels.
 </Callout>
 
+### Le revers : les biais invisibles
 
+Ces analogies magnifiques révèlent aussi les **préjugés** cachés dans le corpus d'entraînement. Exemples classiques et problématiques :
 
-### Le revers: les biais invisibles
+$$
+\vec{\text{médecin}} - \vec{\text{homme}} + \vec{\text{femme}} \approx \vec{\text{infirmière}}
+$$
 
-Ces analogies magnifiques révèlent aussi les **préjugés** du corpus. Exemple classique:
+$$
+\vec{\text{programmer}} - \vec{\text{homme}} + \vec{\text{femme}} \approx \vec{\text{secrétaire}}
+$$
 
-```
-médecin - homme + femme ≈ infirmière
-programmer - homme + femme ≈ secrétaire
-```
+Le corpus (l'internet, des journaux, des livres) contient des stéréotypes de genre : "les infirmières sont des femmes, les médecins des hommes". Word2Vec a fidèlement appris et encodé ce sexisme. C'est utile pour **détecter** les biais d'un corpus (les embeddings sont un miroir impitoyable des préjugés sociétaux), mais dangereux si on déploie le modèle sans nettoyer ces biais.
 
-Les données disaient: "Les infirmières sont des femmes, les médecins des hommes." Word2Vec a fidèlement reproduit le sexisme de l'internet. C'est bon pour voir les biais, mauvais si tu déploies sans nettoyer. Cela a lancé tout un domaine: "debiasing" des embeddings.
+Cette découverte a lancé tout un domaine de recherche : le "debiasing" des embeddings, avec des techniques pour identifier et atténuer les biais de genre, de race, ou autres dans les représentations vectorielles.
 
 <Callout type="warning" title="Les données ne sont pas neutres">
-Word2Vec n'invente rien. Il regarde le corpus et fait juste... ce qu'il voit. Si le corpus a du sexisme, de la discrimination, de la désinformation, Word2Vec l'apprendra. C'est pas la technologie qui est biaisée, c'est les données. D'où l'importance de nettoyer et documenter les sources.
+Word2Vec n'invente rien. Il regarde le corpus et reflète fidèlement ce qu'il voit. Si le corpus contient du sexisme, de la discrimination, de la désinformation, Word2Vec l'apprendra et le reproduira. Ce n'est pas la technologie qui est biaisée, ce sont les données. D'où l'importance cruciale de documenter les sources d'entraînement, de mesurer les biais des embeddings, et de mettre en place des techniques de correction.
 </Callout>
 
 ## Les réglages importants
 
-- **Dimension** (100-300): plus grand = plus nuancé mais besoin de plus de données
-- **Fenêtre de contexte** (5-10): grande fenêtre = relations thématiques, petite fenêtre = syntaxe
-- **Mots négatifs** (5-15): plus = meilleur mais plus lent
-- **Sous-échantillonnage**: "le" et "de" apparaissent partout? Les ignorer aléatoirement accélère l'entraînement
+Les hyperparamètres de Word2Vec ont un impact significatif sur la qualité des embeddings :
+
+- **Dimension** (100-300) : plus grand = des vecteurs plus nuancés mais besoin de plus de données pour les remplir correctement. 300 est le standard.
+- **Fenêtre de contexte** (5-10) : grande fenêtre (10+) = le modèle capture les relations thématiques (mots du même sujet). Petite fenêtre (2-3) = le modèle capture les relations syntaxiques (mots qui jouent le même rôle grammatical).
+- **Mots négatifs** (5-15) : plus de négatifs = meilleure discrimination mais entraînement plus lent. 5 pour les gros corpus, 15 pour les petits.
+- **Sous-échantillonnage des mots fréquents** : "le", "de", "et" apparaissent partout et n'apportent pas d'information contextuelle. Les ignorer aléatoirement (avec une probabilité proportionnelle à leur fréquence) accélère l'entraînement et améliore la qualité des embeddings des mots rares.
 
 ## Les limites de Word2Vec
 
-- **Un vecteur par mot**: "avocat" (fruit) et "avocat" (juriste) ont le même embedding. Les modèles contextuels (BERT) résolvent ça.
-- **Vocabulaire fermé**: un mot pas vu pendant l'entraînement n'a pas d'embedding. FastText résout ça avec les sous-mots.
-- **Fenêtre locale**: Word2Vec regarde juste autour. GloVe utilise les stats globales de tout le corpus.
-- **Pas de composition**: Word2Vec est pour les mots, pas les phrases.
+Malgré sa brillance, Word2Vec a quatre limitations fondamentales :
+
+- **Un vecteur par mot (pas de contexte)** : "avocat" (le fruit) et "avocat" (le juriste) ont le même embedding. Le modèle fait une sorte de "moyenne" des deux sens. Les modèles contextuels (BERT, GPT) résolvent ça en donnant un vecteur différent pour chaque occurrence.
+- **Vocabulaire fermé** : un mot pas vu pendant l'entraînement n'a tout simplement pas d'embedding. Pas de fallback. FastText résout ça avec les sous-mots (n-grammes de caractères).
+- **Fenêtre locale uniquement** : Word2Vec ne regarde que les 5-10 mots autour. GloVe exploite les statistiques globales de co-occurrence sur tout le corpus.
+- **Pas de composition** : Word2Vec donne des vecteurs pour les mots, pas pour les phrases ou les documents. Combiner des vecteurs de mots en un vecteur de phrase (par moyenne, par exemple) perd beaucoup d'information.
 
 ## Pourquoi c'est important
 
-Word2Vec a changé comment on pense aux mots. Avant: les mots étaient des catégories isolées. Après: les mots sont des **vecteurs dans un espace continu**, et tu peux faire des maths dessus.
+Word2Vec a fondamentalement changé la façon dont le NLP pense aux mots. Avant 2013 : les mots étaient des catégories isolées, des index dans un dictionnaire. Après : les mots sont des **vecteurs dans un espace continu**, et tu peux faire des maths dessus. Ce changement de paradigme a tout débloqué.
 
-Les principes de Word2Vec (apprendre par contexte, negative sampling, embeddings denses) sont dans **presque tous les modèles NLP modernes** — BERT, GPT, T5, tous. Même si les architectures se sont sophistiquées, l'idée de base (un mot = un vecteur = du contexte) persiste.
+Les principes fondamentaux de Word2Vec -- apprendre les représentations par le contexte, le negative sampling, les embeddings denses -- sont présents dans **presque tous les modèles NLP modernes**. BERT, GPT, T5, Claude, Gemini : tous utilisent des embeddings denses appris par contexte. Les architectures se sont sophistiquées (attention, Transformers, milliards de paramètres), mais l'idée de base (un mot = un vecteur = une représentation apprise du contexte) reste la même.
 
-Et oui, BERT l'a en quelque sorte "dépassé" en rajoutant de la bidirectionnalité et du contexte dynamique. Mais sans Word2Vec, on n'aurait jamais pensé que ça marcherait.
-
+Et oui, BERT l'a "dépassé" en rajoutant de la bidirectionnalité et du contexte dynamique. Mais sans Word2Vec pour montrer que ça marcherait, personne n'aurait eu l'idée d'essayer.

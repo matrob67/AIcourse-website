@@ -7,64 +7,66 @@ description: "Étude des implémentations concrètes des architectures Mixture o
 
 ## De la théorie aux modèles qui tournent vraiment
 
-En 2023, quelque chose a basculé : les MoE sont sortis des laboratoires pour devenir les architectures dominantes des meilleurs modèles du monde. Mixtral d'abord, puis DeepSeek, puis Grok. Tous MoE. Tous compétitifs avec des modèles denses deux à cinq fois plus coûteux à faire tourner.
+En 2023-2024, quelque chose de fondamental a basculé dans l'industrie de l'IA : les architectures Mixture of Experts sont sorties des laboratoires de recherche pour devenir le moteur des modèles les plus puissants du monde. Mixtral d'abord, puis DeepSeek, puis Grok. Tous MoE. Tous compétitifs avec des modèles denses deux à cinq fois plus coûteux à faire tourner.
 
-Voyons comment ces équipes ont concrètement implémenté les principes MoE — et ce qui les différencie.
+Ce n'est pas un hasard. La promesse MoE --- obtenir la qualité d'un géant au coût d'un modèle moyen --- s'est concrétisée dans des produits réels, utilisés par des millions de personnes. Voyons comment ces équipes ont concrètement implémenté les principes MoE, et ce qui distingue leurs approches.
 
 ## Mixtral 8x7B et 8x22B (Mistral AI)
 
-Mistral AI a créé la surprise en publiant en open-source le premier grand modèle MoE vraiment compétitif.
+Mistral AI, la startup française, a créé un séisme en décembre 2023 en publiant en open-source le premier grand modèle MoE véritablement compétitif avec les modèles propriétaires.
 
 ### Architecture de Mixtral 8x7B
 
-L'architecture est un Transformer classique, sauf que chaque couche feed-forward est remplacée par **8 experts**. Pour chaque token, un routeur Top-2 sélectionne les 2 meilleurs experts parmi les 8.
+L'architecture est celle d'un Transformer classique, avec une modification clé : chaque couche feed-forward (la partie "réflexion" du Transformer) est remplacée par **8 experts** --- huit réseaux feed-forward parallèles avec des poids différents. Pour chaque token traité, un routeur Top-2 sélectionne les 2 meilleurs experts parmi les 8. Les 6 autres experts restent inactifs pour ce token.
 
 <Callout type="info" title="Les vrais chiffres de Mixtral 8x7B">
-- **Paramètres totaux** : ~46.7 milliards (pas 56B = 8x7B, car les couches d'attention sont partagées)
-- **Paramètres actifs par token** : ~12.9 milliards (2 experts + couches partagées)
+- **Paramètres totaux** : ~46.7 milliards (pas 56B = 8x7B, car les couches d'attention sont partagées entre tous les experts)
+- **Paramètres actifs par token** : ~12.9 milliards (2 experts activés + les couches partagées)
 - **Fenêtre de contexte** : 32 000 tokens (avec Sliding Window Attention)
-- **Performance** : égale ou surpasse LLaMA 2 70B sur la plupart des benchmarks, avec un coût d'inférence de modèle ~13B
+- **Performance** : égale ou surpasse LLaMA 2 70B sur la plupart des benchmarks, avec le coût d'inférence d'un modèle ~13B
 </Callout>
 
-Le ratio est saisissant : on obtient les performances d'un 70B au prix d'un 13B. C'est la promesse MoE réalisée.
+Le ratio est saisissant : on obtient les performances d'un modèle de 70 milliards de paramètres au prix computationnel d'un modèle de 13 milliards. C'est la promesse MoE réalisée en production, pas juste dans un papier de recherche.
 
-### Mixtral 8x22B : encore plus grand
+### Mixtral 8x22B : le passage à l'échelle
 
-La version 8x22B pousse l'architecture avec des experts plus larges. Avec ~141 milliards de paramètres totaux et ~39 milliards actifs, ce modèle rivalise avec des modèles denses de 70B+ tout en restant significativement plus rapide à l'inférence.
+La version 8x22B pousse l'architecture plus loin avec des experts significativement plus larges. Avec ~141 milliards de paramètres totaux et ~39 milliards actifs par token, ce modèle rivalise avec des modèles denses de 70B+ tout en restant bien plus rapide à l'inférence.
 
-**Points forts de l'approche Mistral** : la Sliding Window Attention combine bien avec le MoE pour les longues séquences. Le modèle est publié sous licence Apache 2.0, ce qui a permis à des milliers d'équipes d'expérimenter avec les MoE sans budget propriétaire.
+**Le choix stratégique de Mistral** : combiner la Sliding Window Attention (efficace sur les longues séquences) avec l'architecture MoE, et publier le tout sous licence Apache 2.0. Cette ouverture a permis à des milliers d'équipes dans le monde d'expérimenter avec les MoE sans budget propriétaire --- accélérant la recherche pour tout le monde.
 
 ## DeepSeek-MoE : la révolution des experts fins
 
 <ArxivLink id="2401.04088" title="DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models" />
 
-DeepSeek, l'équipe chinoise, a repensé l'architecture MoE avec une idée simple mais puissante : **plus d'experts, mais plus petits**.
+L'équipe chinoise DeepSeek a repensé l'architecture MoE en repartant d'une question fondamentale : quelle est la bonne **granularité** pour les experts ?
 
 ### Experts fins vs experts grossiers
 
-Mixtral a 8 experts larges. DeepSeek-MoE peut avoir **64 experts fins** dont seulement 6 sont activés par token. Le résultat ? Une spécialisation beaucoup plus fine. Imaginez la différence entre avoir 8 médecins généralistes et 64 spécialistes ultra-pointus.
+Mixtral utilise 8 experts larges. DeepSeek-MoE peut avoir **64 experts fins**, dont seulement 6 sont activés par token. Le résultat ? Une spécialisation beaucoup plus précise.
+
+L'analogie médicale est parlante : Mixtral, c'est un hôpital avec 8 médecins généralistes compétents. DeepSeek-MoE, c'est un hôpital avec 64 spécialistes ultra-pointus --- un cardiologue, un neurologue, un dermatologue, un ophtalmologue... Quand vous arrivez avec un problème spécifique, les 6 spécialistes les plus pertinents collaborent sur votre cas. La qualité du diagnostic est mécaniquement meilleure.
 
 <Callout type="paper" title="L'innovation clé : les experts partagés">
-DeepSeek-MoE introduit des **shared experts** (experts partagés) : certains experts sont TOUJOURS activés pour chaque token, peu importe le routage. Ces experts capturent les connaissances communes à tous les tokens (grammaire de base, structure logique), tandis que les experts routés se spécialisent sur des domaines spécifiques. C'est une séparation claire entre connaissance générale et connaissance spécialisée.
+DeepSeek-MoE introduit les **shared experts** (experts partagés) : certains experts sont TOUJOURS activés pour chaque token, peu importe ce que décide le routeur. Ces experts partagés capturent les connaissances universelles (grammaire de base, structure logique, patterns linguistiques communs), tandis que les experts routés se spécialisent sur des domaines spécifiques. C'est une séparation propre entre le savoir commun et le savoir de niche --- et ça stabilise considérablement l'entraînement.
 </Callout>
 
-### DeepSeek-V2 et V3 : encore plus loin
+### DeepSeek-V2 et V3 : repousser les limites
 
-**DeepSeek-V2** (236 milliards de paramètres totaux, 21 milliards actifs) a introduit l'attention **Multi-head Latent Attention (MLA)** — une technique qui compresse les clés et valeurs du KV cache via une projection dans un espace latent de petite dimension. Le KV cache passe de plusieurs dizaines de GB à une fraction de cette taille.
+**DeepSeek-V2** (236 milliards de paramètres totaux, 21 milliards actifs) a introduit la **Multi-head Latent Attention (MLA)** --- une technique qui compresse les clés et valeurs du KV cache via une projection dans un espace latent de petite dimension. En pratique, le KV cache (un goulot d'étranglement mémoire majeur lors de l'inférence) passe de plusieurs dizaines de Go à une fraction de cette taille. C'est un gain colossal pour servir le modèle à grande échelle.
 
-**DeepSeek-V3** monte encore : 671 milliards de paramètres totaux, ~37 milliards actifs. Et il introduit le **routage sans loss auxiliaire** : au lieu d'une perte de balancement explicite qui crée des compromis de qualité, un biais par expert est ajusté dynamiquement pendant l'entraînement. Quand un expert est surchargé, son biais baisse pour le rendre moins attractif. Quand il est sous-utilisé, son biais monte. Élégant et efficace.
+**DeepSeek-V3** monte encore d'un cran : 671 milliards de paramètres totaux, ~37 milliards actifs. Et il introduit une innovation élégante : le **routage sans loss auxiliaire**. Au lieu d'utiliser une perte de balancement explicite (qui force les tokens vers des experts sous-utilisés au détriment de la qualité), un simple biais par expert est ajusté dynamiquement pendant l'entraînement. Quand un expert est surchargé, son biais baisse pour le rendre moins attractif au routeur. Quand il est sous-utilisé, son biais monte. Le résultat : un balancement naturel, sans compromis sur la qualité.
 
 <Callout type="tip" title="Le chiffre qui a stupéfié l'industrie">
-DeepSeek-V3, avec ses 671B paramètres, a été entraîné pour un coût estimé à ~5,5 millions de dollars — soit 10 à 20 fois moins que des modèles comparables d'OpenAI ou Google. Ce n'est pas dû à un secret magique, mais à une combinaison d'architecture MoE bien optimisée, d'entraînement en précision FP8 (une première à cette échelle), et d'une ingénierie système soignée.
+DeepSeek-V3, avec ses 671 milliards de paramètres, a été entraîné pour un coût estimé à ~5,5 millions de dollars --- soit 10 à 20 fois moins que des modèles comparables d'OpenAI ou Google. Ce n'est pas un secret magique : c'est la combinaison d'une architecture MoE bien optimisée, d'un entraînement en précision FP8 (une première à cette échelle), et d'une ingénierie système extrêmement soignée. La preuve qu'on peut rivaliser avec les géants sans leur budget.
 </Callout>
 
 ## Grok (xAI)
 
-xAI, l'entreprise d'Elon Musk, a opté pour l'architecture MoE avec leur famille de modèles Grok.
+xAI, l'entreprise d'Elon Musk, a également misé sur l'architecture MoE pour sa famille de modèles Grok.
 
-**Grok-1** est publié en open-source avec 314 milliards de paramètres. Il utilise 8 experts par couche avec un routage Top-2, ce qui donne ~86 milliards de paramètres actifs par token. Architecture classique, proche du Switch Transformer, avec des optimisations d'ingénierie robustes.
+**Grok-1** a été publié en open-source avec 314 milliards de paramètres. Il utilise 8 experts par couche avec un routage Top-2, ce qui donne environ 86 milliards de paramètres actifs par token. L'architecture est classique, proche du Switch Transformer original, avec des optimisations d'ingénierie robustes. Moins innovant architecturalement que DeepSeek, mais un bon exemple de MoE "mainstream" à grande échelle.
 
-## Comparaison : granularité des experts
+## Comparaison : la granularité des experts fait la différence
 
 | Modèle | Experts totaux | Experts actifs | Approche |
 |--------|---------------|----------------|----------|
@@ -72,28 +74,28 @@ xAI, l'entreprise d'Elon Musk, a opté pour l'architecture MoE avec leur famille
 | DeepSeek-V3 | 256 + partagés | 8 | Experts fins + partagés |
 | Grok-1 | 8 | 2 | Experts grossiers |
 
-La tendance est claire : aller vers plus d'experts plus petits, avec une partie toujours activée pour les connaissances communes.
+La tendance est limpide : aller vers plus d'experts plus petits, avec une fraction toujours activée pour les connaissances communes. DeepSeek a montré que cette approche donne de meilleurs résultats à budget computationnel égal.
 
-### Les différentes philosophies de balancement
+### Trois philosophies de balancement
 
-- **Mixtral** : routage relativement simple, avec une loss de balancement standard
-- **DeepSeek-V3** : balancement sans loss auxiliaire via des biais dynamiques — plus sophistiqué mais plus propre
-- **Grok** : approche conservatrice, proche des techniques établies
+- **Mixtral** : routage relativement simple, avec une loss de balancement classique. Efficace mais crée un léger compromis qualité/balancement
+- **DeepSeek-V3** : balancement sans loss auxiliaire via des biais dynamiques --- plus sophistiqué, plus propre, et sans compromis sur la qualité
+- **Grok** : approche conservatrice, proche des techniques établies du Switch Transformer
 
 <Callout type="warning" title="Le défi de l'inférence MoE en production">
-Faire tourner un MoE en production pose des défis spécifiques : les experts non actifs occupent quand même de la RAM, le routage dynamique complique le *batching* (regroupement de requêtes), et la communication entre GPU peut devenir un goulot d'étranglement. Des techniques comme l'*expert parallelism* (chaque GPU héberge un sous-ensemble d'experts) et l'*expert offloading* (stocker les experts inactifs en RAM CPU) sont nécessaires à grande échelle.
+Faire tourner un MoE en production pose des défis uniques. Les experts inactifs occupent quand même de la RAM (il faut garder les 256 experts chargés, même si seuls 8 sont utilisés par token). Le routage dynamique complique le *batching* (regrouper les requêtes). Et la communication entre GPU peut devenir un goulot d'étranglement. Des techniques comme l'*expert parallelism* (chaque GPU héberge un sous-ensemble d'experts) et l'*expert offloading* (stocker les experts inactifs en RAM CPU) sont indispensables à grande échelle.
 </Callout>
 
-## Ce qu'on a appris des MoE en production
+## Les leçons des MoE en production
 
-**La granularité fine gagne** : plus d'experts plus petits permet une meilleure spécialisation que peu d'experts larges.
+**La granularité fine gagne** : plus d'experts plus petits permet une spécialisation plus précise que quelques gros experts. DeepSeek l'a prouvé de manière convaincante.
 
-**Les experts partagés aident** : séparer les connaissances générales des connaissances spécialisées améliore à la fois la qualité et l'efficacité du routage.
+**Les experts partagés stabilisent** : séparer les connaissances universelles (grammaire, logique) des connaissances spécialisées (médecine, code) améliore à la fois la qualité et la stabilité du routage.
 
-**Le balancement sans loss auxiliaire est l'avenir** : les approches de type "biais dynamique" évitent les compromis de qualité liés aux losses auxiliaires classiques.
+**Le balancement sans loss auxiliaire est l'avenir** : les approches par biais dynamique évitent le compromis qualité/balancement inhérent aux losses auxiliaires classiques. C'est plus élégant et plus efficace.
 
-**L'open-source a accéléré la recherche** : la publication de Mixtral, DeepSeek et Grok-1 en open-source a permis à la communauté entière d'expérimenter, de fine-tuner et d'optimiser ces architectures — ce qui a rapidement fait progresser l'état de l'art.
+**L'open-source a tout accéléré** : la publication de Mixtral, DeepSeek et Grok-1 en open-source a permis à la communauté mondiale d'expérimenter, de fine-tuner et d'optimiser ces architectures --- faisant progresser l'état de l'art bien plus vite que si la recherche était restée à huis clos.
 
 <Callout type="info" title="Vers les MoE multi-modaux">
-La prochaine vague sera les MoE multi-modaux — des architectures où différents experts traitent différentes modalités (texte, image, audio, code). Les principes sont les mêmes, mais le routage devient plus complexe car il doit gérer des représentations de natures très différentes.
+La prochaine frontière : les MoE multi-modaux, où différents experts se spécialisent sur différentes modalités (texte, image, audio, code). Les principes de routage restent les mêmes, mais la complexité augmente car le routeur doit gérer des représentations de natures très différentes. Les premiers modèles de ce type commencent à émerger.
 </Callout>

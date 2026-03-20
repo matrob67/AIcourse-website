@@ -4,104 +4,103 @@ description: "Le scaling du compute au moment de l'inférence est un nouveau par
 ---
 
 
-## Un nouvel axe : penser plutôt que grandir
+## Un nouvel axe : réfléchir plutôt que grossir
 
-Historiquement, améliorer un LLM = plus de paramètres, plus de données d'entraînement, plus de GPU à l'entraînement.
+Pendant des années, améliorer un LLM signifiait la même chose : plus de paramètres, plus de données d'entraînement, plus de GPU pour l'entraînement. C'était une course à la taille. Plus gros = meilleur, et les lois de scaling de Kaplan et al. semblaient graver ça dans le marbre.
 
-C'était linéaire : plus gros = meilleur.
+Le **test-time compute scaling** casse cette logique. L'idée : au lieu d'investir tout le budget compute dans l'entraînement, on investit aussi au moment de l'inférence. On garde le même modèle, mais on lui donne **plus de temps pour réfléchir** avant de répondre. C'est un changement de paradigme fondamental.
 
-Avec **test-time compute scaling**, on casse ce modèle. Vous pouvez garder le même modèle et l'améliorer en lui donnant **plus de temps pour réfléchir**.
-
-<Callout type="info" title="Le paradigme inverse">
-Au lieu de "quel modèle est assez gros pour répondre ?", demandez "combien de temps de réflexion je dois donner au modèle pour une bonne réponse ?".
+<Callout type="info" title="Le paradigme inversé">
+L'ancienne question : "Quel modèle est assez gros pour résoudre ce problème ?"
+La nouvelle question : "Combien de temps de réflexion faut-il donner au modèle pour qu'il résolve ce problème ?"
 </Callout>
 
-## Les dimensions du calcul de test
+## Les trois dimensions du compute de test
 
 ### 1. Tokens de raisonnement
 
-Le modèle génère des tokens intermédiaires de réflexion avant la réponse :
+Le modèle génère des tokens intermédiaires de réflexion avant de produire sa réponse finale. C'est la forme la plus naturelle de test-time compute : le modèle "pense à voix haute".
 
-- **o1/o3** : tokens cachés, invisibles
-- **DeepSeek-R1** : réflexion visible
-- **Claude extended thinking** : bloc "thinking" structuré
+- **o1/o3** : tokens de raisonnement cachés, invisibles pour l'utilisateur
+- **DeepSeek-R1** : réflexion entièrement visible entre balises `<think>`
+- **Claude extended thinking** : bloc "thinking" structuré et accessible
 
-Plus de tokens = plus de réflexion = meilleure réponse.
+Plus le modèle génère de tokens de réflexion, plus il peut décomposer le problème, vérifier ses étapes, explorer des alternatives et corriger ses erreurs. C'est comme donner plus de brouillon à un étudiant en examen.
 
 ### 2. Sampling multiple (self-consistency)
 
-Au lieu de 1 réponse, générez N réponses indépendantes avec température > 0 :
+Au lieu de générer une seule réponse, on en génère N de manière indépendante avec une température > 0 :
 
-- **Self-consistency** : vote majoritaire
-- **Best-of-N** : sélectionnez la meilleure (reward model)
-- **Revision itérative** : améliorez la réponse étape par étape
+- **Self-consistency** : on prend la réponse majoritaire (vote)
+- **Best-of-N** : on sélectionne la meilleure selon un reward model
+- **Révision itérative** : on améliore la réponse étape par étape
 
-### 3. Recherche d'arbre (tree search)
+Chaque sample emprunte un chemin de raisonnement légèrement différent. En agrégeant, on filtre le bruit et on converge vers la bonne réponse.
 
-Explorez plusieurs chemins de raisonnement :
+### 3. Recherche arborescente (tree search)
 
-- **Tree of Thoughts** : BFS/DFS sur branches
-- **MCTS** : Monte Carlo Tree Search guidée par rewards
-- **Beam search** : garde les K meilleures branches
+On explore plusieurs chemins de raisonnement de manière structurée :
 
-## Coin technique : les lois d'échelle du test-time
+- **Tree of Thoughts** : exploration BFS/DFS sur un arbre de pensées
+- **MCTS** : Monte Carlo Tree Search guidée par des récompenses
+- **Beam search** : on garde les K meilleures branches à chaque étape
 
-Empiriquement, quand vous doublez le compute de test, vous gagnez quoi ?
+C'est l'approche la plus sophistiquée, mais aussi la plus coûteuse.
 
-```
-Doubler les tokens reasoning : gain log-linéaire (beaucoup au début, puis ralentit)
-Doubler les samples (self-consistency) : gain d'environ √2 (le gain ralentit aussi)
-Rendements diminuent mais restent significatifs
-```
+## Coin technique : les lois de scaling du test-time
 
-**Résultat clé** : un modèle 7B avec 1000 samples peut surpasser un modèle 70B avec 1 sample sur certaines tâches.
+Empiriquement, quand on double le compute de test, les gains suivent des patterns prévisibles :
+
+- **Doubler les tokens de raisonnement** : gain log-linéaire (beaucoup au début, puis le rythme ralentit progressivement)
+- **Doubler le nombre de samples (self-consistency)** : gain proportionnel à $\sqrt{2}$ environ (les rendements décroissent aussi)
+- Les rendements diminuent mais restent significatifs bien plus longtemps qu'on ne le pensait
+
+**Résultat clé** : un modèle 7B avec 1000 samples peut surpasser un modèle 70B avec 1 seul sample sur certaines tâches de raisonnement. La taille du modèle n'est plus le seul levier.
 
 ### Comparaison : test-time vs training-time
 
 | Approche | Quand | Impact |
 |---|---|---|
-| Plus de paramètres | Entraînement | Toutes tâches |
-| Plus de données | Entraînement | Toutes tâches |
+| Plus de paramètres | Entraînement | Toutes les tâches |
+| Plus de données | Entraînement | Toutes les tâches |
 | Plus de test-time compute | Inférence | Raisonnement surtout |
 
-<Callout type="paper" title="Le test-time compute gagne sur raisonnement">
-Un modèle taille moyenne avec budget test-time énorme peut **surpasser 10x plus grand** sur maths/code/logique. Mais pas sur connaissances factuelles ou créativité.
+<Callout type="paper" title="Le test-time compute domine sur le raisonnement">
+Un modèle de taille moyenne avec un budget test-time important peut **surpasser un modèle 10x plus grand** sur les tâches de maths, code et logique. En revanche, pour les connaissances factuelles ou la créativité, le test-time compute aide peu, car ce sont des capacités qui dépendent de ce qui a été appris à l'entraînement.
 </Callout>
 
-## Stratégies pratiques
+## Stratégies pratiques d'allocation
 
-### Compute optimale
+### Budget fixe : comment le répartir ?
 
-Vous avez un budget fixe d'inférence. Comment l'utiliser ?
+Vous avez un budget fixe de tokens d'inférence. Comment l'utiliser au mieux ?
 
-**Options** :
-- 1 long raisonnement (lots de tokens)
-- 10 raisonnements courts (moins de tokens chacun, vote)
-- Arbre de recherche structuré
+**Trois options** :
+- 1 raisonnement long (beaucoup de tokens de réflexion)
+- 10 raisonnements courts (moins de tokens chacun, puis vote)
+- Un arbre de recherche structuré
 
-Dépend de la difficulté :
+Le bon choix dépend de la difficulté du problème :
 
-```
-Facile : 1 CoT court suffit
-Moyen : self-consistency N=10
-Difficile : long CoT OU arbre de recherche
-```
+| Difficulté | Stratégie recommandée |
+|---|---|
+| Facile | 1 CoT court suffit largement |
+| Moyen | Self-consistency avec $N=10$ |
+| Difficile | Long CoT ou arbre de recherche |
 
-### Compute adaptatif
+### Compute adaptatif : investir selon la difficulté
 
-Investir différent selon la difficulté :
+L'idée la plus pragmatique : ne pas appliquer le même budget à tous les problèmes.
 
-```
-1. Générez réponse rapide
-2. Mesurez confiance du modèle (ex: log-likelihood)
-3. Si confiance basse : plus de compute (plus de samples, raisonnement plus long)
-```
+1. Générez une réponse rapide (peu de tokens)
+2. Estimez la confiance du modèle (log-likelihood, cohérence)
+3. Si la confiance est basse : investissez plus de compute (plus de samples, raisonnement plus long)
 
-<Callout type="tip" title="Heuristique simple pour détecter difficulté">
-Générez 3 réponses rapides. Si elles concordent ? Retournez immédiatement. Si elles divergent ? Problème difficile — investissez plus de compute.
+<Callout type="tip" title="Heuristique simple pour détecter la difficulté">
+Générez 3 réponses rapides. Si elles concordent ? Retournez immédiatement la réponse, c'est un problème facile. Si elles divergent ? Problème difficile, investissez plus de compute. Cette heuristique est gratuite (3 samples, c'est peu) et très efficace en pratique.
 </Callout>
 
-## Implémentations
+## Implémentations concrètes
 
 ### Best-of-N avec reward model
 
@@ -112,7 +111,7 @@ def best_of_n(prompt, model, reward_model, n=10):
     return responses[argmax(scores)]
 ```
 
-Générez beaucoup, gardez la meilleure selon un modèle d'évaluation.
+On génère beaucoup de réponses, et un modèle d'évaluation séparé sélectionne la meilleure. Simple, parallélisable, et étonnamment efficace.
 
 ### Révision itérative
 
@@ -127,42 +126,40 @@ def iterative_revision(prompt, model, max_iterations=3):
     return response
 ```
 
-Générez, critiquez, améliorez, répétez.
+On génère, on critique, on améliore, et on répète. Chaque itération affine la réponse. Moins parallélisable que Best-of-N mais parfois plus efficace car chaque itération bénéficie du feedback de la précédente.
 
-## Les limites réelles
+## Les limites à connaître
 
 ### Coût
 
-N=10 samples = **10 fois plus cher**. N=100 = 100 fois plus cher.
-
-Vous devez décider : vaut-il la peine ?
+N=10 samples signifie **10 fois le coût** en tokens. N=100 = 100 fois plus cher. Il faut décider si le gain de qualité justifie l'investissement, et pour beaucoup d'applications, la réponse est non.
 
 ### Latence
 
-Plus de compute = plus d'attente. Problème pour apps interactives. Si deadline est 500ms, vous ne pouvez pas faire 100 samples.
+Plus de compute = plus d'attente. Pour une application interactive où l'utilisateur attend une réponse en moins de 500ms, générer 100 samples n'est pas envisageable. Le test-time compute brille sur les tâches batch ou tolérantes à la latence.
 
 ### Rendements décroissants
 
-À un certain point, plus de compute aide très peu. Dépend du modèle et du problème.
+À partir d'un certain point, plus de compute n'aide plus. Ce seuil dépend du modèle et du problème, mais il existe toujours. Doubler le compute de 100 à 200 samples aide rarement autant que de passer de 1 à 2.
 
-<Callout type="warning" title="Pas une baguette magique">
-Le test-time compute aide surtout pour le **raisonnement** — tâches vérifiables où le modèle peut itérer.
+<Callout type="warning" title="Un outil ciblé, pas une solution universelle">
+Le test-time compute aide surtout pour le **raisonnement**, les tâches vérifiables où le modèle peut itérer et converger vers la bonne réponse.
 
-Pour "quel est le capital de la Suisse ?" (connaissance mémorisée), plus de compute = rien.
+Pour "quelle est la capitale de la Suisse ?" (connaissance mémorisée), plus de compute n'apporte rien.
 
-Pour rédaction créative (style subjectif), plus de compute = plutôt pire (le modèle pense trop).
+Pour la rédaction créative (style subjectif), plus de compute peut même dégrader le résultat, car le modèle "sur-pense" et perd en naturel.
 
-C'est un outil ciblé, pas universel.
+C'est un outil puissant mais ciblé, pas une baguette magique.
 </Callout>
 
-## L'importance conceptuelle
+## Le changement de perspective
 
-Test-time compute scaling a changé la question fondamentale.
+Le test-time compute scaling a transformé la question fondamentale de l'IA appliquée.
 
-Avant : "Quel modèle acheter ?"
+**Avant** : "Quel modèle acheter ?"
 
-Après : "Quel modèle, avec quel budget de réflexion, pour ce problème ?"
+**Maintenant** : "Quel modèle, avec quel budget de réflexion, pour quel type de problème ?"
 
-C'est une transition vers une **intelligence adaptative** qui alloue les ressources intelligemment selon la tâche.
+C'est une transition vers une **intelligence adaptative** qui alloue les ressources intelligemment selon la difficulté de la tâche. Au lieu d'un modèle unique qui répond toujours de la même manière, on a un système qui peut réfléchir 100ms sur une question simple et 10 minutes sur un théorème complexe.
 
-C'est la direction majeure de l'IA depuis 2024-2025, et ça s'accélère en 2026.
+C'est la direction majeure de l'IA depuis 2024-2025, et ça s'accélère.

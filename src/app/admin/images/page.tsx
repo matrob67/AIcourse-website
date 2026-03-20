@@ -27,18 +27,26 @@ export default function AdminImagesPage() {
   // Image inputs
   const [imageUrl, setImageUrl] = useState("");
   const [imagePreview, setImagePreview] = useState("");
-  const [pastedImage, setPastedImage] = useState<string | null>(null); // local /images/admin/...
+  const [pastedImage, setPastedImage] = useState<string | null>(null);
   const [inputMode, setInputMode] = useState<"url" | "paste">("url");
-  const [alt, setAlt] = useState("");
+  const [caption, setCaption] = useState("");
   const [source, setSource] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
-  const [caption, setCaption] = useState("");
   const [size, setSize] = useState<ImageSize>("large");
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">("idle");
 
-  const pasteZoneRef = useRef<HTMLDivElement>(null);
+  // AI generation
+  const [aiModel, setAiModel] = useState<string>("mistral-small-latest");
+  const [aiLoading, setAiLoading] = useState(false);
+
+  // Image management
+  const [editingImage, setEditingImage] = useState<number | null>(null);
+  const [deletingImage, setDeletingImage] = useState<number | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const currentSrc = inputMode === "url" ? imageUrl : pastedImage;
 
   // Load pages list
   useEffect(() => {
@@ -61,39 +69,11 @@ export default function AdminImagesPage() {
 
   // Update preview when URL changes
   useEffect(() => {
-    if (inputMode === "url") {
-      setImagePreview(imageUrl);
-    }
+    if (inputMode === "url") setImagePreview(imageUrl);
   }, [imageUrl, inputMode]);
 
-  const filteredPages = pages.filter(p =>
-    p.title.toLowerCase().includes(search.toLowerCase()) ||
-    p.slug.toLowerCase().includes(search.toLowerCase()) ||
-    p.partId.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const handlePasteZone = useCallback(async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (!file) continue;
-        const form = new FormData();
-        form.append("file", file);
-        const res = await fetch("/api/admin/upload-image", { method: "POST", body: form });
-        const data = await res.json();
-        if (data.url) {
-          setPastedImage(data.url);
-          setImagePreview(data.url);
-        }
-        break;
-      }
-    }
-  }, []);
-
-  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Global Ctrl+V listener
+  const uploadFile = useCallback(async (file: File) => {
     const form = new FormData();
     form.append("file", file);
     const res = await fetch("/api/admin/upload-image", { method: "POST", body: form });
@@ -101,17 +81,83 @@ export default function AdminImagesPage() {
     if (data.url) {
       setPastedImage(data.url);
       setImagePreview(data.url);
+      setInputMode("paste");
     }
   }, []);
 
+  useEffect(() => {
+    const handler = (e: ClipboardEvent) => {
+      if (!e.clipboardData) return;
+      // Don't intercept paste in text inputs
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      for (const item of e.clipboardData.items) {
+        if (item.type.startsWith("image/")) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) uploadFile(file);
+          break;
+        }
+      }
+    };
+    window.addEventListener("paste", handler);
+    return () => window.removeEventListener("paste", handler);
+  }, [uploadFile]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith("image/")) uploadFile(file);
+  }, [uploadFile]);
+
+  const filteredPages = pages.filter(p =>
+    p.title.toLowerCase().includes(search.toLowerCase()) ||
+    p.slug.toLowerCase().includes(search.toLowerCase()) ||
+    p.partId.toLowerCase().includes(search.toLowerCase())
+  );
+
+  // Reload blocks
+  const reloadBlocks = async () => {
+    if (!selectedPage) return;
+    const data = await fetch(`/api/admin/page-content?partId=${selectedPage.partId}&slug=${selectedPage.slug}`).then(r => r.json());
+    setBlocks(data.blocks || []);
+  };
+
+  // AI caption generation
+  const generateWithAI = async () => {
+    if (!currentSrc) return;
+    setAiLoading(true);
+    const contextText = selectedBlock !== null ? blocks.find(b => b.index === selectedBlock)?.text || "" : "";
+    try {
+      const res = await fetch("/api/admin/analyze-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          src: currentSrc,
+          partId: selectedPage?.partId || "",
+          slug: selectedPage?.slug || "",
+          contextText,
+          model: aiModel,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert("Erreur Mistral : " + data.error);
+      } else {
+        if (data.caption) setCaption(data.caption);
+        if (data.source) setSource(data.source);
+      }
+    } catch {
+      alert("Erreur de connexion a l'API");
+    }
+    setAiLoading(false);
+  };
+
+  // Insert image
   const handleInsert = async () => {
-    if (!selectedPage || selectedBlock === null || !imagePreview || !alt || !source) return;
+    if (!selectedPage || selectedBlock === null || !currentSrc) return;
     setSaving(true);
     setSaveStatus("idle");
-
-    const src = inputMode === "url" ? imageUrl : pastedImage;
-    if (!src) { setSaving(false); return; }
-
     try {
       const res = await fetch("/api/admin/insert-image", {
         method: "POST",
@@ -120,8 +166,8 @@ export default function AdminImagesPage() {
           partId: selectedPage.partId,
           slug: selectedPage.slug,
           afterBlockIndex: selectedBlock,
-          src,
-          alt,
+          src: currentSrc,
+          alt: caption || "illustration",
           source,
           sourceUrl,
           caption,
@@ -131,19 +177,15 @@ export default function AdminImagesPage() {
       const data = await res.json();
       if (data.success) {
         setSaveStatus("success");
-        // Reload blocks
-        fetch(`/api/admin/page-content?partId=${selectedPage.partId}&slug=${selectedPage.slug}`)
-          .then(r => r.json())
-          .then(d => setBlocks(d.blocks || []));
-        // Reset image inputs
+        await reloadBlocks();
         setImageUrl("");
         setImagePreview("");
         setPastedImage(null);
-        setAlt("");
+        setCaption("");
         setSource("");
         setSourceUrl("");
-        setCaption("");
         setSelectedBlock(null);
+        setTimeout(() => setSaveStatus("idle"), 3000);
       } else {
         setSaveStatus("error");
       }
@@ -153,50 +195,100 @@ export default function AdminImagesPage() {
     setSaving(false);
   };
 
-  const currentSrc = inputMode === "url" ? imageUrl : pastedImage;
-  const canInsert = selectedPage && selectedBlock !== null && currentSrc && alt && source;
+  // Delete image
+  const handleDeleteImage = async (blockIndex: number) => {
+    if (!selectedPage) return;
+    setDeletingImage(blockIndex);
+    try {
+      const res = await fetch("/api/admin/delete-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partId: selectedPage.partId, slug: selectedPage.slug, blockIndex }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await reloadBlocks();
+      } else {
+        alert("Erreur: " + (data.error || "inconnue"));
+      }
+    } catch {
+      alert("Erreur de connexion");
+    }
+    setDeletingImage(null);
+  };
+
+  // Resize image
+  const handleResizeImage = async (blockIndex: number, newSize: ImageSize) => {
+    if (!selectedPage) return;
+    try {
+      const res = await fetch("/api/admin/update-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partId: selectedPage.partId, slug: selectedPage.slug, blockIndex, size: newSize }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await reloadBlocks();
+        setEditingImage(null);
+      } else {
+        alert("Erreur: " + (data.error || "inconnue"));
+      }
+    } catch {
+      alert("Erreur de connexion");
+    }
+  };
+
+  const canInsert = selectedPage && selectedBlock !== null && currentSrc;
+
+  // Missing hints
+  const missingHints: string[] = [];
+  if (!currentSrc) missingHints.push("image");
+  if (!selectedPage) missingHints.push("page");
+  if (selectedBlock === null) missingHints.push("emplacement");
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col" style={{ fontFamily: "var(--font-geist-sans)" }}>
+    <div className="min-h-screen flex flex-col" style={{ background: "var(--background)", color: "var(--foreground)" }}>
       {/* Header */}
-      <div className="border-b border-card-border px-6 py-4 flex items-center gap-4 bg-card">
+      <div className="flex items-center gap-4 px-6 py-4 border-b" style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}>
         <span className="text-2xl">🖼️</span>
-        <h1 className="text-xl font-semibold">Insérer une image</h1>
-        <span className="text-sm text-muted ml-auto">Interface admin — cours AI</span>
+        <h1 className="text-xl font-semibold">Gestionnaire d&apos;images</h1>
+        <span className="text-sm ml-auto" style={{ color: "var(--muted)" }}>Interface admin</span>
       </div>
 
       <div className="flex flex-1 overflow-hidden" style={{ height: "calc(100vh - 65px)" }}>
-        {/* LEFT PANEL: Page selection + content */}
-        <div className="w-1/2 border-r border-card-border flex flex-col overflow-hidden">
-          {/* Page search */}
-          <div className="p-4 border-b border-card-border bg-card shrink-0">
+        {/* ===== LEFT PANEL: Page + blocks ===== */}
+        <div className="w-1/2 border-r flex flex-col overflow-hidden" style={{ borderColor: "var(--card-border)" }}>
+          {/* Search */}
+          <div className="p-4 border-b shrink-0" style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}>
             <input
               type="text"
-              placeholder="Chercher une page… (nom, slug, partie)"
+              placeholder="Chercher une page... (nom, slug, partie)"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-full rounded-lg border border-card-border bg-background px-3 py-2 text-sm outline-none focus:border-accent"
+              className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+              style={{ borderColor: "var(--card-border)", background: "var(--background)" }}
             />
             {search && (
-              <div className="mt-1 max-h-48 overflow-y-auto rounded-lg border border-card-border bg-card shadow-lg">
+              <div className="mt-1 max-h-48 overflow-y-auto rounded-lg border shadow-lg" style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}>
                 {filteredPages.slice(0, 20).map(p => (
                   <button
                     key={`${p.partId}/${p.slug}`}
                     onClick={() => { setSelectedPage(p); setSearch(""); }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted/10 border-b border-card-border last:border-0"
+                    className="w-full text-left px-3 py-2 text-sm border-b last:border-0 hover:opacity-80"
+                    style={{ borderColor: "var(--card-border)" }}
                   >
-                    <span className="text-muted text-xs mr-2">{p.partId}</span>
+                    <span className="text-xs mr-2" style={{ color: "var(--muted)" }}>{p.partId}</span>
                     <span className="font-medium">{p.title}</span>
                   </button>
                 ))}
                 {filteredPages.length === 0 && (
-                  <div className="px-3 py-2 text-sm text-muted">Aucun résultat</div>
+                  <div className="px-3 py-2 text-sm" style={{ color: "var(--muted)" }}>Aucun resultat</div>
                 )}
               </div>
             )}
             {selectedPage && (
               <div className="mt-2 flex items-center gap-2">
-                <span className="text-xs bg-accent/20 text-accent px-2 py-1 rounded">
+                <span className="text-xs px-2 py-1 rounded" style={{ background: "var(--accent)", color: "white", opacity: 0.8 }}>
                   {selectedPage.partId} / {selectedPage.slug}
                 </span>
                 <span className="text-sm font-medium truncate">{selectedPage.title}</span>
@@ -204,52 +296,113 @@ export default function AdminImagesPage() {
             )}
           </div>
 
-          {/* Content blocks */}
+          {/* Blocks */}
           <div className="flex-1 overflow-y-auto p-4">
             {!selectedPage && (
-              <div className="text-center text-muted mt-12">
+              <div className="text-center mt-12" style={{ color: "var(--muted)" }}>
                 <p className="text-4xl mb-3">📄</p>
                 <p>Cherche une page pour commencer</p>
               </div>
             )}
-            {loading && (
-              <div className="text-center text-muted mt-12">Chargement…</div>
-            )}
+            {loading && <div className="text-center mt-12" style={{ color: "var(--muted)" }}>Chargement...</div>}
             {selectedPage && !loading && blocks.length === 0 && (
-              <div className="text-center text-muted mt-12">Aucun contenu trouvé</div>
+              <div className="text-center mt-12" style={{ color: "var(--muted)" }}>Aucun contenu trouve</div>
             )}
             {!loading && blocks.length > 0 && (
               <div className="space-y-1">
-                <p className="text-xs text-muted mb-3">
-                  Clique sur un bloc → l&apos;image sera insérée <strong>après</strong>
+                <p className="text-xs mb-3" style={{ color: "var(--muted)" }}>
+                  Clique sur un bloc → l&apos;image sera inseree <strong>apres</strong>. Les 🖼️ sont des images existantes (supprimer / redimensionner).
                 </p>
                 {blocks.map((block) => {
-                  const isSelected = selectedBlock === block.index;
                   const isImage = block.text.startsWith("<ImageWithSource");
+                  const isSelected = selectedBlock === block.index;
+                  const isEditing = editingImage === block.index;
+                  const currentImgSize = isImage ? (block.text.match(/size="([^"]*)"/)?.[1] || "large") : "";
+                  const imgSrc = isImage ? (block.text.match(/src="([^"]*)"/)?.[1] || "") : "";
+                  const imgCaption = isImage ? (block.text.match(/caption="([^"]*)"/)?.[1] || "") : "";
+
                   return (
                     <div
                       key={block.index}
                       onClick={() => !isImage && setSelectedBlock(block.index)}
-                      className={`
-                        rounded-lg px-3 py-2 text-sm transition-all border
-                        ${isImage
-                          ? "border-dashed border-card-border bg-card/50 text-muted cursor-default opacity-60"
-                          : isSelected
-                            ? "border-accent bg-accent/10 cursor-pointer ring-2 ring-accent/30"
-                            : "border-transparent hover:border-card-border hover:bg-card/50 cursor-pointer"
-                        }
-                      `}
+                      className="rounded-lg px-3 py-2 text-sm border transition-all"
+                      style={{
+                        cursor: isImage ? "default" : "pointer",
+                        background: isSelected ? "var(--accent-light, rgba(99,102,241,0.1))" : isImage ? "var(--card-bg)" : "transparent",
+                        borderColor: isSelected ? "var(--accent)" : isImage ? "var(--card-border)" : "transparent",
+                        borderStyle: isImage ? "dashed" : "solid",
+                        borderLeft: isSelected ? "3px solid var(--accent)" : "3px solid transparent",
+                      }}
                     >
                       {isImage ? (
-                        <span className="text-xs font-mono text-accent">🖼️ image existante</span>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span style={{ color: "var(--accent)" }}>🖼️</span>
+                            <span className="flex-1 text-xs truncate">{imgCaption || imgSrc.split("/").pop() || "image"}</span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: "var(--card-border)", color: "var(--muted)" }}>
+                              {currentImgSize}
+                            </span>
+                          </div>
+                          {/* Image preview thumbnail */}
+                          {imgSrc && (
+                            <div className="mt-1.5 rounded overflow-hidden border" style={{ borderColor: "var(--card-border)", maxHeight: 80 }}>
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={imgSrc} alt="" className="w-full object-contain max-h-20" />
+                            </div>
+                          )}
+                          {/* Action buttons */}
+                          <div className="flex gap-1.5 mt-2">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setEditingImage(isEditing ? null : block.index); }}
+                              className="px-2 py-1 rounded text-[10px] font-medium border transition-colors hover:opacity-80"
+                              style={{
+                                borderColor: "var(--card-border)",
+                                color: isEditing ? "white" : "var(--accent)",
+                                background: isEditing ? "var(--accent)" : "transparent",
+                              }}
+                            >
+                              Redimensionner
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirm("Supprimer cette image ?")) handleDeleteImage(block.index);
+                              }}
+                              disabled={deletingImage === block.index}
+                              className="px-2 py-1 rounded text-[10px] font-medium border transition-colors hover:opacity-80"
+                              style={{ borderColor: "#fecaca", color: "#dc2626", background: "transparent" }}
+                            >
+                              {deletingImage === block.index ? "..." : "Supprimer"}
+                            </button>
+                          </div>
+                          {/* Resize picker */}
+                          {isEditing && (
+                            <div className="flex gap-1 mt-2">
+                              {(["small", "medium", "large", "full"] as ImageSize[]).map((s) => (
+                                <button
+                                  key={s}
+                                  onClick={(e) => { e.stopPropagation(); handleResizeImage(block.index, s); }}
+                                  className="flex-1 py-1 rounded text-[10px] font-medium border transition-colors"
+                                  style={{
+                                    background: currentImgSize === s ? "var(--accent)" : "transparent",
+                                    color: currentImgSize === s ? "white" : "var(--muted)",
+                                    borderColor: currentImgSize === s ? "var(--accent)" : "var(--card-border)",
+                                  }}
+                                >
+                                  {s}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <span className="line-clamp-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">
-                          {block.text.slice(0, 200)}{block.text.length > 200 ? "…" : ""}
+                          {block.text.slice(0, 200)}{block.text.length > 200 ? "..." : ""}
                         </span>
                       )}
                       {isSelected && (
-                        <div className="mt-1 text-xs text-accent font-medium">
-                          ↓ image ici
+                        <div className="mt-1 text-xs font-medium" style={{ color: "var(--accent)" }}>
+                          ↓ image inseree ici
                         </div>
                       )}
                     </div>
@@ -260,23 +413,29 @@ export default function AdminImagesPage() {
           </div>
         </div>
 
-        {/* RIGHT PANEL: Image input + settings */}
+        {/* ===== RIGHT PANEL: Image input + settings ===== */}
         <div className="w-1/2 flex flex-col overflow-y-auto p-6 gap-5">
           {/* Mode toggle */}
           <div className="flex gap-2">
             <button
               onClick={() => { setInputMode("url"); setPastedImage(null); setImagePreview(imageUrl); }}
-              className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                inputMode === "url" ? "bg-accent text-white border-accent" : "border-card-border hover:border-accent text-muted"
-              }`}
+              className="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
+              style={{
+                background: inputMode === "url" ? "var(--accent)" : "transparent",
+                color: inputMode === "url" ? "white" : "var(--muted)",
+                borderColor: inputMode === "url" ? "var(--accent)" : "var(--card-border)",
+              }}
             >
               🔗 URL
             </button>
             <button
               onClick={() => { setInputMode("paste"); setImagePreview(pastedImage || ""); }}
-              className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                inputMode === "paste" ? "bg-accent text-white border-accent" : "border-card-border hover:border-accent text-muted"
-              }`}
+              className="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
+              style={{
+                background: inputMode === "paste" ? "var(--accent)" : "transparent",
+                color: inputMode === "paste" ? "white" : "var(--muted)",
+                borderColor: inputMode === "paste" ? "var(--accent)" : "var(--card-border)",
+              }}
             >
               📋 Coller / Glisser
             </button>
@@ -284,39 +443,35 @@ export default function AdminImagesPage() {
 
           {/* URL input */}
           {inputMode === "url" && (
-            <div>
-              <label className="text-xs text-muted mb-1 block">URL de l&apos;image</label>
-              <input
-                type="text"
-                placeholder="https://..."
-                value={imageUrl}
-                onChange={e => setImageUrl(e.target.value)}
-                className="w-full rounded-lg border border-card-border bg-background px-3 py-2 text-sm outline-none focus:border-accent font-mono"
-              />
-            </div>
+            <input
+              type="text"
+              placeholder="https://..."
+              value={imageUrl}
+              onChange={e => setImageUrl(e.target.value)}
+              className="w-full rounded-lg border px-3 py-2 text-sm outline-none font-mono"
+              style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}
+            />
           )}
 
-          {/* Paste zone */}
+          {/* Paste / Drop zone */}
           {inputMode === "paste" && (
             <div>
               <div
-                ref={pasteZoneRef}
-                onPaste={handlePasteZone}
+                onDrop={handleDrop}
+                onDragOver={(e) => e.preventDefault()}
                 onClick={() => fileInputRef.current?.click()}
                 tabIndex={0}
-                className={`
-                  relative rounded-xl border-2 border-dashed p-8 text-center cursor-pointer
-                  transition-colors outline-none
-                  ${pastedImage ? "border-accent bg-accent/5" : "border-card-border hover:border-accent/50 hover:bg-card/30"}
-                `}
+                className="rounded-xl border-2 border-dashed p-8 text-center cursor-pointer transition-colors outline-none hover:opacity-80"
+                style={{ borderColor: pastedImage ? "var(--accent)" : "var(--card-border)" }}
               >
                 {pastedImage ? (
                   <div>
-                    <p className="text-accent text-sm font-medium mb-1">✓ Image chargée</p>
-                    <p className="text-xs text-muted">{pastedImage}</p>
+                    <p className="text-sm font-medium" style={{ color: "var(--accent)" }}>✓ Image chargee</p>
+                    <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>{pastedImage}</p>
                     <button
                       onClick={e => { e.stopPropagation(); setPastedImage(null); setImagePreview(""); }}
-                      className="mt-2 text-xs text-red-400 hover:underline"
+                      className="mt-2 text-xs hover:underline"
+                      style={{ color: "#dc2626" }}
                     >
                       Supprimer
                     </button>
@@ -324,8 +479,10 @@ export default function AdminImagesPage() {
                 ) : (
                   <div>
                     <p className="text-4xl mb-2">📋</p>
-                    <p className="text-sm text-muted">Ctrl+V pour coller</p>
-                    <p className="text-xs text-muted mt-1">ou cliquer pour choisir un fichier</p>
+                    <p className="text-sm" style={{ color: "var(--muted)" }}>
+                      <strong>Ctrl+V</strong> n&apos;importe ou pour coller une image
+                    </p>
+                    <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>ou glisser-deposer / cliquer pour choisir un fichier</p>
                   </div>
                 )}
               </div>
@@ -334,77 +491,98 @@ export default function AdminImagesPage() {
                 type="file"
                 accept="image/*"
                 className="hidden"
-                onChange={handleFileSelect}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFile(f); }}
               />
             </div>
           )}
 
           {/* Image preview */}
           {imagePreview && (
-            <div className="rounded-xl border border-card-border overflow-hidden bg-card/30">
-              <div className="p-2 text-xs text-muted border-b border-card-border">Aperçu</div>
+            <div className="rounded-xl border overflow-hidden" style={{ borderColor: "var(--card-border)" }}>
+              <div className="px-3 py-1.5 text-xs border-b" style={{ color: "var(--muted)", borderColor: "var(--card-border)", background: "var(--card-bg)" }}>
+                Apercu
+              </div>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={imagePreview}
-                alt="preview"
-                className="w-full object-contain max-h-48"
-                onError={() => setImagePreview("")}
-              />
+              <img src={imagePreview} alt="preview" className="w-full object-contain max-h-48" onError={() => setImagePreview("")} />
             </div>
           )}
 
-          {/* Metadata fields */}
+          {/* ===== AI Generation ===== */}
+          {currentSrc && (
+            <div className="p-3 rounded-lg border" style={{ background: "var(--card-bg)", borderColor: "var(--card-border)" }}>
+              <div className="flex items-center gap-2">
+                <select
+                  value={aiModel}
+                  onChange={(e) => setAiModel(e.target.value)}
+                  className="text-xs rounded border px-2 py-1.5 outline-none"
+                  style={{ borderColor: "var(--card-border)", background: "var(--background)" }}
+                >
+                  <option value="mistral-small-latest">Mistral Small 4</option>
+                  <option value="pixtral-large-latest">Pixtral Large</option>
+                </select>
+                <button
+                  onClick={generateWithAI}
+                  disabled={aiLoading}
+                  className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                  style={{
+                    background: aiLoading ? "var(--card-border)" : "var(--accent)",
+                    color: "white",
+                  }}
+                >
+                  {aiLoading ? "Analyse en cours..." : "✨ Generer legende avec Mistral"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ===== Metadata ===== */}
           <div className="space-y-3">
             <div>
-              <label className="text-xs text-muted mb-1 block">Texte alt <span className="text-red-400">*</span></label>
+              <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Legende</label>
               <input
                 type="text"
-                placeholder="Description courte de l'image"
-                value={alt}
-                onChange={e => setAlt(e.target.value)}
-                className="w-full rounded-lg border border-card-border bg-background px-3 py-2 text-sm outline-none focus:border-accent"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-muted mb-1 block">Légende (optionnel)</label>
-              <input
-                type="text"
-                placeholder="Ex : Figure 2 — Architecture du modèle BERT"
+                placeholder="Ex : Figure 2 -- Architecture du modele BERT"
                 value={caption}
                 onChange={e => setCaption(e.target.value)}
-                className="w-full rounded-lg border border-card-border bg-background px-3 py-2 text-sm outline-none focus:border-accent"
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}
               />
             </div>
             <div>
-              <label className="text-xs text-muted mb-1 block">Source <span className="text-red-400">*</span></label>
+              <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Source (optionnel)</label>
               <input
                 type="text"
-                placeholder="Ex : Wikipedia Commons, arXiv 2310.xxx, HuggingFace"
+                placeholder="Ex : arXiv 1706.03762, Wikipedia"
                 value={source}
                 onChange={e => setSource(e.target.value)}
-                className="w-full rounded-lg border border-card-border bg-background px-3 py-2 text-sm outline-none focus:border-accent"
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}
               />
             </div>
             <div>
-              <label className="text-xs text-muted mb-1 block">URL source (optionnel)</label>
+              <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>URL source (optionnel)</label>
               <input
                 type="text"
                 placeholder="https://..."
                 value={sourceUrl}
                 onChange={e => setSourceUrl(e.target.value)}
-                className="w-full rounded-lg border border-card-border bg-background px-3 py-2 text-sm outline-none focus:border-accent font-mono text-xs"
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none font-mono text-xs"
+                style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }}
               />
             </div>
             <div>
-              <label className="text-xs text-muted mb-1 block">Taille</label>
+              <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Taille</label>
               <div className="flex gap-2">
                 {(["small", "medium", "large", "full"] as ImageSize[]).map(s => (
                   <button
                     key={s}
                     onClick={() => setSize(s)}
-                    className={`flex-1 py-1.5 rounded-lg text-xs border transition-colors ${
-                      size === s ? "bg-accent text-white border-accent" : "border-card-border hover:border-accent text-muted"
-                    }`}
+                    className="flex-1 py-1.5 rounded-lg text-xs border transition-colors"
+                    style={{
+                      background: size === s ? "var(--accent)" : "transparent",
+                      color: size === s ? "white" : "var(--muted)",
+                      borderColor: size === s ? "var(--accent)" : "var(--card-border)",
+                    }}
                   >
                     {s}
                   </button>
@@ -413,40 +591,34 @@ export default function AdminImagesPage() {
             </div>
           </div>
 
-          {/* Status & button */}
+          {/* ===== Status & Insert ===== */}
           <div className="space-y-3 mt-auto">
-            {selectedBlock !== null && selectedPage && (
-              <div className="text-xs bg-accent/10 text-accent px-3 py-2 rounded-lg border border-accent/20">
-                ✓ Bloc sélectionné — image insérée après le bloc {selectedBlock + 1} de {selectedPage.slug}
-              </div>
-            )}
-            {!selectedBlock && selectedBlock !== 0 && (
-              <div className="text-xs text-muted px-3 py-2 rounded-lg border border-card-border">
-                ← Clique sur un bloc dans la page pour choisir l&apos;emplacement
-              </div>
-            )}
-
             {saveStatus === "success" && (
-              <div className="text-xs bg-green-500/10 text-green-400 px-3 py-2 rounded-lg border border-green-500/20">
-                ✓ Image insérée avec succès !
+              <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#dcfce7", color: "#166534" }}>
+                ✓ Image inseree avec succes !
               </div>
             )}
             {saveStatus === "error" && (
-              <div className="text-xs bg-red-500/10 text-red-400 px-3 py-2 rounded-lg border border-red-500/20">
-                ✗ Erreur lors de l&apos;insertion
+              <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#fef2f2", color: "#991b1b" }}>
+                Erreur lors de l&apos;insertion.
               </div>
             )}
-
+            {missingHints.length > 0 && !canInsert && (
+              <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "var(--card-bg)", color: "var(--muted)" }}>
+                Manque : {missingHints.join(", ")}
+              </div>
+            )}
             <button
               onClick={handleInsert}
               disabled={!canInsert || saving}
-              className={`w-full py-3 rounded-xl text-sm font-semibold transition-all ${
-                canInsert && !saving
-                  ? "bg-accent text-white hover:bg-accent/90 shadow-lg shadow-accent/20"
-                  : "bg-card text-muted border border-card-border cursor-not-allowed"
-              }`}
+              className="w-full py-3 rounded-xl text-sm font-semibold transition-all"
+              style={{
+                background: canInsert && !saving ? "var(--accent)" : "var(--card-border)",
+                color: canInsert && !saving ? "white" : "var(--muted)",
+                cursor: canInsert && !saving ? "pointer" : "not-allowed",
+              }}
             >
-              {saving ? "Insertion…" : "Insérer l'image"}
+              {saving ? "Insertion..." : "Inserer l'image"}
             </button>
           </div>
         </div>

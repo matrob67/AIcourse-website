@@ -3,108 +3,154 @@ title: "RNN : séquences et mémoire"
 description: "Les réseaux de neurones récurrents (RNN), leur capacité à traiter des données séquentielles grâce à un état caché, et le problème du gradient évanescent."
 ---
 
-## Le problème : les données qui changent d'ordre
+## Le problème : les données qui ont un ordre
 
-"Le chat mange la souris" vs "La souris mange le chat". Mêmes mots. Sens **opposé**. Un réseau classique (connecté dense) ne comprend pas l'ordre : il voit juste une liste de nombres, pas une séquence.
+"Le chat mange la souris" vs "La souris mange le chat". Mêmes mots. Sens **opposé**. Un réseau classique (connecté dense, feedforward) ne comprend pas l'ordre : il voit juste un ensemble de nombres en entrée, comme un sac de mots mélangés. Permuter les entrées ne change rien pour lui.
 
-Les données réelles adorent l'ordre : texte (mots), parole (sons), séries temporelles (mesures), vidéos (images). Les CNN gèrent bien les images (structure spatiale). Mais pour "cette image, puis celle-ci, puis celle-ci" ? Zéro. C'est là qu'arrivent les **RNN** : réseaux avec mémoire.
+Or, les données réelles sont très souvent **séquentielles** : le texte est une séquence de mots, la parole une séquence de sons, une vidéo une séquence d'images, un signal financier une séquence de prix. L'ordre n'est pas un détail -- c'est souvent **l'information la plus importante**.
 
-
+Les CNN gèrent bien la structure spatiale des images (relations de voisinage entre pixels). Mais pour des séquences où le contexte **s'accumule au fil du temps** -- "ce mot fait référence à un autre mot 10 positions plus tôt" -- il faut un réseau avec de la **mémoire**. C'est exactement ce que les RNN (Recurrent Neural Networks) apportent.
 
 ## Comment fonctionne un RNN
 
+<ImageWithSource
+  src="/images/admin/img-1774010351560.png"
+  alt="Schéma d'un réseau de neurones récurrent (RNN)"
+  caption="Ce schéma illustre le fonctionnement fondamental d'un Réseau de Neurones Récurrent (RNN). Il montre comment les entrées (x_t) et les sorties (y_t) sont liées à travers des états cachés (h_t) qui se propagent dans le temps, permettant de traiter des séquences de données."
+  size="large"
+/>
+
 ### L'état caché = la mémoire
 
-Un RNN traite la séquence **élément par élément**, en gardant un résumé du passé : l'**état caché** h.
+L'idée centrale du RNN est simple : le réseau traite la séquence **élément par élément**, et à chaque pas il maintient un **état caché** $h$ qui résume tout ce qu'il a vu jusqu'à présent. C'est sa mémoire.
 
-À chaque pas de temps t, le RNN prend :
-- L'élément courant x(t)
-- L'état caché du pas avant h(t-1)
+À chaque pas de temps $t$, le RNN prend deux entrées :
+- L'élément courant $x_t$ (par exemple le mot actuel)
+- L'état caché du pas précédent $h_{t-1}$ (le résumé de tout ce qui précède)
 
-Et calcule :
-```
-h(t) = tanh(W_hh * h(t-1) + W_xh * x(t) + b_h)
-y(t) = W_hy * h(t) + b_y
-```
+Et il calcule :
 
-Les matrices W_hh, W_xh, W_hy sont **partagées** à chaque pas. C'est ça qui magique : mêmes poids, peu importe la longueur de la séquence.
+$$
+h_t = \tanh(W_{hh} \cdot h_{t-1} + W_{xh} \cdot x_t + b_h)
+$$
 
-<Callout type="info" title="L'état caché : un compresseur">
-h(t) = un résumé "ce qui importait dans tout ce qu'on a vu jusqu'à maintenant". Pas parfait (mémoire limitée), mais c'est la vie.
+$$
+y_t = W_{hy} \cdot h_t + b_y
+$$
+
+Décomposons la première équation, qui est le coeur du RNN :
+- **$W_{xh} \cdot x_t$** : transforme l'entrée courante en une contribution à l'état caché ("qu'est-ce que cet élément apporte ?")
+- **$W_{hh} \cdot h_{t-1}$** : transforme l'état précédent en une contribution ("qu'est-ce que le passé apporte ?")
+- Les deux sont additionnés et passés par une **tanh** qui compresse les valeurs entre -1 et 1
+- Le résultat est le nouvel état caché $h_t$
+
+Un point crucial : les matrices $W_{hh}$, $W_{xh}$, $W_{hy}$ sont **partagées à chaque pas de temps**. Le même "module" est réutilisé pour traiter chaque élément de la séquence. Que la séquence fasse 5 mots ou 500 mots, ce sont les mêmes poids. C'est ce partage qui permet au RNN de traiter des séquences de longueur arbitraire.
+
+<Callout type="info" title="L'état caché : un compresseur imparfait">
+$h_t$ est un vecteur de taille fixe (par exemple 256 ou 512 dimensions) qui doit résumer **tout ce que le réseau a vu** jusqu'au pas $t$. C'est un résumé nécessairement imparfait : les informations les plus récentes sont bien représentées, mais les informations anciennes sont progressivement "écrasées" par les nouvelles. C'est comme ta mémoire de travail : tu te souviens bien de ce qu'on t'a dit il y a 5 secondes, mais pas il y a 5 minutes. Cette limitation est fondamentale et motive les architectures LSTM et GRU.
 </Callout>
 
-### Déroulement dans le temps
+### Déroulement dans le temps (unrolling)
 
-Imaginez le RNN "déployé" : une copie du même module pour chaque pas de temps. Chaque copie partage les poids, chaque copie gère un élément.
+Pour comprendre comment un RNN s'entraîne, il faut le "dérouler" dans le temps. Imagine que tu copies le même module RNN une fois pour chaque élément de la séquence. Le module au pas 1 envoie son état caché au module au pas 2, qui l'envoie au pas 3, etc.
 
-Visuellement : chaîne d'or longue = réseau très profond. Ce réseau profond ? On l'entraîne par rétropropagation : **Backpropagation Through Time (BPTT)**.
+Visuellement, un RNN déroulé sur une séquence de 50 mots ressemble à un réseau feedforward **très profond** avec 50 couches. La différence : toutes ces "couches" partagent les mêmes poids. Et on entraîne ce réseau profond par rétropropagation classique appliquée à travers le temps : c'est le **Backpropagation Through Time (BPTT)**.
 
-
+Cette observation -- un RNN déroulé est un réseau profond -- permet de comprendre immédiatement pourquoi les mêmes problèmes de réseaux profonds (gradient évanescent, gradient explosif) se manifestent ici aussi. Mais avant d'y venir, regardons les différentes configurations possibles.
 
 ## Types de RNN selon la tâche
 
-**Many-to-one** : séquence → sortie unique. Exemple : sentiment d'un texte
-**One-to-many** : une entrée → séquence. Exemple : légende d'image
-**Many-to-many sync** : élément → élément. Exemple : étiquetage grammatical
-**Many-to-many async** : séquence → séquence différente longueur. Exemple : traduction
+La flexibilité du RNN permet plusieurs configurations selon le problème :
 
-## Le problème qui tue : vanishing gradient
+**Many-to-one** : toute une séquence → une seule sortie. Le RNN lit tous les mots d'une critique de film, et à la fin prédit le sentiment (positif/négatif). Seul le dernier état caché est utilisé pour la classification.
 
-### Pourquoi ça disparaît ?
+**One-to-many** : une seule entrée → une séquence. À partir d'une image (encodée en vecteur), le RNN génère une légende mot par mot : "un chat noir dort sur un canapé rouge".
 
-Dans BPTT, le gradient doit remonter à travers **tous les pas de temps**. À chaque pas, il est multiplié par W_hh et la dérivée d'activation. Si ces nombres < 1, le gradient devient microscopique après 20-30 pas. Après ? Zéro du point de vue du gradient. Le réseau n'apprend pas les dépendances lointaines.
+**Many-to-many synchrone** : chaque entrée produit une sortie correspondante. Utile pour l'étiquetage grammatical (POS tagging) : chaque mot reçoit une étiquette (nom, verbe, adjectif...).
 
-### Conséquences réelles
+**Many-to-many asynchrone** : une séquence → une séquence de longueur différente. C'est le cas de la traduction : on lit d'abord toute la phrase source, puis on génère la traduction. C'est l'architecture seq2seq (encodeur-décodeur).
 
-Un RNN vanilla "oublie" après ~10-20 mots. Impossible de :
-- Relier un pronom à un nom 5 phrases plus tôt
-- Capturer les cycles longs d'une série temporelle
-- Maintenir le contexte d'un long document
+## Le problème qui tue : le gradient évanescent
 
-<Callout type="info" title="Gradient explosif aussi existe">
-Inverse : si les multiplicateurs > 1, le gradient **explose**. On résout ça avec gradient clipping (limiter sa norme). Le gradient qui s'évanouit ? Ça demande une refonte architecturale.
+<ImageWithSource
+  src="/images/admin/img-1774010403570.png"
+  alt="Schéma d'un réseau de neurones récurrent sur 7 pas de temps"
+  source="https://www.researchgate.net/figure/The-vanishing-gradient-problem-for-RNN_fig1_387318867"
+  caption="Ce schéma illustre l'architecture d'un réseau de neurones récurrent (RNN) déployé sur 7 pas de temps. Chaque couche cachée transmet son état aux suivantes, permettant la rétroaction nécessaire au traitement de séquences temporelles."
+  size="large"
+/>
+
+### Pourquoi le gradient disparaît
+
+Quand on entraîne un RNN par BPTT, le gradient doit remonter à travers **tous les pas de temps** pour atteindre les poids partagés. À chaque pas qu'il traverse, le gradient est multiplié par la matrice $W_{hh}$ et par la dérivée de l'activation (tanh).
+
+Le problème : la dérivée de tanh est toujours inférieure à 1 (elle vaut au maximum 1, quand l'entrée est 0). Si la norme des valeurs propres de $W_{hh}$ est aussi inférieure à 1, alors à chaque pas le gradient est multiplié par un nombre < 1. Après 20 pas : $0.9^{20} = 0.12$. Après 50 pas : $0.9^{50} = 0.005$. Après 100 pas : essentiellement 0.
+
+Le gradient devient **microscopique** bien avant d'atteindre les premiers éléments de la séquence. Le réseau ne peut pas apprendre les dépendances à long terme car le signal d'erreur ne remonte pas assez loin.
+
+### Conséquences pratiques
+
+Un RNN vanilla "oublie" après environ **10-20 pas de temps**. Concrètement, cela signifie qu'il est incapable de :
+- Relier un pronom ("il") à un nom mentionné 5 phrases plus tôt
+- Capturer la structure narrative d'un long paragraphe
+- Détecter les cycles longs dans une série temporelle financière
+- Maintenir le contexte d'une conversation de plusieurs échanges
+
+Pour des tâches avec des dépendances courtes (sentiment d'une phrase, prédiction du mot suivant à court terme), les RNN vanilla fonctionnent. Pour tout le reste, il faut des architectures spécialisées comme LSTM ou GRU.
+
+<Callout type="info" title="Le gradient explosif existe aussi">
+L'inverse est possible : si les multiplicateurs sont > 1, le gradient **explose** au lieu de s'évanouir. On résout ça avec le **gradient clipping** : si la norme du gradient dépasse un seuil (par exemple 5.0), on le renormalise. C'est un patch simple et efficace. Le gradient évanescent, en revanche, ne se résout pas aussi facilement -- il faut changer l'architecture du réseau (LSTM, GRU), qui est conçue pour laisser le gradient circuler sur de longues distances.
 </Callout>
-
-
 
 ## Entraîner un RNN
 
-### BPTT simple
+### BPTT (Backpropagation Through Time)
 
-1. Dérouler le réseau sur la séquence entière
-2. Calculer la perte à chaque pas (ou juste à la fin)
-3. Gradient retro à travers tous les pas
-4. Mettre à jour les poids partagés
+L'entraînement suit ces étapes :
+1. **Dérouler** le réseau sur la séquence entière (copier le module pour chaque pas)
+2. **Forward pass** : calculer les sorties et les états cachés pour chaque pas
+3. **Calculer la perte** à chaque pas (ou seulement à la fin, selon la tâche)
+4. **Backward pass** : rétropropager le gradient à travers tous les pas de temps
+5. **Mettre à jour** les poids partagés (somme des gradients de tous les pas)
 
 ### Truncated BPTT
 
-Pour les très longues séquences, calculer sur toute la longueur explose la mémoire. On découpe en chunks et rétropropage seulement au sein du chunk. Tradeoff : on perd les dépendances plus longues que la chunk.
+Pour les très longues séquences (des milliers de pas), dérouler tout le réseau et calculer le gradient sur l'intégralité est prohibitif en mémoire. La solution pragmatique : découper la séquence en **chunks** (morceaux) de longueur fixe (par exemple 35 ou 50 pas) et rétropropager uniquement au sein de chaque chunk.
+
+L'état caché est transmis d'un chunk au suivant (le forward pass est continu), mais le gradient est coupé aux frontières des chunks. C'est un compromis : on perd la capacité d'apprendre les dépendances plus longues que la taille du chunk, mais on gagne en efficacité mémoire et en vitesse d'entraînement.
 
 <Callout type="tip" title="Teacher forcing">
-Pendant l'entraînement, donnez au RNN la vraie sortie du pas avant (données d'entraînement), pas sa propre prédiction. Ça accélère. Mais crée une discordance "entraînement vs test" (exposure bias). Les modèles modernes mixent les deux.
+Pendant l'entraînement d'un RNN en mode génération (one-to-many ou many-to-many), on a le choix : donner au réseau **sa propre prédiction** du pas précédent comme entrée, ou lui donner la **vraie réponse** (le token correct du jeu d'entraînement). La deuxième option s'appelle **teacher forcing** : le "professeur" force la bonne réponse.
+
+Teacher forcing accélère considérablement l'entraînement car le réseau ne s'égare pas dans des séquences de mauvaises prédictions. Mais il crée un problème : au moment du test, le réseau n'a plus de professeur et doit utiliser ses propres prédictions. L'écart entre ces deux situations s'appelle **exposure bias**. Les modèles modernes mixent les deux approches : parfois la vraie réponse, parfois la prédiction du modèle.
 </Callout>
 
 ## RNN bidirectionnels
 
-Un RNN classique : passé → futur. Parfois, les deux directions aident. Exemple : classifier un texte complet, le contexte futur importe.
+Un RNN classique lit la séquence de gauche à droite : chaque état caché ne contient que le contexte **passé**. Mais pour certaines tâches, le contexte futur est aussi important. Pour classifier le sentiment d'une phrase, savoir comment elle se termine aide à comprendre son début.
 
-Un **BiRNN** : deux RNN, un avant (←) un arrière (→). Concaténer les h de chaque côté. Résultat : contexte passé + futur.
+Un **BiRNN** (Bidirectional RNN) utilise deux RNN en parallèle :
+- Un RNN **forward** qui lit de gauche à droite
+- Un RNN **backward** qui lit de droite à gauche
 
-Vous ne pouvez pas faire BiRNN en génération temps réel (pas encore vu le futur). Mais pour classification, analyse où la séquence est **complète à l'avance** ? Magic.
+Pour chaque position, les états cachés des deux directions sont **concaténés**, donnant un vecteur qui capture à la fois le passé et le futur. La taille de l'état caché double, mais la richesse de la représentation augmente considérablement.
+
+Attention : les BiRNN ne sont utilisables que quand la séquence complète est disponible à l'avance (classification, NER, POS tagging). Pour la génération en temps réel (traduction mot par mot, dialogue), on ne connaît pas le futur, donc un BiRNN est impossible.
 
 ## Applications historiques
 
-Avant les Transformers (2017), les RNN-LSTM-GRU dominaient :
-- Traduction (seq2seq)
-- Reconnaissance vocale
-- Génération de texte
-- Sentiment analysis
-- Prédiction météo/finance
+Avant l'arrivée des Transformers en 2017, les RNN (et surtout leurs variantes LSTM et GRU) dominaient pratiquement toutes les tâches séquentielles :
+- **Traduction automatique** (Google Translate 2014-2017, architecture seq2seq)
+- **Reconnaissance vocale** (DeepSpeech, systèmes de dictée)
+- **Génération de texte** (modèles de langage caractère par caractère)
+- **Analyse de sentiment** (classification de critiques, tweets)
+- **Prédiction de séries temporelles** (finance, météo, IoT)
+- **Légendes d'images** (CNN + RNN pour décrire des photos)
 
 <Callout type="paper" title="Les RNN aujourd'hui">
-Transformers les ont remplacés pour NLP. Mais State Space Models (Mamba) et RWKV émergent : elles retrouvent les avantages RNN (inférence O(1), mémoire constante) tout en résolvant le vanishing gradient par des maths différentes. Les RNN ne sont pas morts, juste endormis.
+Les Transformers ont largement remplacé les RNN pour le NLP grâce à leur parallélisme et leur attention sur de longues distances. Mais l'histoire n'est pas finie. Les **State Space Models** (comme Mamba) et **RWKV** réinventent l'idée des RNN en résolvant le gradient évanescent par des mathématiques différentes (équations différentielles, récurrences linéaires). Ils retrouvent les avantages classiques des RNN -- inférence en $O(1)$ par token et mémoire constante -- tout en rivalisant avec les Transformers en performance. Les RNN ne sont pas morts, ils évoluent.
 </Callout>
 
 ## Intuition finale
 
-RNN = machine avec mémoire court-terme. Elle lit la séquence, met à jour sa mémoire, prédite. Le truc : le gradient s'évanouit, la mémoire est faible. C'est ce qu'on résout avec LSTM/GRU. Mais d'abord, comprendre le vanilla RNN ? C'est comprendre le cœur du problème.
+Le RNN est la première architecture qui donne une **mémoire** aux réseaux de neurones. Il lit une séquence pas à pas, met à jour son état caché comme un résumé courant, et utilise ce résumé pour prédire. Sa limitation fondamentale -- le gradient évanescent qui détruit la mémoire à long terme -- a motivé les architectures LSTM et GRU, puis les Transformers. Mais comprendre le RNN vanilla est indispensable : c'est le socle conceptuel sur lequel tout le traitement des séquences a été construit.

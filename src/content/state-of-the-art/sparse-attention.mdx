@@ -7,43 +7,50 @@ description: "Attention sparse : au lieu de calculer l'attention avec tous les t
 
 ## L'observation : la plupart de l'attention est du zéro
 
-Les chercheurs ont regardé les matrices d'attention des Transformers entraînés. Surprise : 90-95% des valeurs sont proches de zéro.
+Les chercheurs ont regardé les matrices d'attention des Transformers entraînés. Surprise : **90-95% des valeurs sont proches de zéro**.
 
-Chaque token assiste vraiment à seulement 5-10% des autres tokens. Le reste du calcul ? Gaspillé.
+Chaque token assiste vraiment à seulement 5-10% des autres tokens. Le reste du calcul ? Gaspillé. C'est comme si, dans une salle de 1000 personnes, chacun n'écoutait que 50-100 personnes. Pourquoi calculer l'interaction de chaque personne avec les 999 autres ?
+
+Rappelez-vous la complexité de l'attention standard : $O(L^2)$ en mémoire et en calcul, où $L$ est la longueur de la séquence. Pour 4096 tokens, c'est ~16 millions d'interactions. Pour 16K tokens, ~256 millions. Pour 1M tokens, un trillion. L'attention sparse part d'un constat simple : pourquoi calculer des millions d'interactions si la plupart sont inutiles ?
 
 ## L'idée : connectez stratégiquement
 
-Au lieu de `O(L²)` paires calculées, calculez juste les pertinentes.
+Au lieu de `O(L^2)` paires calculées, calculez juste les pertinentes. Mais lesquelles ? Il faut des **patterns prédéfinis** de connectivité.
 
-Patterns observés :
-- **Local** : un token regarde ses voisins (les tokens proches)
-- **Global** : certains tokens spéciaux (CLS, SEP) peuvent voir tout
-- **Aléatoire** : quelques connexions longue-distance aléatoires pour la communication
+Trois patterns se dégagent des observations empiriques :
 
-## Longformer : trois types d'attention
+- **Local** : un token regarde ses voisins proches. C'est naturel — en langage, les mots proches ont souvent le plus d'interaction ("le chat noir" — "noir" doit surtout voir "chat"). Pensez-y comme des conversations entre voisins dans un quartier.
 
-**Attention locale (sliding window)** : fenêtre de 512 tokens. Chaque token voit ses 256 voisins avant et après.
+- **Global** : certains tokens spéciaux (CLS, SEP, tokens de début de phrase) ont le droit de voir et d'être vus par tout le monde. Ce sont les "mégaphones" de la séquence — ils agrègent et diffusent l'information globale. Sans eux, les tokens éloignés ne pourraient jamais communiquer.
 
-**Attention diluée (dilated)** : en plus de la fenêtre, prenez tous les 8è tokens. Couvre plus loin sans coûter cher.
+- **Aléatoire** : quelques connexions longue-distance tirées au hasard. Ça peut paraître bizarre, mais c'est crucial pour garantir que l'information puisse voyager d'un bout à l'autre de la séquence. C'est le principe du "petit monde" en théorie des graphes : quelques shortcuts aléatoires suffisent à connecter un réseau.
 
-**Attention globale** : certains tokens (CLS, question) ont une attention complète.
+## Longformer : trois types d'attention combinés
 
-Résultat : complexité `O(L × (W + G))` où W = taille fenêtre, G = tokens globaux. Si les deux sont constants → `O(L)`.
+Longformer, développé par Allen AI, combine trois mécanismes d'attention dans chaque couche :
+
+**Attention locale (sliding window)** : fenêtre de 512 tokens. Chaque token voit ses 256 voisins avant et 256 après. C'est le socle — la plupart des interactions utiles sont locales.
+
+**Attention diluée (dilated)** : en plus de la fenêtre contiguë, le token saute et prend un token tous les 8 dans une fenêtre plus large. Comme regarder au loin avec des jumelles : vous ne voyez pas tout, mais les éléments distants importants deviennent accessibles sans coût excessif.
+
+**Attention globale** : certains tokens désignés (le token CLS pour la classification, les tokens de question en QA) ont une attention complète — ils voient tout et sont vus par tout le monde.
+
+Résultat : complexité `O(L * (W + G))` où W = taille fenêtre, G = tokens globaux. Si les deux sont constants par rapport à L, on obtient une complexité **linéaire** `O(L)`. On passe de quadratique à linéaire — c'est un changement fondamental.
 
 <Callout type="paper" title="Résultats Longformer">
-Longformer traite 4K tokens (8x plus que BERT) avec une mémoire comparable. Sur les tâches de longs documents (TriviaQA), il écrase les baselines.
+Longformer traite 4K tokens (8x plus que BERT-512) avec une mémoire comparable. Sur les tâches de longs documents (TriviaQA, WikiHop), il dépasse largement les baselines qui tronquent les documents. La preuve que voir plus de contexte aide, même avec une attention restreinte.
 </Callout>
 
 ## BigBird : théorie rigoureuse
 
-BigBird formalize ça avec la théorie des graphes aléatoires.
+BigBird, développé par Google Research, formalise l'attention sparse avec la **théorie des graphes aléatoires**. L'idée est de prouver mathématiquement que l'attention sparse peut être aussi expressive que l'attention complète.
 
 Trois composants :
-1. **Local** : fenêtre de taille W
-2. **Global** : tokens désignés qui assistent à tout
-3. **Aléatoire** : chaque token assiste à R tokens tirés au hasard
+1. **Local** : fenêtre de taille W autour de chaque token
+2. **Global** : tokens désignés qui assistent à tout le monde
+3. **Aléatoire** : chaque token assiste à R tokens tirés au hasard dans la séquence
 
-Théorème clé : cette combinaison a les mêmes propriétés théoriques que l'attention complète. Le graphe est un "expander graph", garantissant que l'information se propage vite.
+Théorème clé : cette combinaison forme un **"expander graph"** — un graphe avec la propriété que l'information peut se propager de n'importe quel noeud à n'importe quel autre en très peu de sauts. Concrètement, ça signifie que malgré la sparsité, le modèle conserve la même puissance théorique que l'attention complète pour approximer n'importe quelle fonction de séquence.
 
 ### BigBird vs Longformer
 
@@ -56,36 +63,38 @@ Théorème clé : cette combinaison a les mêmes propriétés théoriques que l'
 | Théorie | Empirique | Rigoureuse (expanders) |
 
 <Callout type="tip" title="L'aléatoire aide">
-Ajouter du hasard semble mauvais mais c'est intelligent : ça garantit que chaque token peut atteindre tout autre token en peu de sauts. L'aléatoire distribue les chemins.
+Ajouter du hasard semble contre-intuitif, mais c'est mathématiquement intelligent. En théorie des graphes, quelques connexions aléatoires transforment un réseau local en réseau "petit monde" où chaque noeud peut atteindre tout autre noeud en peu de sauts. C'est le même phénomène que les "six degrés de séparation" entre humains : quelques liens aléatoires suffisent à connecter tout le monde.
 </Callout>
 
-## Autres approches
+## Autres approches notables
 
-**Sparse Transformer (OpenAI)** : local + strided (tous les √L tokens). `O(L√L)`.
+**Sparse Transformer (OpenAI, 2019)** : le pionnier. Combine attention locale + strided (tous les $\sqrt{L}$ tokens). Complexité `O(L * sqrt(L))`. C'est la première démonstration qu'on pouvait casser la barrière quadratique sans perdre en qualité.
 
-**ETC** : tokens auxiliaires "globaux" qui résument des segments et facilitent la communication.
+**ETC (Extended Transformer Construction)** : introduit des tokens auxiliaires "globaux" qui servent de hub de communication. Les tokens locaux parlent aux globaux, les globaux parlent entre eux, et redistribuent l'information — comme un réseau de relais téléphoniques.
 
-**LongT5** : attention locale + transient global attention avec des résumés dynamiques.
+**LongT5** : attention locale combinée à une "transient global attention" avec des résumés dynamiques des segments. Particulièrement efficace pour les tâches de résumé.
 
 ## Le gros problème : implémentation GPU
 
-Theorically, l'attention sparse devrait être super rapide. En pratique ?
+Théoriquement, l'attention sparse devrait être ultra-rapide. En pratique ? C'est bien plus compliqué.
 
-**Patterns irréguliers** = accès mémoire chaotiques = les GPU les détestent. Flash Attention sur attention dense peut être plus rapide que sparse jusqu'à 16K tokens !
+**Patterns irréguliers** = accès mémoire chaotiques = les GPU les détestent. Les GPU sont des machines massives de calcul parallèle, optimisées pour des opérations régulières et prévisibles. Quand vous dites au GPU "lis les positions 3, 17, 42, 891", il doit faire plein de petits accès mémoire dispersés, ce qui tue les performances.
+
+Le résultat paradoxal : **Flash Attention** sur attention dense peut être plus rapide que de l'attention sparse mal implémentée, et ce jusqu'à 16K-32K tokens ! Flash Attention évite de matérialiser la matrice d'attention en mémoire et exploite parfaitement la hiérarchie mémoire du GPU, ce qui compense le fait de calculer "trop" de paires.
 
 <Callout type="warning" title="La brèche théorie-pratique">
-Les GPU sont optimisées pour les opérations denses et régulières. L'attention sparse fragmente les opérations. Sans kernels spécialisés, ça peut être PLUS lent que dense.
+Les GPU sont optimisées pour les opérations denses et régulières. L'attention sparse fragmente les opérations en petits morceaux irréguliers. Sans kernels spécialisés et optimisés, l'attention sparse peut être PLUS lente que l'attention dense. C'est un cas classique où la complexité algorithmique ($O(L)$ vs $O(L^2)$) ne raconte pas toute l'histoire — les constantes cachées et l'efficacité hardware comptent énormément.
 </Callout>
 
 ## Pourquoi ça ne domine plus
 
-Avec Flash Attention (attention dense hyper-optimisée jusqu'à 32K tokens) et les SSM (complexité linéaire native), l'attention sparse a perdu de la pertinence pour les LLM.
+Avec Flash Attention (attention dense hyper-optimisée qui traite efficacement jusqu'à 32K-128K tokens) et les SSM comme Mamba (complexité linéaire native sans patterns sparse), l'attention sparse a perdu de la pertinence pour les LLM généralistes.
 
-Niches restantes :
-- **Encodeurs pour docs longs** : classification de documents énormes
-- **Vision** : patterns structurés en 2D
-- **Domaines spécialisés** : protéines, molécules, graphes
+Niches où l'attention sparse reste pertinente :
+- **Encodeurs pour documents longs** : classification ou extraction d'information sur des documents de centaines de pages
+- **Vision** : les images ont des patterns 2D naturels (un pixel interagit surtout avec ses voisins spatiaux)
+- **Domaines spécialisés** : protéines (interactions locales dans la chaîne + contacts 3D), molécules, graphes
 
 <Callout type="info" title="Héritage">
-L'attention sparse a montré qu'on n'a pas besoin de matrice complète. Cette intuition a pavé la voie à Flash Attention (pas de matrix, juste des blocs) et SSM (linear attention alias attention avec mémoire fixe).
+L'attention sparse a montré qu'on n'a pas besoin de la matrice d'attention complète — une idée révolutionnaire à l'époque. Cette intuition a directement pavé la voie à Flash Attention (qui ne matérialise jamais la matrice, juste des blocs), aux SSM comme Mamba (attention linéaire implicite avec mémoire fixe), et aux architectures hybrides modernes. L'attention sparse a peut-être perdu la bataille pratique, mais elle a gagné la guerre intellectuelle.
 </Callout>
