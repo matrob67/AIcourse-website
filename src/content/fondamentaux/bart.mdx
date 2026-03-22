@@ -22,12 +22,12 @@ C'est l'idée de fusionner les forces de BERT (comprendre un texte même quand i
 L'architecture de BART est un Transformer encoder-décoder standard, mais chaque partie a un rôle très distinct :
 
 **Encoder** (côté compréhension) :
-- Fonctionne comme BERT : attention **bidirectionnelle** complète
+- Fonctionne comme BERT : attention **bidirectionnelle** complète (chaque token peut "voir" tous les autres tokens de la séquence, avant et après lui)
 - Reçoit le texte corrompu et peut regarder dans toutes les directions pour en extraire le maximum de sens
 - Produit une représentation interne riche qui capture le "vrai" sens malgré le bruit
 
 **Décoder** (côté génération) :
-- Fonctionne comme GPT : attention **causale** (ne voit que les tokens déjà générés)
+- Fonctionne comme GPT : attention **causale** (chaque token ne peut voir que les tokens précédents, pas ceux qui suivent — ce qui permet la génération séquentielle)
 - Génère la reconstruction token par token, de gauche à droite
 - Utilise la **cross-attention** pour consulter les représentations de l'encoder à chaque pas de génération — c'est le pont entre compréhension et production
 
@@ -74,8 +74,8 @@ Supprime simplement des tokens. Le modèle doit deviner **quoi** manque ET **où
 
 **Verdict** : Difficile. Le modèle doit inférer la position aussi.
 
-### 3. Text Infilling (remplacer spans)
-Remplace des **séquences** de tokens par **un seul** `[MASK]`.
+### 3. Text Infilling (span masking — remplacer spans)
+Remplace des **séquences de tokens consécutifs** (un "span") par **un seul** `[MASK]` — contrairement à BERT qui masque chaque token individuellement, ici un seul marqueur peut cacher plusieurs mots.
 
 | | Original | Bruyant |
 |---|---|---|
@@ -105,7 +105,7 @@ Coupe le document à un point aléatoire et le rotate.
 
 Après une étude d'ablation rigoureuse (tester chaque stratégie individuellement et en combinaison), BART utilise en production :
 - **Text infilling** (la stratégie la plus efficace) + **Sentence Permutation** (qui force la cohérence inter-phrases)
-- Environ **30% des tokens** sont corrompus — c'est un équilibre crucial : trop peu de corruption = le modèle n'apprend pas grand-chose ; trop de corruption = le texte devient incompréhensible et le modèle ne peut pas apprendre
+- Environ **30% des tokens** sont corrompus — ce seuil, hérité de BERT (qui masquait 15% mais avec une corruption moins agressive), a été validé empiriquement par les auteurs. C'est un équilibre crucial : trop peu de corruption = le modèle n'apprend pas grand-chose ; trop de corruption = le texte devient incompréhensible et le modèle ne peut pas apprendre
 - Les spans masqués ont une longueur tirée d'une distribution de Poisson (moyenne 3 tokens) — ce qui crée une variété réaliste de trous à combler
 
 **Données** : même corpus que RoBERTa (160 Go de texte anglais de qualité, filtré et dédupliqué)

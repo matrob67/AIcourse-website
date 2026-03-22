@@ -46,11 +46,18 @@ Le reward model apprend une fonction qui prend un prompt et une réponse et reto
 Donner une note absolue ("cette réponse vaut 7,5/10") est difficile et incohérent entre annotateurs. En revanche, comparer deux réponses ("A est mieux que B") est beaucoup plus naturel et fiable. C'est comme choisir sa pizza préférée dans un menu plutôt que de noter chaque pizza sur 20.
 </Callout>
 
-La loss d'entraînement du reward model est basée sur des comparaisons par paires. Pour chaque paire (réponse préférée `y_w`, réponse rejetée `y_l`) :
+La loss d'entraînement du reward model est basée sur des comparaisons par paires. Pour chaque paire (réponse préférée $y_w$, réponse rejetée $y_l$) au même prompt $x$ :
 
 $$\mathcal{L} = -\log \sigma\left(r(x, y_w) - r(x, y_l)\right)$$
 
-Le modèle est pénalisé quand il donne un score plus élevé à la mauvaise réponse.
+Terme par terme :
+- $r(x, y_w)$ : le score que le reward model donne à la **bonne** réponse
+- $r(x, y_l)$ : le score qu'il donne à la **mauvaise** réponse
+- La soustraction $r(x, y_w) - r(x, y_l)$ : l'écart entre les deux scores. On veut qu'il soit positif (bonne > mauvaise)
+- $\sigma$ : la fonction sigmoïde, qui convertit cet écart en une probabilité entre 0 et 1
+- $-\log(...)$ : transforme cette probabilité en loss — quand la probabilité est haute (le modèle a bien classé), la loss est faible ; quand elle est basse, la loss est forte
+
+En résumé : le reward model est pénalisé quand il donne un score plus élevé à la mauvaise réponse qu'à la bonne.
 
 
 
@@ -70,7 +77,12 @@ La solution : une **pénalité KL** qui empêche le modèle de trop s'éloigner 
 
 $$R_{\text{totale}} = r(x, y) - \beta \cdot D_{KL}(\pi_{RL} \| \pi_{SFT})$$
 
-Le paramètre `beta` règle l'équilibre : trop grand, le modèle ne s'améliore pas ; trop petit, le reward hacking revient.
+Terme par terme :
+- $r(x, y)$ : le score de récompense pour la réponse $y$ au prompt $x$
+- $\pi_{RL}$ : le modèle actuel (celui qu'on entraîne avec PPO)
+- $\pi_{SFT}$ : le modèle de référence figé (la copie d'avant PPO)
+- $D_{KL}(\pi_{RL} \| \pi_{SFT})$ : la divergence KL — mesure à quel point le modèle actuel s'est éloigné de la référence. Plus il dérive, plus ce terme est grand
+- $\beta$ : un coefficient qui contrôle la force de la laisse. Trop grand, le modèle est trop bridé et ne s'améliore pas ; trop petit, la laisse est trop lâche et le reward hacking revient
 
 <Callout type="paper" title={"Le résultat choc d'InstructGPT"}>
 OpenAI a montré que le RLHF pouvait rendre un modèle de **1,3 milliard de paramètres** préféré par les humains à un modèle de **175 milliards** sans alignement. Un modèle 130 fois plus petit peut être plus utile si il est bien aligné. C'est la preuve que l'alignement est au moins aussi important que la taille.
@@ -78,14 +90,17 @@ OpenAI a montré que le RLHF pouvait rendre un modèle de **1,3 milliard de para
 
 ## PPO : l'algorithme sous le capot
 
-PPO maintient quatre modèles en mémoire simultanément — ce qui explique en grande partie pourquoi le RLHF est si coûteux :
+PPO maintient **quatre modèles en mémoire simultanément** — ce qui explique en grande partie pourquoi le RLHF est si coûteux :
 
-1. **Le modèle actuel** (la "politique" qu'on entraîne)
-2. **Le modèle de référence** (le modèle SFT figé, pour calculer la pénalité KL)
-3. **Le reward model** (qui donne les scores)
-4. **Le critic/value model** (qui estime les récompenses futures pour stabiliser l'entraînement)
+1. **Le modèle actuel (policy model)** — c'est le modèle obtenu après le fine-tuning supervisé (étape 1), celui qu'on continue d'entraîner avec PPO. À chaque étape, il génère une réponse à un prompt, et ses poids sont mis à jour en fonction des récompenses reçues. C'est le seul des quatre modèles dont les poids changent pendant l'entraînement PPO.
 
-Le "clipping" de PPO est un mécanisme de sécurité : il limite la taille des mises à jour pour éviter que le modèle ne saute trop loin dans une mauvaise direction.
+2. **Le modèle de référence (reference model)** — une copie du modèle actuel, prise **avant le début de PPO**, qu'on fige et qu'on ne touche jamais. Pourquoi ? Parce qu'au fil de l'entraînement, le modèle actuel peut dériver : il découvre des "exploits" qui obtiennent des scores élevés du reward model sans être réellement utiles (réponses ultra-longues, exagérément confiantes...). La copie figée sert de **laisse** : à chaque étape, on compare les probabilités du modèle actuel à celles de cette copie. Si les deux divergent trop (divergence KL élevée), on pénalise. Ça force le modèle à rester dans le voisinage de ce qu'il était avant PPO.
+
+3. **Le reward model** — entraîné à l'étape 2 sur les préférences humaines, il est aussi figé pendant PPO. Son rôle : prendre le prompt et la réponse générée, et retourner un score. C'est le "juge" automatique qui remplace les annotateurs humains.
+
+4. **Le critic model (value model)** — c'est le modèle le moins intuitif. En RL, on ne veut pas juste savoir "cette réponse a eu un bon score", on veut savoir "cette réponse est-elle **meilleure que ce qu'on attendait** ?". Le critic estime la récompense moyenne qu'on s'attend à recevoir pour un prompt donné (la *value*). La différence entre la récompense réelle et cette estimation s'appelle l'**advantage** : c'est ce signal qui guide réellement la mise à jour des poids. Sans le critic, l'entraînement serait beaucoup plus bruité et instable.
+
+Le **clipping** de PPO est un mécanisme de sécurité supplémentaire : il limite la taille des mises à jour pour éviter que le modèle ne saute trop loin dans une mauvaise direction à chaque étape.
 
 <Callout type="warning" title="Le RLHF est notoirement difficile à implémenter">
 Demandez à n'importe quel ingénieur ML qui a implémenté PPO pour des LLM : les courbes d'entraînement peuvent s'effondrer sans prévenir, le reward hacking est un problème constant, et les hyperparamètres sont extrêmement sensibles. Il n'est pas rare de passer des semaines à déboguer un pipeline RLHF. C'est une des raisons majeures pour lesquelles le DPO (section suivante) a été accueilli avec enthousiasme.

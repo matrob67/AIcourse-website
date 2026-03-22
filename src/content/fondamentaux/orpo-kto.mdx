@@ -31,11 +31,13 @@ $$\mathcal{L}_{\text{ORPO}} = \mathcal{L}_{\text{SFT}}(y_w) + \lambda \cdot \mat
 
 Le premier terme `L_SFT` est la loss de language modeling classique sur la réponse préférée — le modèle apprend à produire ce type de réponse. Le second terme `L_OR` pénalise le modèle quand il attribue une probabilité plus élevée à la réponse rejetée qu'à la réponse préférée.
 
-Ce second terme utilise le **odds ratio** — une mesure classique en statistiques. L'odds ratio compare les "cotes" (au sens probabiliste) des deux réponses :
+Ce second terme utilise l'**odds ratio** (rapport de cotes) — une mesure classique en statistiques, très utilisée en médecine et en paris sportifs. L'idée est simple : au lieu de comparer directement les probabilités des deux réponses, on compare leurs **cotes**. La cote, c'est le ratio "chances pour / chances contre" — comme quand un bookmaker dit "3 contre 1". Si le modèle donne 75% de probabilité à une réponse, sa cote est $0.75 / 0.25 = 3$ (3 chances pour, 1 contre).
+
+L'odds ratio compare les cotes des deux réponses :
 
 $$\text{OR} = \frac{P(y_w|x) \;/\; (1 - P(y_w|x))}{P(y_l|x) \;/\; (1 - P(y_l|x))}$$
 
-Si OR > 1, le modèle préfère correctement la bonne réponse. Si OR < 1, il préfère la mauvaise et est pénalisé.
+Si OR > 1, le modèle "parie" davantage sur la bonne réponse. Si OR < 1, il parie sur la mauvaise et est pénalisé.
 
 <Callout type="info" title={"L'avantage monolithique"}>
 ORPO n'a pas besoin d'un modèle de référence séparé (contrairement au DPO). Les poids originaux jouent ce rôle implicitement. Résultat : un seul modèle en mémoire, un seul entraînement, et des performances compétitives avec DPO sur la plupart des benchmarks.
@@ -70,15 +72,17 @@ KTO intègre cette asymétrie directement dans son objectif d'entraînement. Le 
 
 ### La mécanique
 
-Pour une réponse **désirable** `y_w` (label "bon") :
+L'intuition avant les formules : pour chaque réponse, KTO mesure à quel point le modèle actuel la préfère par rapport au modèle de référence (le ratio $\pi / \pi_{\text{ref}}$, comme dans DPO). Ensuite, il compare ça à une **baseline** — la préférence moyenne du modèle sur le batch. C'est comme noter un élève non pas sur une échelle absolue, mais par rapport à la moyenne de la classe.
+
+Pour une réponse **désirable** `y_w` (label "bon") — la loss est faible si le modèle la préfère *plus que la moyenne* :
 
 $$\mathcal{L}_{\text{KTO}}(y_w) = 1 - \sigma\left(\beta \left(\log \frac{\pi(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - D_{KL}^{\text{ref}}\right)\right)$$
 
-Pour une réponse **indésirable** `y_l` (label "mauvais") :
+Pour une réponse **indésirable** `y_l` (label "mauvais") — la loss est faible si le modèle la préfère *moins que la moyenne* :
 
 $$\mathcal{L}_{\text{KTO}}(y_l) = 1 - \sigma\left(\beta \left(D_{KL}^{\text{ref}} - \log \frac{\pi(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right)$$
 
-Le terme `KL_ref` est une estimation de la divergence KL moyenne sur le batch — il sert de baseline, comme le reward moyen dans le RLHF classique.
+Le terme $D_{KL}^{\text{ref}}$ est cette baseline — la divergence KL moyenne sur le batch. Notez que les formules sont symétriques mais inversées : pour les bonnes réponses, on veut un ratio élevé (au-dessus de la baseline) ; pour les mauvaises, on veut un ratio faible (en dessous).
 
 Les deux formules fonctionnent sur des exemples individuels, pas sur des paires. On peut les mélanger librement dans un batch.
 

@@ -9,6 +9,13 @@ Imaginez un cabinet médical avec 100 spécialistes. Quand vous arrivez avec un 
 
 C'est exactement l'idée derrière les **Mixture of Experts (MoE)** : construire un réseau de neurones avec des centaines de milliards de paramètres, mais n'en activer qu'une petite fraction à chaque calcul. Résultat : la puissance d'un modèle géant, au coût computationnel d'un modèle moyen.
 
+<ImageWithSource
+  src="/images/admin/img-1774202527105.png"
+  alt="Schéma d'une couche MoE avec sélection d'experts"
+  sourceUrl="https://newsletter.maartengrootendorst.com/p/a-visual-guide-to-mixture-of-experts"
+  size="medium"
+/>
+
 ## La sparsité conditionnelle : le concept central
 
 Dans un **Transformer dense** classique (comme les premiers GPT ou LLaMA), chaque token traverse la totalité du réseau. Toutes les couches, tous les neurones, à chaque fois. C'est simple, mais c'est coûteux : doubler la taille du modèle double le coût de chaque requête.
@@ -19,8 +26,6 @@ Un modèle MoE change la donne en remplaçant les couches **feed-forward** --- l
 Un modèle MoE de 100 milliards de paramètres avec 8 experts dont seulement 2 actifs par token n'utilise effectivement que ~25% de ses paramètres à chaque calcul. On obtient la capacité de stockage de connaissances d'un modèle de 100B avec le coût computationnel d'un modèle de ~25B. C'est le cœur de l'efficacité MoE : découpler la capacité (nombre total de paramètres) du coût (nombre de paramètres activés).
 </Callout>
 
-
-
 ## Le mécanisme de Gating : qui va où ?
 
 ### Le gating de Shazeer (l'original)
@@ -29,7 +34,14 @@ Noam Shazeer --- le même chercheur qui a co-inventé l'attention multi-têtes d
 
 $$G(x) = \text{Softmax}(\text{TopK}(x \cdot W_g))$$
 
-Où `W_g` est une matrice de paramètres appris (le routeur s'entraîne en même temps que le reste du modèle), et `TopK` ne conserve que les K meilleurs scores. Tous les autres experts reçoivent un score de zéro --- ils ne sont tout simplement pas activés. C'est la **sparsité** : la majorité du réseau reste éteinte pour chaque token.
+Terme par terme :
+- $x$ : la représentation du token à router (un vecteur)
+- $W_g$ : la matrice de poids du routeur (apprise pendant l'entraînement en même temps que le reste du modèle)
+- $x \cdot W_g$ : produit un score pour chaque expert — "à quel point cet expert est-il pertinent pour ce token ?"
+- $\text{TopK}$ : ne conserve que les K meilleurs scores, met les autres à $-\infty$
+- $\text{Softmax}$ : convertit les scores restants en probabilités qui somment à 1
+
+Tous les experts non sélectionnés reçoivent un score de zéro — ils ne sont tout simplement pas activés. C'est la **sparsité** : la majorité du réseau reste éteinte pour chaque token. Tous les autres experts reçoivent un score de zéro --- ils ne sont tout simplement pas activés. C'est la **sparsité** : la majorité du réseau reste éteinte pour chaque token.
 
 ### Le routage Top-K en détail
 
@@ -59,7 +71,12 @@ Sans contrainte, le routeur converge vers une solution paresseuse : il envoie pr
 
 $$L_{\text{balance}} = \alpha \cdot N \cdot \sum_i f_i \cdot P_i$$
 
-Ici, $f_i$ est la fraction de tokens effectivement envoyés à l'expert $i$, et $P_i$ la probabilité moyenne de routage vers cet expert. Cette perte pénalise les déséquilibres : si un expert reçoit beaucoup plus que sa part, le produit $f_i \cdot P_i$ augmente et la perte grimpe. L'entraînement pousse alors le routeur vers une distribution plus uniforme.
+Terme par terme :
+- $\alpha$ : un coefficient qui contrôle la force de la pénalité de balancement (typiquement 0.01)
+- $N$ : le nombre total d'experts
+- $f_i$ : la fraction réelle de tokens envoyés à l'expert $i$ dans le batch (ce qui s'est passé)
+- $P_i$ : la probabilité moyenne que le routeur assigne à l'expert $i$ (ce que le routeur "voudrait" faire)
+- Le produit $f_i \cdot P_i$ est grand quand un expert reçoit beaucoup de tokens ET que le routeur veut continuer à lui en envoyer — c'est exactement le déséquilibre qu'on veut pénaliser Cette perte pénalise les déséquilibres : si un expert reçoit beaucoup plus que sa part, le produit $f_i \cdot P_i$ augmente et la perte grimpe. L'entraînement pousse alors le routeur vers une distribution plus uniforme.
 
 <Callout type="paper" title="Résultats du Switch Transformer">
 Le Switch Transformer atteint des gains de vitesse de 4x à 7x en pré-entraînement par rapport au modèle dense T5 de référence, avec des performances similaires ou supérieures sur les benchmarks. Ce résultat a déclenché la course aux architectures MoE dans l'industrie --- prouvant que la sparsité conditionnelle n'était pas juste une curiosité académique.

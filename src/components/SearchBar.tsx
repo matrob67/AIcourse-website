@@ -13,6 +13,7 @@ interface SearchResult {
   partId: string;
   slug: string;
   href: string;
+  keywords: string;
 }
 
 interface SearchBarProps {
@@ -34,6 +35,7 @@ for (const part of courseParts) {
         partId: part.id,
         slug: lesson.slug,
         href: `/${part.id}/${lesson.slug}`,
+        keywords: (lesson.keywords ?? []).join(" "),
       });
     }
   }
@@ -53,7 +55,7 @@ function search(query: string): SearchResult[] {
     .filter((t) => t.length > 0);
   return searchIndex.filter((item) => {
     const haystack = normalize(
-      `${item.lessonTitle} ${item.moduleTitle} ${item.partTitle}`
+      `${item.lessonTitle} ${item.moduleTitle} ${item.partTitle} ${item.keywords}`
     );
     return terms.every((term) => haystack.includes(term));
   });

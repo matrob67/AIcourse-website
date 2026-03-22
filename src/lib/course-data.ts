@@ -5,6 +5,7 @@ export interface Lesson {
   slug: string;
   arxiv?: string[];
   links?: { label: string; url: string }[];
+  keywords?: string[];
 }
 
 export interface Module {
@@ -65,7 +66,7 @@ export const courseParts: Part[] = [
           { id: "lstm-gru", number: 20, title: "LSTM et GRU : résoudre le vanishing gradient", slug: "lstm-gru" },
           { id: "seq2seq-attention", number: 21, title: "Seq2Seq et le mécanisme d'attention (Bahdanau)", slug: "seq2seq-attention", arxiv: ["1409.0473"] },
           { id: "autoencoders", number: 22, title: "Autoencoders : compression et reconstruction", slug: "autoencoders" },
-          { id: "vae", number: 23, title: "Variational Autoencoders (VAE)", slug: "vae", arxiv: ["1312.6114"] },
+          { id: "vae", number: 23, title: "Variational Autoencoders (VAE)", slug: "vae", arxiv: ["1312.6114"], keywords: ["ELBO", "KL divergence", "reparameterization trick", "prior", "posterior", "espace latent"] },
           { id: "gan", number: 24, title: "Generative Adversarial Networks (GAN)", slug: "gan", arxiv: ["1406.2661"] },
           { id: "gan-advanced", number: 25, title: "Architectures GAN avancées : StyleGAN, CycleGAN, WGAN", slug: "gan-advanced" },
           { id: "diffusion-models-basics", number: 26, title: "Diffusion Models : principes fondamentaux", slug: "diffusion-models-basics", arxiv: ["2006.11239"] },
@@ -112,10 +113,10 @@ export const courseParts: Part[] = [
           { id: "pretraining", number: 49, title: "Pré-entraînement : données, objectifs (CLM, MLM, span corruption)", slug: "pretraining" },
           { id: "pretraining-datasets", number: 50, title: "Les datasets de pré-entraînement : Common Crawl, The Pile, RedPajama, FineWeb", slug: "pretraining-datasets" },
           { id: "finetuning-overview", number: 51, title: "Full fine-tuning vs parameter-efficient fine-tuning", slug: "finetuning-overview" },
-          { id: "rlhf", number: 52, title: "RLHF : Reinforcement Learning from Human Feedback", slug: "rlhf", arxiv: ["2203.02155"] },
-          { id: "dpo", number: 53, title: "DPO : Direct Preference Optimization", slug: "dpo", arxiv: ["2305.18290"] },
+          { id: "rlhf", number: 52, title: "RLHF : Reinforcement Learning from Human Feedback", slug: "rlhf", arxiv: ["2203.02155"], keywords: ["PPO", "reward model", "policy model", "critic model", "divergence KL"] },
+          { id: "dpo", number: 53, title: "DPO : Direct Preference Optimization", slug: "dpo", arxiv: ["2305.18290"], keywords: ["Bradley-Terry", "preference learning", "RLHF alternative"] },
           { id: "constitutional-ai", number: 54, title: "Constitutional AI", slug: "constitutional-ai", arxiv: ["2212.08073"] },
-          { id: "orpo-kto", number: 55, title: "ORPO, KTO et les alternatives à RLHF/DPO", slug: "orpo-kto" },
+          { id: "orpo-kto", number: 55, title: "ORPO, KTO et les alternatives à RLHF/DPO", slug: "orpo-kto", keywords: ["odds ratio", "Kahneman-Tversky", "preference optimization"] },
           { id: "emergent-abilities", number: 56, title: "Emergent abilities et phase transitions dans les LLM", slug: "emergent-abilities" },
           { id: "in-context-learning", number: 57, title: "In-context learning : comment ça marche ?", slug: "in-context-learning" },
           { id: "prompt-engineering", number: 58, title: "Prompt engineering : zero-shot, few-shot, system prompts", slug: "prompt-engineering" },
@@ -144,7 +145,7 @@ export const courseParts: Part[] = [
           { id: "moe-practice", number: 62, title: "MoE en pratique : Mixtral, DeepSeek-MoE, Grok", slug: "moe-practice", arxiv: ["2401.04088"] },
           { id: "expert-routing", number: 63, title: "Expert choice routing vs token choice routing", slug: "expert-routing" },
           { id: "s4", number: 64, title: "State Space Models : S4", slug: "s4", arxiv: ["2111.00396"] },
-          { id: "mamba", number: 65, title: "Mamba : selective state spaces", slug: "mamba", arxiv: ["2312.00752"] },
+          { id: "mamba", number: 65, title: "Mamba : selective state spaces", slug: "mamba", arxiv: ["2312.00752"], keywords: ["SSM", "State Space Model", "sélection", "scan parallèle", "LTI"] },
           { id: "mamba2-jamba", number: 66, title: "Mamba-2 et Jamba : hybrides SSM + Attention", slug: "mamba2-jamba", arxiv: ["2405.21060"] },
           { id: "rwkv", number: 67, title: "RWKV : RNN linéaire à l'échelle des Transformers", slug: "rwkv", arxiv: ["2305.13048"] },
           { id: "retnet", number: 68, title: "RetNet (Retention Networks)", slug: "retnet", arxiv: ["2307.08621"] },
@@ -158,14 +159,14 @@ export const courseParts: Part[] = [
         lessons: [
           { id: "mqa", number: 71, title: "Multi-Query Attention (MQA)", slug: "mqa", arxiv: ["1911.02150"] },
           { id: "gqa", number: 72, title: "Grouped Query Attention (GQA)", slug: "gqa", arxiv: ["2305.13245"] },
-          { id: "flash-attention", number: 73, title: "Flash Attention : algorithme et impact", slug: "flash-attention", arxiv: ["2205.14135"] },
+          { id: "flash-attention", number: 73, title: "Flash Attention : algorithme et impact", slug: "flash-attention", arxiv: ["2205.14135"], keywords: ["IO-aware", "memory-bound", "online softmax", "tiling", "SRAM", "HBM"] },
           { id: "flash-attention-2", number: 74, title: "Flash Attention 2", slug: "flash-attention-2", arxiv: ["2307.08691"] },
           { id: "flash-attention-3", number: 75, title: "Flash Attention 3 et les optimisations matérielles", slug: "flash-attention-3" },
           { id: "sliding-window-attention", number: 76, title: "Sliding Window Attention (Mistral)", slug: "sliding-window-attention" },
           { id: "ring-attention", number: 77, title: "Ring Attention : contextes ultra-longs", slug: "ring-attention", arxiv: ["2310.01889"] },
           { id: "sparse-attention", number: 78, title: "Sparse attention patterns : Longformer, BigBird", slug: "sparse-attention" },
           { id: "linear-attention", number: 79, title: "Linear attention et alternatives sub-quadratiques", slug: "linear-attention" },
-          { id: "kv-cache", number: 80, title: "KV Cache : fonctionnement, compression, quantification", slug: "kv-cache" },
+          { id: "kv-cache", number: 80, title: "KV Cache : fonctionnement, compression, quantification", slug: "kv-cache", keywords: ["MLA", "Multi-Head Latent Attention", "prefill", "decode"] },
           { id: "rope", number: 81, title: "RoPE (Rotary Position Embedding) en détail", slug: "rope", arxiv: ["2104.09864"] },
           { id: "alibi", number: 82, title: "ALiBi et les alternatives à RoPE", slug: "alibi", arxiv: ["2108.12409"] },
           { id: "context-extension", number: 83, title: "Context window extension : YaRN, NTK-aware scaling", slug: "context-extension" },
@@ -198,7 +199,7 @@ export const courseParts: Part[] = [
         id: "peft",
         title: "Fine-tuning efficient (PEFT)",
         lessons: [
-          { id: "lora", number: 101, title: "LoRA (Low-Rank Adaptation) en détail", slug: "lora", arxiv: ["2106.09685"] },
+          { id: "lora", number: 101, title: "LoRA (Low-Rank Adaptation) en détail", slug: "lora", arxiv: ["2106.09685"], keywords: ["low-rank", "matrice de rang faible", "fine-tuning efficient", "PEFT"] },
           { id: "qlora", number: 102, title: "QLoRA : fine-tuning 4-bit", slug: "qlora", arxiv: ["2305.14314"] },
           { id: "dora", number: 103, title: "DoRA : Weight-Decomposed Low-Rank Adaptation", slug: "dora", arxiv: ["2402.09353"] },
           { id: "adapters", number: 104, title: "Adapters : modules additifs", slug: "adapters", arxiv: ["1902.00751"] },
@@ -207,7 +208,7 @@ export const courseParts: Part[] = [
           { id: "ia3", number: 107, title: "IA3 (Infused Adapter by Inhibiting and Amplifying Inner Activations)", slug: "ia3", arxiv: ["2205.05638"] },
           { id: "peft-comparison", number: 108, title: "PEFT : comparatif des méthodes, quand utiliser quoi", slug: "peft-comparison" },
           { id: "instruction-tuning", number: 109, title: "Instruction tuning : FLAN, Alpaca, OpenHermes, Orca", slug: "instruction-tuning" },
-          { id: "rlhf-practice", number: 110, title: "RLHF en pratique : outils (TRL, OpenRLHF)", slug: "rlhf-practice" },
+          { id: "rlhf-practice", number: 110, title: "RLHF en pratique : outils (TRL, OpenRLHF)", slug: "rlhf-practice", keywords: ["GRPO", "PPO", "DPO", "Group Relative Policy Optimization"] },
           { id: "dpo-practice", number: 111, title: "DPO en pratique : datasets, hyperparamètres", slug: "dpo-practice" },
           { id: "model-merging-ties", number: 112, title: "Model merging : TIES", slug: "model-merging-ties", arxiv: ["2306.01708"] },
           { id: "model-merging-dare", number: 113, title: "Model merging : DARE, model soups, SLERP", slug: "model-merging-dare", arxiv: ["2311.03099"] },
@@ -218,7 +219,7 @@ export const courseParts: Part[] = [
         id: "inference",
         title: "Inférence & Optimisation",
         lessons: [
-          { id: "quantization-concepts", number: 115, title: "Quantization : concepts (INT8, INT4, FP4, NF4)", slug: "quantization-concepts" },
+          { id: "quantization-concepts", number: 115, title: "Quantization : concepts (INT8, INT4, FP4, NF4)", slug: "quantization-concepts", keywords: ["NormalFloat", "absmax", "zero-point", "calibration", "PTQ", "QAT"] },
           { id: "gptq", number: 116, title: "GPTQ : quantization post-training", slug: "gptq", arxiv: ["2210.17323"] },
           { id: "awq", number: 117, title: "AWQ (Activation-aware Weight Quantization)", slug: "awq", arxiv: ["2306.00978"] },
           { id: "gguf-llamacpp", number: 118, title: "GGUF et llama.cpp : quantization pour CPU/edge", slug: "gguf-llamacpp" },
@@ -296,13 +297,13 @@ export const courseParts: Part[] = [
           { id: "self-consistency", number: 166, title: "Self-consistency et majority voting", slug: "self-consistency", arxiv: ["2203.11171"] },
           { id: "openai-o1", number: 167, title: "OpenAI o1 : reasoning at inference time", slug: "openai-o1" },
           { id: "openai-o3-o4", number: 168, title: "OpenAI o3/o4-mini : évolution du reasoning", slug: "openai-o3-o4" },
-          { id: "deepseek-r1", number: 169, title: "DeepSeek R1 : open-source reasoning", slug: "deepseek-r1", arxiv: ["2501.12948"] },
+          { id: "deepseek-r1", number: 169, title: "DeepSeek R1 : open-source reasoning", slug: "deepseek-r1", arxiv: ["2501.12948"], keywords: ["GRPO", "Group Relative Policy Optimization", "distillation", "reasoning"] },
           { id: "test-time-compute", number: 170, title: "Test-time compute scaling : plus de compute à l'inférence", slug: "test-time-compute" },
           { id: "prm-orm", number: 171, title: "Process Reward Models (PRM) vs Outcome Reward Models (ORM)", slug: "prm-orm", arxiv: ["2305.20050"] },
           { id: "self-verification", number: 172, title: "Self-verification et self-correction dans les LLM", slug: "self-verification" },
           { id: "magistral", number: 173, title: "Magistral (Mistral) : reasoning multilingue", slug: "magistral" },
           { id: "mcts-reasoning", number: 174, title: "MCTS (Monte Carlo Tree Search) pour le reasoning LLM", slug: "mcts-reasoning" },
-          { id: "rlvr", number: 175, title: "Reward modeling et RLVR (RL with Verifiable Rewards)", slug: "rlvr" },
+          { id: "rlvr", number: 175, title: "Reward modeling et RLVR (RL with Verifiable Rewards)", slug: "rlvr", keywords: ["GRPO", "oDPO", "online DPO", "Group Relative Policy Optimization", "récompenses vérifiables"] },
         ],
       },
       {
