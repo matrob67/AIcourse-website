@@ -138,31 +138,38 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
     setSearching(false);
   };
 
+  const [downloadError, setDownloadError] = useState("");
+
   // Select a search result → download locally
   const selectSearchImage = async (img: SearchResult) => {
     setSelectedSearchImage(img);
     setDownloading(true);
+    setDownloadError("");
     setSource(img.source);
-    setSourceUrl(img.url);
-    try {
-      const res = await fetch("/api/admin/download-image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: img.url }),
-      });
-      const data = await res.json();
-      if (data.localUrl) {
-        setImagePreview(data.localUrl);
-        // Auto-generate caption with Mistral
-        autoAnalyze(data.localUrl, img.source);
-      } else {
-        alert("Erreur: " + (data.error || "Impossible de télécharger"));
-        setSelectedSearchImage(null);
-      }
-    } catch {
-      alert("Erreur de téléchargement");
-      setSelectedSearchImage(null);
+    setSourceUrl(img.sourceUrl || img.url);
+
+    // Try full URL first, then thumbnail as fallback
+    const urlsToTry = [img.url, img.thumb].filter(Boolean);
+
+    for (const tryUrl of urlsToTry) {
+      try {
+        const res = await fetch("/api/admin/download-image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: tryUrl }),
+        });
+        const data = await res.json();
+        if (data.localUrl) {
+          setImagePreview(data.localUrl);
+          setDownloading(false);
+          autoAnalyze(data.localUrl, img.source);
+          return; // success
+        }
+      } catch { /* try next */ }
     }
+
+    // All URLs failed
+    setDownloadError("Image bloquée par le site source. Essaie une autre.");
     setDownloading(false);
   };
 
@@ -406,6 +413,11 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
                 {downloading && (
                   <div className="mt-2 text-xs text-center py-2 rounded-lg" style={{ background: "var(--card-bg)", color: "var(--accent)" }}>
                     Téléchargement + analyse IA en cours...
+                  </div>
+                )}
+                {downloadError && (
+                  <div className="mt-2 text-xs text-center py-2 rounded-lg" style={{ background: "#fef2f2", color: "#991b1b" }}>
+                    {downloadError}
                   </div>
                 )}
               </div>
