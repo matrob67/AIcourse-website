@@ -1,0 +1,166 @@
+---
+title: "Méthodes de gradient : convergence, learning rate, momentum"
+description: "Descente de gradient, SGD, learning rate, momentum et conditions de convergence : les algorithmes fondamentaux de l'optimisation en deep learning."
+---
+
+## La descente de gradient : l'algorithme de base
+
+Si l'entraînement d'un réseau de neurones est une randonnée vers le fond d'une vallée, la descente de gradient est la stratégie la plus naturelle : à chaque pas, regarder la pente sous ses pieds et descendre dans la direction la plus raide.
+
+### La formule
+
+$$\theta_{t+1} = \theta_t - \alpha \nabla L(\theta_t)$$
+
+À chaque itération :
+- On calcule le gradient $\nabla L(\theta_t)$ : la direction de plus forte montée de la loss
+- On fait un pas dans la direction opposée (on veut descendre, pas monter)
+- La taille du pas est contrôlée par le learning rate $\alpha$
+
+C'est l'algorithme le plus simple d'optimisation, et pourtant c'est la base de tout l'entraînement en deep learning.
+
+## Le learning rate : le paramètre le plus important
+
+### L'effet du learning rate
+
+Le learning rate $\alpha$ contrôle la taille de chaque pas. C'est probablement l'hyperparamètre le plus critique en deep learning.
+
+- **$\alpha$ trop grand** : les pas sont trop grands, on "saute" par-dessus les minima. La loss oscille ou diverge complètement vers l'infini.
+- **$\alpha$ trop petit** : les pas sont minuscules, la convergence est astronomiquement lente. On gaspille du compute.
+- **$\alpha$ juste** : la convergence est rapide et stable.
+
+### Analogie
+
+Imaginez descendre une colline dans le brouillard. Si vous faites de grands pas, vous risquez de dévaler la pente et de vous retrouver de l'autre côté de la vallée. Si vous faites des pas trop prudents, vous mettrez des heures à atteindre le fond. Le bon pas dépend de la raideur de la pente.
+
+### Learning rate schedules
+
+En pratique, on ne garde presque jamais un learning rate constant. Les stratégies courantes :
+
+- **Warmup** : commencer avec un $\alpha$ très petit et l'augmenter progressivement. Cela stabilise les premières itérations quand les gradients sont bruités.
+- **Cosine decay** : diminuer $\alpha$ selon un cosinus, pour "atterrir" doucement dans un minimum.
+- **Step decay** : diviser $\alpha$ par un facteur à des étapes prédéfinies.
+- **Warmup + cosine** : la combinaison la plus populaire dans l'entraînement des LLM.
+
+$$\alpha_t = \alpha_{\max} \cdot \frac{1}{2}\left(1 + \cos\left(\frac{\pi t}{T}\right)\right)$$
+
+## SGD : la version stochastique
+
+### Le problème du gradient complet
+
+Le gradient "exact" nécessite de calculer la perte sur toutes les données d'entraînement :
+
+$$\nabla L(\theta) = \frac{1}{N} \sum_{i=1}^N \nabla \ell(x_i, y_i, \theta)$$
+
+Pour un dataset de millions d'exemples, c'est extrêmement coûteux pour un seul pas d'optimisation.
+
+### La solution : le mini-batch
+
+Le Stochastic Gradient Descent (SGD) estime le gradient sur un sous-ensemble aléatoire (mini-batch) de $B$ exemples :
+
+$$\nabla \hat{L}(\theta) = \frac{1}{B} \sum_{i=1}^B \nabla \ell(x_i, y_i, \theta)$$
+
+C'est une estimation bruitée du vrai gradient, mais en espérance elle est correcte :
+
+$$E[\nabla \hat{L}(\theta)] = \nabla L(\theta)$$
+
+### Taille du batch
+
+- **Petit batch** (32, 64) : gradient bruité, bonne exploration, régularisation implicite, mais utilise mal le parallélisme GPU
+- **Grand batch** (4096, 8192) : gradient plus précis, meilleure utilisation GPU, mais peut converger vers des minima plus étroits et nécessite des learning rates plus grands
+- **Règle pratique** : si on multiplie le batch par $k$, on peut souvent multiplier le learning rate par $\sqrt{k}$ (linear scaling rule)
+
+## Momentum : accumuler de la vitesse
+
+### Le problème des plateaux et des vallées étroites
+
+Le SGD basique a deux problèmes :
+- Sur un plateau (gradient presque nul), il avance à peine
+- Dans une vallée étroite, il oscille d'un bord à l'autre au lieu de descendre le long de la vallée
+
+### La solution : le momentum
+
+Inspiré de la physique (une bille qui roule accumule de la vitesse), le momentum maintient une "mémoire" des gradients passés :
+
+$$v_{t+1} = \beta v_t + \nabla L(\theta_t)$$
+$$\theta_{t+1} = \theta_t - \alpha v_{t+1}$$
+
+Le paramètre $\beta$ (typiquement 0.9) contrôle l'inertie. Les gradients cohérents s'accumulent (accélération dans la bonne direction), tandis que les oscillations s'annulent.
+
+### Analogie
+
+Une bille dans un bol oscille d'abord, puis se stabilise au fond grâce à la friction. Sans momentum, SGD est comme une bille sans inertie qui s'arrête dès que la pente est nulle. Avec momentum, la bille traverse les petites bosses et les zones plates grâce à sa vitesse accumulée.
+
+### Nesterov momentum
+
+Une variante améliorée qui "regarde devant" avant de calculer le gradient :
+
+$$v_{t+1} = \beta v_t + \nabla L(\theta_t - \alpha \beta v_t)$$
+
+Au lieu de calculer le gradient à la position actuelle, on le calcule à la position où le momentum nous emmènerait. Cela permet une correction anticipée et améliore souvent la convergence.
+
+## Optimiseurs adaptatifs
+
+### L'idée
+
+Au lieu d'utiliser le même learning rate pour tous les paramètres, s'adapter à chaque paramètre individuellement. Les paramètres avec de grands gradients fréquents ont besoin d'un petit learning rate, et inversement.
+
+### Adam : le standard
+
+Adam (Adaptive Moment Estimation) combine le momentum et l'adaptation du learning rate :
+
+$$m_t = \beta_1 m_{t-1} + (1 - \beta_1) g_t \quad \text{(premier moment : moyenne mobile du gradient)}$$
+$$v_t = \beta_2 v_{t-1} + (1 - \beta_2) g_t^2 \quad \text{(second moment : moyenne mobile du gradient au carré)}$$
+$$\hat{m}_t = \frac{m_t}{1 - \beta_1^t}, \quad \hat{v}_t = \frac{v_t}{1 - \beta_2^t} \quad \text{(correction du biais)}$$
+$$\theta_{t+1} = \theta_t - \frac{\alpha}{\sqrt{\hat{v}_t} + \epsilon} \hat{m}_t$$
+
+Les hyperparamètres par défaut ($\beta_1 = 0.9$, $\beta_2 = 0.999$, $\epsilon = 10^{-8}$) fonctionnent remarquablement bien dans la plupart des cas.
+
+### AdamW : Adam avec weight decay découplé
+
+Adam classique applique le weight decay au gradient modifié, ce qui interagit mal avec l'adaptation. AdamW découple les deux :
+
+$$\theta_{t+1} = \theta_t - \alpha \left(\frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon} + \lambda \theta_t\right)$$
+
+C'est l'optimiseur standard pour l'entraînement des transformers et des LLM.
+
+## Conditions de convergence
+
+### Smoothness (lissage)
+
+Si la loss est $L$-lisse (le gradient ne varie pas trop vite), la descente de gradient converge avec :
+
+$$\alpha \leq \frac{1}{L}$$
+
+Un learning rate supérieur à $1/L$ risque de diverger. C'est la justification théorique du fait que "trop grand = diverge".
+
+### Taux de convergence
+
+Pour une fonction convexe et lisse :
+- **Gradient descent** : convergence en $O(1/T)$ — après $T$ itérations, l'erreur est proportionnelle à $1/T$
+- **Avec momentum** : convergence en $O(1/T^2)$ — beaucoup plus rapide
+- **Fortement convexe** : convergence exponentielle $O(e^{-T/\kappa})$
+
+Pour les fonctions non convexes (deep learning), ces garanties ne s'appliquent pas directement, mais elles guident l'intuition.
+
+## Le paysage en haute dimension
+
+### Saddle points partout
+
+Dans un espace à $d$ dimensions, un point critique a $d$ directions de courbure. Pour être un minimum local, toutes les $d$ courbures doivent être positives. La probabilité que cela arrive "par hasard" est de l'ordre de $2^{-d}$, astronomiquement petite quand $d$ se compte en millions.
+
+Résultat : la quasi-totalité des points critiques en haute dimension sont des points selle, pas des minima locaux. La descente de gradient ne reste pas "bloquée" dans des minima locaux ; le vrai défi est de traverser les points selle et les plateaux.
+
+### Pourquoi SGD traverse les saddle points
+
+Le bruit stochastique de SGD est la clé. À un point selle, le gradient moyen est nul, mais le gradient bruité fluctue. Ces fluctuations poussent la trajectoire dans les directions de courbure négative (descente), permettant de s'échapper.
+
+Un gradient exact (batch complet) resterait bloqué indéfiniment à un point selle. Le bruit de SGD est un avantage, pas un inconvénient.
+
+## Ce qu'il faut retenir
+
+- La descente de gradient est l'algorithme fondamental : $\theta_{t+1} = \theta_t - \alpha \nabla L(\theta_t)$
+- Le learning rate est l'hyperparamètre le plus critique ; on utilise des schedules (warmup + cosine decay)
+- SGD estime le gradient sur un mini-batch, ce qui est bruité mais correct en espérance
+- Le momentum accumule la vitesse pour traverser plateaux et vallées étroites
+- Adam/AdamW adaptent le learning rate par paramètre et sont le standard pour les transformers
+- En haute dimension, les saddle points dominent et le bruit de SGD aide à les traverser

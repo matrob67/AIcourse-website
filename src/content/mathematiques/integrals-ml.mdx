@@ -1,0 +1,128 @@
+---
+title: "Intégrales en ML : marginalisation et espérance"
+description: "Pourquoi les intégrales apparaissent en machine learning, comment l'espérance et la marginalisation s'expriment sous forme d'intégrales, et comment les approximations Monte Carlo rendent ces calculs possibles."
+---
+
+## L'intégrale : une somme continue
+
+Tu connais la somme discrète : additionner une liste de nombres. L'intégrale, c'est la même idée, mais pour une infinité de valeurs. Au lieu d'additionner des termes séparés, on "somme" les valeurs d'une fonction le long d'un continuum.
+
+Imagine que tu veux mesurer l'aire d'un lac sur une carte. Tu pourrais découper la zone en petits carrés et compter combien tombent dans le lac. Plus les carrés sont petits, plus l'estimation est précise. À la limite, quand les carrés deviennent infiniment petits, tu obtiens l'aire exacte -- c'est l'intégrale.
+
+$$\int_a^b f(x) \, dx = \lim_{n \to \infty} \sum_{i=1}^{n} f(x_i) \cdot \Delta x$$
+
+En ML, les intégrales n'apparaissent pas pour calculer des aires, mais pour deux opérations fondamentales : l'**espérance** et la **marginalisation**.
+
+## L'espérance : la moyenne pondérée par les probabilités
+
+L'espérance d'une variable aléatoire continue $X$ avec densité de probabilité $p(x)$ est :
+
+$$\mathbb{E}[X] = \int_{-\infty}^{+\infty} x \cdot p(x) \, dx$$
+
+C'est la "moyenne" de $X$, mais pas une simple moyenne arithmétique. Chaque valeur $x$ est pondérée par sa probabilité $p(x)$. Les valeurs probables comptent plus que les valeurs rares.
+
+### Analogie : le centre de gravité
+
+Imagine une barre métallique dont la densité varie le long de sa longueur. Le centre de gravité de cette barre est exactement l'espérance : c'est le point d'équilibre, la "position moyenne" pondérée par la masse. Si la barre est plus lourde à gauche, le centre de gravité est décalé vers la gauche.
+
+### L'espérance d'une fonction
+
+Plus généralement, si on veut la moyenne de $g(X)$ :
+
+$$\mathbb{E}[g(X)] = \int g(x) \cdot p(x) \, dx$$
+
+En ML, $g$ peut être la loss, une métrique, ou n'importe quelle quantité d'intérêt. La **loss attendue** sur la distribution des données est :
+
+$$\mathcal{R}(\theta) = \mathbb{E}_{(x, y) \sim p_{\text{data}}}[\ell(f_\theta(x), y)] = \int \ell(f_\theta(x), y) \cdot p(x, y) \, dx \, dy$$
+
+C'est le **risque** -- la loss moyenne sur toutes les données possibles, pas seulement celles de l'ensemble d'entraînement. C'est ce qu'on essaie vraiment de minimiser. La loss empirique (sur le dataset) en est une approximation.
+
+## La marginalisation : éliminer une variable
+
+La marginalisation est l'opération qui consiste à "se débarrasser" d'une variable en intégrant sur toutes ses valeurs possibles. Si on a la distribution jointe $p(x, y)$ et qu'on veut la distribution de $x$ seul :
+
+$$p(x) = \int p(x, y) \, dy$$
+
+On somme (intègre) sur toutes les valeurs possibles de $y$. L'information sur $y$ est "moyennée" -- on ne sait plus rien sur $y$, mais on a la distribution complète de $x$.
+
+### Exemple concret
+
+Imagine que tu as un modèle de prédiction météo qui dépend de la température $T$ et de l'humidité $H$ : $p(\text{pluie} \mid T, H)$. Tu connais la distribution jointe $p(T, H)$, mais tu veux prédire la pluie **quelle que soit** la température. Tu marginalises sur $T$ :
+
+$$p(\text{pluie} \mid H) = \int p(\text{pluie} \mid T, H) \cdot p(T \mid H) \, dT$$
+
+Tu considères toutes les températures possibles, pondérées par leur probabilité, et tu obtiens une prédiction qui ne dépend plus que de $H$.
+
+### Marginalisation en ML bayésien
+
+En approche bayésienne, les paramètres du modèle $\theta$ ont une distribution a posteriori $p(\theta \mid \text{data})$. Pour faire une prédiction sur une nouvelle entrée $x^*$, on marginalise sur $\theta$ :
+
+$$p(y^* \mid x^*, \text{data}) = \int p(y^* \mid x^*, \theta) \cdot p(\theta \mid \text{data}) \, d\theta$$
+
+Au lieu de fixer $\theta$ à une valeur unique (comme en ML classique), on moyenne les prédictions de **tous les modèles possibles**, pondérés par leur probabilité a posteriori. C'est en théorie la meilleure chose à faire -- mais cette intégrale est presque toujours impossible à calculer exactement.
+
+## Le problème : les intégrales sont souvent intractables
+
+En basse dimension (1, 2, 3 variables), on peut souvent calculer les intégrales analytiquement ou numériquement. Mais en ML, les intégrales sont en **très haute dimension**. Marginaliser sur les paramètres d'un réseau de neurones, c'est intégrer sur des millions de dimensions. Aucune méthode d'intégration numérique classique ne fonctionne en dimension si élevée -- c'est la **malédiction de la dimensionnalité**.
+
+Prenons un exemple simple : si on découpe chaque dimension en 10 points, en dimension 100, on aurait $10^{100}$ points à évaluer. C'est plus que le nombre d'atomes dans l'univers observable. Les méthodes sur grille sont totalement inutilisables.
+
+## La solution : approximation Monte Carlo
+
+L'idée de Monte Carlo est simple et élégante : au lieu de sommer sur tous les points possibles, on **tire des échantillons** aléatoires de la distribution et on fait la moyenne.
+
+$$\mathbb{E}[g(X)] = \int g(x) \cdot p(x) \, dx \approx \frac{1}{N} \sum_{i=1}^{N} g(x_i), \quad x_i \sim p(x)$$
+
+On remplace l'intégrale (somme continue sur une infinité de points) par une somme finie sur $N$ échantillons tirés de $p(x)$. Par la **loi des grands nombres**, cette estimation converge vers la vraie valeur quand $N$ augmente.
+
+### Pourquoi ça marche en haute dimension
+
+La beauté de Monte Carlo, c'est que le taux de convergence est $O(1/\sqrt{N})$ **quelle que soit la dimension**. Qu'on soit en dimension 2 ou en dimension 10 millions, il faut le même nombre d'échantillons pour atteindre une précision donnée. C'est pourquoi Monte Carlo est la méthode de choix pour l'intégration en haute dimension.
+
+### Variance et nombre d'échantillons
+
+L'estimation Monte Carlo est **non biaisée** (sa moyenne est la vraie valeur), mais elle a de la **variance** : chaque estimation est légèrement différente. Plus on tire d'échantillons, plus la variance diminue. En pratique, on a besoin de quelques centaines à quelques milliers d'échantillons pour des estimations raisonnables.
+
+## Applications majeures en deep learning
+
+### Les Variational Autoencoders (VAE)
+
+Les VAE sont l'application la plus directe de ces concepts. Le VAE maximise une borne inférieure (ELBO) de la log-vraisemblance marginale :
+
+$$\ln p(x) = \ln \int p(x \mid z) \cdot p(z) \, dz$$
+
+Cette intégrale sur l'espace latent $z$ est intractable. La solution du VAE :
+
+1. Introduire une distribution approchée $q_\phi(z \mid x)$ (l'encodeur)
+2. Dériver une borne inférieure, l'**ELBO** :
+
+$$\text{ELBO} = \mathbb{E}_{z \sim q_\phi(z|x)}[\ln p_\theta(x \mid z)] - D_{KL}(q_\phi(z \mid x) \| p(z))$$
+
+3. Estimer le premier terme par Monte Carlo : tirer des $z$ de $q_\phi$, calculer $\ln p_\theta(x \mid z)$, et moyenner.
+
+Le **reparameterization trick** ($z = \mu + \sigma \cdot \epsilon$, avec $\epsilon \sim \mathcal{N}(0, 1)$) permet de rétropropager le gradient à travers cet échantillonnage.
+
+### L'inférence bayésienne approchée
+
+L'inférence variationnelle remplace le calcul exact du postérieur $p(\theta \mid \text{data})$ par l'optimisation d'une distribution approchée $q(\theta)$. On minimise la divergence KL entre $q(\theta)$ et le vrai postérieur, ce qui revient à maximiser l'ELBO. Les intégrales sont estimées par Monte Carlo.
+
+### Modèles bayésiens et incertitude
+
+Les réseaux bayésiens (comme MC Dropout ou les ensembles) utilisent la marginalisation pour estimer l'**incertitude** des prédictions. Au lieu d'une seule prédiction, on en obtient une distribution. L'écart de cette distribution mesure à quel point le modèle est "sûr" de sa réponse.
+
+### Modèles de diffusion
+
+Les modèles de diffusion (DDPM, Stable Diffusion) reposent aussi sur des espérances et des marginalisations. L'objectif d'entraînement est une espérance sur le bruit et le timestep :
+
+$$\mathcal{L} = \mathbb{E}_{t, \epsilon, x_0}\left[\|\epsilon - \epsilon_\theta(x_t, t)\|^2\right]$$
+
+Chaque batch d'entraînement est une estimation Monte Carlo de cette espérance.
+
+## Points clés à retenir
+
+- L'**intégrale** est une somme continue, utilisée en ML pour calculer des espérances et marginaliser des variables
+- L'**espérance** $\mathbb{E}[g(X)] = \int g(x) p(x) dx$ est la moyenne pondérée par les probabilités -- c'est ce que la loss empirique approxime
+- La **marginalisation** $p(x) = \int p(x, y) dy$ élimine une variable en intégrant sur toutes ses valeurs possibles
+- En haute dimension, les intégrales sont **intractables** : on ne peut ni les calculer analytiquement ni numériquement sur une grille
+- L'**approximation Monte Carlo** remplace l'intégrale par une moyenne sur des échantillons tirés aléatoirement, avec une convergence indépendante de la dimension
+- Les **VAE**, l'inférence variationnelle, les modèles bayésiens et les modèles de diffusion reposent tous sur des intégrales approximées par Monte Carlo

@@ -1,0 +1,177 @@
+---
+title: "Information mutuelle et ses applications en ML"
+description: "L'information mutuelle, sa relation avec l'entropie et la divergence KL, et ses applications en sélection de features, contrastive learning et Information Bottleneck."
+---
+
+## Information mutuelle : combien deux variables partagent
+
+Quand on observe une image et qu'on prédit son label, une question fondamentale se pose : combien d'information l'image contient-elle sur le label ? Et inversement, combien le label nous dit-il sur l'image ? L'information mutuelle répond à cette question de manière précise et symétrique.
+
+## Définition
+
+### La formule
+
+L'information mutuelle entre deux variables aléatoires $X$ et $Y$ est :
+
+$$I(X; Y) = \sum_{x, y} P(x, y) \log \frac{P(x, y)}{P(x) P(y)}$$
+
+C'est la divergence KL entre la distribution jointe $P(x, y)$ et le produit des marginales $P(x) P(y)$ :
+
+$$I(X; Y) = D_{KL}(P(X, Y) \| P(X) P(Y))$$
+
+Si $X$ et $Y$ sont indépendantes, $P(x, y) = P(x) P(y)$ et $I(X; Y) = 0$. Plus les variables sont dépendantes, plus l'information mutuelle est élevée.
+
+### Les formules équivalentes
+
+L'information mutuelle peut s'exprimer de plusieurs manières, toutes instructives :
+
+$$I(X; Y) = H(X) - H(X|Y)$$
+$$I(X; Y) = H(Y) - H(Y|X)$$
+$$I(X; Y) = H(X) + H(Y) - H(X, Y)$$
+
+La première dit : l'information mutuelle est la réduction d'incertitude sur $X$ quand on connaît $Y$. C'est l'incertitude initiale moins l'incertitude résiduelle.
+
+### Analogie avec les ensembles
+
+Pensez à un diagramme de Venn :
+- Le cercle gauche est $H(X)$ (incertitude totale de $X$)
+- Le cercle droit est $H(Y)$ (incertitude totale de $Y$)
+- L'intersection est $I(X; Y)$ (information partagée)
+- L'union est $H(X, Y)$ (entropie jointe)
+- $H(X|Y)$ est la partie de $H(X)$ hors de l'intersection
+
+## Propriétés clés
+
+### Symétrie
+
+$$I(X; Y) = I(Y; X)$$
+
+Contrairement à la divergence KL, l'information mutuelle est symétrique. Ce que $X$ dit sur $Y$ est exactement ce que $Y$ dit sur $X$.
+
+### Non-négativité
+
+$$I(X; Y) \geq 0$$
+
+avec égalité si et seulement si $X$ et $Y$ sont indépendantes.
+
+### Plus général que la corrélation
+
+La corrélation de Pearson ne capture que les dépendances linéaires. L'information mutuelle capture toute forme de dépendance statistique. Deux variables peuvent avoir une corrélation nulle mais une information mutuelle élevée (par exemple, $Y = X^2$ avec $X$ symétrique autour de 0).
+
+### Bornes
+
+$$0 \leq I(X; Y) \leq \min(H(X), H(Y))$$
+
+L'information partagée ne peut pas dépasser l'information totale de chaque variable.
+
+## Sélection de features
+
+### Le principe
+
+Pour choisir les features les plus informatives pour prédire une variable cible $Y$, on peut classer les features par information mutuelle décroissante :
+
+$$\text{score}(X_j) = I(X_j; Y)$$
+
+Une feature avec une haute information mutuelle avec la cible est potentiellement utile. Une feature avec $I(X_j; Y) \approx 0$ est indépendante de la cible et peut être éliminée.
+
+### Avantages par rapport à la corrélation
+
+- Capture les relations non linéaires entre les features et la cible
+- Ne suppose pas de distribution particulière
+- Fonctionne pour des variables discrètes et continues (avec estimation par noyaux ou histogrammes)
+
+### Limites
+
+- L'estimation de l'information mutuelle en haute dimension est difficile
+- Ne tient pas compte des redondances entre features : deux features très corrélées peuvent chacune avoir une haute $I$ avec la cible, mais ajouter les deux n'apporte pas grand-chose
+
+## Contrastive learning et InfoNCE
+
+### L'idée du contrastive learning
+
+Le contrastive learning apprend des représentations en rapprochant les représentations d'exemples "similaires" (positifs) et en éloignant celles d'exemples "différents" (négatifs). Mais quel est le lien avec l'information mutuelle ?
+
+### InfoNCE loss
+
+La loss InfoNCE (Information Noise Contrastive Estimation), au coeur de SimCLR, CLIP et bien d'autres, est une borne inférieure sur l'information mutuelle :
+
+$$\mathcal{L}_{\text{InfoNCE}} = -E\left[\log \frac{e^{f(x, y^+)}}{e^{f(x, y^+)} + \sum_{j=1}^{K} e^{f(x, y_j^-)}}\right]$$
+
+où $f$ est une fonction de similarité entre les représentations, $y^+$ est l'exemple positif et $y_j^-$ sont les $K$ exemples négatifs.
+
+On peut montrer que :
+
+$$I(X; Y) \geq \log(K + 1) - \mathcal{L}_{\text{InfoNCE}}$$
+
+Minimiser la loss InfoNCE maximise une borne inférieure sur l'information mutuelle entre les représentations des deux vues. C'est pourquoi le contrastive learning est parfois appelé "maximisation de l'information mutuelle".
+
+### CLIP : un exemple emblématique
+
+CLIP apprend des représentations images-texte en maximisant l'information mutuelle entre les embeddings d'images et de textes qui se correspondent. L'image d'un chat et la phrase "une photo d'un chat" partagent de l'information sur le contenu visuel. CLIP capture cette information partagée dans un espace d'embedding commun.
+
+## L'Information Bottleneck
+
+### Le cadre théorique
+
+La théorie de l'Information Bottleneck, proposée par Tishby, offre une perspective sur pourquoi les réseaux de neurones profonds fonctionnent. L'idée est qu'une bonne représentation $Z$ d'une entrée $X$ pour prédire une sortie $Y$ doit :
+
+1. **Maximiser** $I(Z; Y)$ : la représentation doit contenir le maximum d'information pertinente pour la prédiction
+2. **Minimiser** $I(Z; X)$ : la représentation doit oublier les détails non pertinents de l'entrée
+
+$$\min_{Z} \left[-I(Z; Y) + \beta \cdot I(Z; X)\right]$$
+
+Le paramètre $\beta$ contrôle le compromis entre compression et prédiction.
+
+### Interprétation pour les réseaux profonds
+
+Chaque couche d'un réseau profond peut être vue comme une transformation qui compresse l'information de l'entrée tout en préservant l'information utile pour la sortie. Les premières couches extraient beaucoup de features (haute $I(Z; X)$), et les couches suivantes compriment vers l'essentiel (basse $I(Z; X)$, haute $I(Z; Y)$).
+
+### La phase de fitting et la phase de compression
+
+Des travaux expérimentaux ont observé deux phases pendant l'entraînement :
+1. **Phase de fitting** : le réseau apprend à encoder l'information pertinente, $I(Z; Y)$ augmente rapidement
+2. **Phase de compression** : le réseau oublie les détails non pertinents, $I(Z; X)$ diminue pendant que $I(Z; Y)$ reste stable
+
+Cette interprétation reste débattue dans la communauté scientifique, mais elle offre un cadre intuitif pour penser à ce que font les réseaux profonds.
+
+## Estimation de l'information mutuelle
+
+### Le défi pratique
+
+Calculer l'information mutuelle exacte nécessite de connaître la distribution jointe $P(X, Y)$, ce qui est rarement le cas en pratique. On a besoin d'estimateurs.
+
+### Estimateurs classiques
+
+- **Histogramme** : discrétiser les variables et compter. Simple mais imprécis en haute dimension.
+- **KNN (k-Nearest Neighbors)** : l'estimateur de Kraskov-Stogbauer-Grassberger utilise les distances aux voisins pour estimer les densités. Plus robuste que les histogrammes.
+
+### Estimateurs neuronaux
+
+MINE (Mutual Information Neural Estimation) utilise un réseau de neurones pour estimer une borne inférieure sur l'information mutuelle :
+
+$$I(X; Y) \geq E_{P(X,Y)}[T_\theta(x, y)] - \log E_{P(X)P(Y)}[e^{T_\theta(x, y)}]$$
+
+où $T_\theta$ est un réseau de neurones. Cela permet d'estimer l'information mutuelle entre les couches d'un réseau, les représentations apprises, ou n'importe quel couple de variables.
+
+## Information mutuelle dans les architectures modernes
+
+### Attention et information mutuelle
+
+Le mécanisme d'attention peut être interprété comme un calcul de pertinence : quels tokens d'entrée sont les plus informatifs pour prédire un token de sortie ? C'est une forme implicite de maximisation de l'information mutuelle entre la requête et les clés.
+
+### Augmentation de données
+
+Les augmentations de données en contrastive learning (cropping, rotation, changement de couleur) sont choisies pour préserver l'information sémantique ($I(Z; Y)$ reste élevée) tout en modifiant les détails de surface ($I(Z; X)$ est réduite). C'est l'Information Bottleneck mis en pratique.
+
+### Régularisation et oubli d'information
+
+Dropout, weight decay, et data augmentation peuvent tous être vus comme des mécanismes qui réduisent $I(Z; X)$ (l'information que la représentation garde sur l'entrée), forçant le réseau à ne retenir que l'information utile pour la tâche.
+
+## Ce qu'il faut retenir
+
+- L'information mutuelle $I(X; Y)$ mesure toute forme de dépendance statistique entre deux variables
+- $I(X; Y) = H(X) - H(X|Y)$ : c'est la réduction d'incertitude apportée par la connaissance de l'autre variable
+- Elle est plus générale que la corrélation car elle capture les dépendances non linéaires
+- InfoNCE en contrastive learning maximise une borne inférieure sur l'information mutuelle
+- L'Information Bottleneck propose qu'un bon réseau comprime l'entrée tout en préservant l'information pertinente pour la sortie
+- L'estimation de l'information mutuelle en haute dimension est un défi pratique, résolu par des estimateurs neuronaux comme MINE

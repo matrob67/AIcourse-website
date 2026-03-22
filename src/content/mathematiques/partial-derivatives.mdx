@@ -1,0 +1,122 @@
+---
+title: "Dérivées partielles et jacobienne"
+description: "Comment calculer des dérivées quand une fonction dépend de plusieurs variables, et comment les matrices jacobiennes et hessiennes structurent l'optimisation en deep learning."
+---
+
+## Fonctions de plusieurs variables
+
+Jusqu'ici, on a dérivé des fonctions d'une seule variable : $f(x)$. Mais en ML, les fonctions dépendent de **milliers** de variables simultanément. La loss d'un réseau de neurones dépend de chaque poids, chaque biais, chaque paramètre du modèle. Un GPT avec 175 milliards de paramètres définit une loss qui vit dans un espace à 175 milliards de dimensions.
+
+Prenons un exemple simple : la température dans une pièce, $T(x, y, z)$, dépend de ta position en 3D. Si tu te déplaces vers la droite, la température change. Si tu montes, elle change aussi, mais peut-être différemment. La **dérivée partielle** mesure comment $T$ change quand tu bouges dans **une seule direction** en restant fixe dans toutes les autres.
+
+## La dérivée partielle
+
+La dérivée partielle de $f$ par rapport à $x_i$ mesure le taux de variation de $f$ quand on fait varier $x_i$ **en fixant toutes les autres variables** :
+
+$$\frac{\partial f}{\partial x_i} = \lim_{h \to 0} \frac{f(x_1, \ldots, x_i + h, \ldots, x_n) - f(x_1, \ldots, x_i, \ldots, x_n)}{h}$$
+
+Le symbole $\partial$ (rond) remplace le $d$ (droit) pour signaler qu'on dérive par rapport à une variable parmi plusieurs.
+
+### Exemple concret
+
+Soit $f(x, y) = x^2 y + 3xy^2$. Les dérivées partielles sont :
+
+$$\frac{\partial f}{\partial x} = 2xy + 3y^2$$
+
+$$\frac{\partial f}{\partial y} = x^2 + 6xy$$
+
+Pour calculer $\frac{\partial f}{\partial x}$, on traite $y$ comme une constante et on dérive normalement par rapport à $x$. C'est tout. Pas de nouvelle technique -- juste la dérivée habituelle en "oubliant" temporairement les autres variables.
+
+### Analogie : les boutons d'un mixeur
+
+Imagine un mixeur avec deux boutons : **vitesse** et **durée**. La consistance du smoothie dépend des deux. La dérivée partielle par rapport à la vitesse te dit : "si j'augmente la vitesse sans toucher à la durée, comment change la consistance ?" C'est le principe de **toute chose égale par ailleurs** -- on isole l'effet d'une seule variable.
+
+## Le gradient revisité
+
+Le gradient, c'est simplement le **vecteur de toutes les dérivées partielles** :
+
+$$\nabla f(x_1, \ldots, x_n) = \begin{pmatrix} \frac{\partial f}{\partial x_1} \\ \frac{\partial f}{\partial x_2} \\ \vdots \\ \frac{\partial f}{\partial x_n} \end{pmatrix}$$
+
+Chaque composante du gradient indique la sensibilité de $f$ à une variable donnée. Si $\frac{\partial f}{\partial x_3}$ est très grand, cela signifie que la variable $x_3$ a un fort impact sur $f$. Si c'est proche de zéro, modifier $x_3$ ne change presque rien.
+
+En ML, le gradient de la loss par rapport aux paramètres donne une **carte de sensibilité** complète : pour chaque poids du réseau, on sait de combien la loss changerait si on modifiait ce poids. C'est cette information qui guide la mise à jour des paramètres pendant l'entraînement.
+
+## La matrice jacobienne
+
+Le gradient, c'est pour une fonction qui renvoie un **scalaire** (un seul nombre). Mais que se passe-t-il quand la fonction renvoie un **vecteur** ? Par exemple, une couche de réseau de neurones prend un vecteur d'entrée et produit un vecteur de sortie.
+
+Si $\mathbf{f} : \mathbb{R}^n \to \mathbb{R}^m$ est une fonction qui prend $n$ entrées et produit $m$ sorties, la **matrice jacobienne** $J$ est la matrice $m \times n$ qui contient toutes les dérivées partielles :
+
+$$J = \begin{pmatrix} \frac{\partial f_1}{\partial x_1} & \frac{\partial f_1}{\partial x_2} & \cdots & \frac{\partial f_1}{\partial x_n} \\ \frac{\partial f_2}{\partial x_1} & \frac{\partial f_2}{\partial x_2} & \cdots & \frac{\partial f_2}{\partial x_n} \\ \vdots & \vdots & \ddots & \vdots \\ \frac{\partial f_m}{\partial x_1} & \frac{\partial f_m}{\partial x_2} & \cdots & \frac{\partial f_m}{\partial x_n} \end{pmatrix}$$
+
+Chaque ligne $i$ correspond à une sortie $f_i$. Chaque colonne $j$ correspond à une entrée $x_j$. L'élément $J_{ij}$ dit : "de combien la sortie $i$ change quand on modifie l'entrée $j$".
+
+### La jacobienne en deep learning
+
+Quand la backpropagation traverse une couche du réseau, elle multiplie par la **jacobienne** de cette couche. C'est une généralisation de la règle de la chaîne aux fonctions vectorielles :
+
+$$\frac{\partial \mathcal{L}}{\partial \mathbf{x}} = J^T \cdot \frac{\partial \mathcal{L}}{\partial \mathbf{y}}$$
+
+Où $\mathbf{y} = \mathbf{f}(\mathbf{x})$ est la sortie de la couche. On multiplie le gradient "venant d'en haut" ($\frac{\partial \mathcal{L}}{\partial \mathbf{y}}$) par la transposée de la jacobienne pour obtenir le gradient "propagé vers le bas".
+
+En pratique, on ne construit jamais la jacobienne complète (elle serait énorme). Les frameworks modernes calculent directement le produit **jacobienne-vecteur** (JVP) ou **vecteur-jacobienne** (VJP), ce qui est bien plus efficace.
+
+## La matrice hessienne
+
+La jacobienne capture les **dérivées premières**. La **hessienne** capture les dérivées **secondes** : elle mesure la **courbure** de la fonction.
+
+Pour une fonction scalaire $f : \mathbb{R}^n \to \mathbb{R}$, la hessienne est la matrice $n \times n$ :
+
+$$H = \begin{pmatrix} \frac{\partial^2 f}{\partial x_1^2} & \frac{\partial^2 f}{\partial x_1 \partial x_2} & \cdots & \frac{\partial^2 f}{\partial x_1 \partial x_n} \\ \frac{\partial^2 f}{\partial x_2 \partial x_1} & \frac{\partial^2 f}{\partial x_2^2} & \cdots & \frac{\partial^2 f}{\partial x_2 \partial x_n} \\ \vdots & \vdots & \ddots & \vdots \\ \frac{\partial^2 f}{\partial x_n \partial x_1} & \frac{\partial^2 f}{\partial x_n \partial x_2} & \cdots & \frac{\partial^2 f}{\partial x_n^2} \end{pmatrix}$$
+
+La hessienne est **symétrique** (sous des conditions de régularité que l'on rencontre quasi toujours en pratique). Ses éléments diagonaux $\frac{\partial^2 f}{\partial x_i^2}$ mesurent la courbure dans la direction de $x_i$. Ses éléments hors diagonale $\frac{\partial^2 f}{\partial x_i \partial x_j}$ mesurent comment la pente dans la direction $x_i$ change quand on bouge dans la direction $x_j$.
+
+### Courbure et optimisation
+
+Pourquoi la courbure est-elle importante ? Imagine que tu descends une colline. Le gradient te dit dans quelle direction descendre, mais pas la **forme du terrain**. Est-ce une vallée étroite ou un plateau plat ? La courbure te le dit.
+
+- **Forte courbure** dans une direction : la loss change très vite, il faut un petit learning rate dans cette direction
+- **Faible courbure** dans une autre : la loss change lentement, on pourrait utiliser un plus grand learning rate
+
+C'est le problème du **mauvais conditionnement** (ill-conditioning) : quand les courbures sont très différentes selon les directions, un learning rate unique est un mauvais compromis.
+
+### Valeurs propres de la hessienne
+
+Les **valeurs propres** de la hessienne résument la courbure dans chaque direction principale :
+
+- Toutes positives : on est dans un **minimum local** (cuvette)
+- Toutes négatives : on est dans un **maximum local** (sommet)
+- Mix de positives et négatives : on est dans un **point selle** (col de montagne) -- en haute dimension, c'est le cas le plus fréquent
+
+En grande dimension, les vrais minima locaux sont extrêmement rares. Les points critiques sont presque toujours des **points selles**. C'est une réalité mathématique qui a changé notre compréhension de l'optimisation en deep learning.
+
+## Applications en ML
+
+### Learning rate adaptatif
+
+Les optimiseurs comme **Adam**, **AdaGrad** et **RMSProp** utilisent implicitement de l'information de courbure. Ils maintiennent une estimation de la **variance du gradient** pour chaque paramètre, ce qui est lié aux éléments diagonaux de la hessienne. Un paramètre dont le gradient varie beaucoup (forte courbure) reçoit un learning rate plus petit. Un paramètre dont le gradient est stable (faible courbure) reçoit un learning rate plus grand.
+
+### Méthode de Newton
+
+La méthode de Newton utilise directement la hessienne pour l'optimisation :
+
+$$\theta_{t+1} = \theta_t - H^{-1} \nabla \mathcal{L}(\theta_t)$$
+
+Au lieu de suivre le gradient avec un pas fixe, on utilise la courbure pour calculer un pas **optimal**. En théorie, c'est bien plus rapide que le gradient descent. En pratique, c'est inutilisable en deep learning : pour un modèle à $n$ paramètres, la hessienne a $n^2$ éléments. Avec un milliard de paramètres, stocker la hessienne nécessiterait $10^{18}$ nombres -- c'est impossible.
+
+### Approximations pratiques
+
+Plusieurs compromis existent entre le gradient descent pur (premier ordre) et la méthode de Newton (second ordre) :
+
+- **L-BFGS** : approxime l'inverse de la hessienne à partir de l'historique des gradients. Utilisé pour de petits modèles.
+- **Natural gradient** : utilise la matrice de Fisher (liée à la hessienne) pour tenir compte de la géométrie de l'espace des paramètres.
+- **K-FAC** : approxime la hessienne par blocs pour rendre le calcul tractable sur des réseaux de neurones.
+
+## Points clés à retenir
+
+- La **dérivée partielle** mesure la sensibilité d'une fonction à une variable en fixant toutes les autres
+- Le **gradient** est le vecteur de toutes les dérivées partielles -- il donne la direction de plus forte montée
+- La **jacobienne** généralise le gradient aux fonctions vectorielles -- c'est la matrice de toutes les dérivées partielles entrées/sorties
+- La **hessienne** capture la courbure (dérivées secondes) -- elle dit comment le gradient lui-même varie
+- En deep learning, on ne calcule jamais la hessienne complète (trop grosse), mais les optimiseurs adaptatifs comme Adam en approximent les éléments diagonaux
+- Les points critiques en haute dimension sont presque toujours des **points selles**, pas des minima locaux

@@ -1,0 +1,142 @@
+---
+title: "Divergence KL et cross-entropie"
+description: "Cross-entropie, divergence KL et leurs applications centrales en deep learning : fonctions de perte, VAE, distillation de connaissances et RLHF."
+---
+
+## Comparer deux distributions
+
+En machine learning, on compare constamment des distributions de probabilité. Les prédictions du modèle vs les vrais labels. Le posterior approximé vs le vrai posterior. La politique de l'élève vs celle du professeur. La cross-entropie et la divergence KL sont les outils mathématiques pour quantifier ces écarts.
+
+## Cross-entropie
+
+### Définition
+
+La cross-entropie entre une distribution "vraie" $p$ et une distribution "prédite" $q$ est :
+
+$$H(p, q) = -\sum_x p(x) \log q(x)$$
+
+Elle mesure le nombre moyen de bits nécessaires pour encoder des messages tirés de $p$ en utilisant le code optimisé pour $q$.
+
+### Lien avec l'entropie
+
+$$H(p, q) = H(p) + D_{KL}(p \| q)$$
+
+La cross-entropie est l'entropie de $p$ plus la divergence KL de $p$ vers $q$. Si $q = p$ (prédictions parfaites), la cross-entropie est minimale et vaut exactement $H(p)$.
+
+### La cross-entropy loss en classification
+
+En classification multi-classe, les labels sont one-hot : $p = (0, \ldots, 1, \ldots, 0)$ avec un 1 pour la vraie classe $c$. Les prédictions sont les sorties softmax : $q = (\hat{y}_1, \ldots, \hat{y}_K)$.
+
+La cross-entropie se simplifie :
+
+$$H(p, q) = -\log \hat{y}_c$$
+
+C'est la loss que tout le monde utilise. Plus la probabilité assignée à la bonne classe est élevée, plus la loss est faible. Si $\hat{y}_c = 1$, la loss vaut 0. Si $\hat{y}_c \to 0$, la loss tend vers l'infini.
+
+### Pourquoi pas MSE pour la classification ?
+
+La MSE $\sum (y_k - \hat{y}_k)^2$ fonctionne aussi mathématiquement, mais elle a des gradients qui s'affaiblissent quand le modèle est très confiant et faux. La cross-entropie, au contraire, produit de forts gradients quand le modèle assigne une faible probabilité à la bonne classe. Elle pénalise sévèrement les erreurs confiantes, ce qui accélère l'apprentissage.
+
+## Divergence KL
+
+### Définition
+
+La divergence de Kullback-Leibler mesure combien $q$ est différent de $p$ :
+
+$$D_{KL}(p \| q) = \sum_x p(x) \log \frac{p(x)}{q(x)} = H(p, q) - H(p)$$
+
+C'est le "surcoût" en bits quand on utilise le code de $q$ pour encoder des messages de $p$, au-delà du minimum théorique $H(p)$.
+
+### Propriétés fondamentales
+
+- **Non-négativité** : $D_{KL}(p \| q) \geq 0$, avec égalité si et seulement si $p = q$
+- **Pas une distance** : la divergence KL n'est pas symétrique, pas de triangle inequality
+- **Non symétrie** : $D_{KL}(p \| q) \neq D_{KL}(q \| p)$ en général
+
+### L'asymétrie a des conséquences
+
+La non-symétrie de la divergence KL n'est pas un défaut : les deux directions capturent des comportements différents.
+
+**$D_{KL}(p \| q)$ (forward KL) :** le mode-covering
+
+Minimiser $D_{KL}(p \| q)$ par rapport à $q$ force $q$ à couvrir tout le support de $p$. Là où $p(x) > 0$, on doit avoir $q(x) > 0$ aussi (sinon le log diverge). Résultat : $q$ a tendance à être trop large, à couvrir des zones où $p$ est nul.
+
+**$D_{KL}(q \| p)$ (reverse KL) :** le mode-seeking
+
+Minimiser $D_{KL}(q \| p)$ par rapport à $q$ permet à $q$ de se concentrer sur un seul mode de $p$. Si $p$ est multimodale (plusieurs pics), $q$ peut ignorer certains modes et se coller à un seul. C'est le comportement "mode-seeking".
+
+### Illustration
+
+Imaginez que $p$ est une distribution bimodale (deux pics). Avec la forward KL, $q$ sera une large gaussienne couvrant les deux pics. Avec la reverse KL, $q$ sera une gaussienne étroite centrée sur un seul pic.
+
+## Applications en deep learning
+
+### La cross-entropy loss = minimiser la KL
+
+Quand on entraîne un modèle par cross-entropy, on minimise :
+
+$$H(p_{\text{data}}, q_\theta) = H(p_{\text{data}}) + D_{KL}(p_{\text{data}} \| q_\theta)$$
+
+Comme $H(p_{\text{data}})$ est une constante (indépendante de $\theta$), minimiser la cross-entropie est exactement équivalent à minimiser $D_{KL}(p_{\text{data}} \| q_\theta)$. On cherche les paramètres $\theta$ tels que les prédictions $q_\theta$ sont aussi proches que possible de la vraie distribution des données.
+
+### VAE : KL entre posterior et prior
+
+Dans un Variational Autoencoder, l'objectif (ELBO) contient un terme de divergence KL :
+
+$$\mathcal{L}_{\text{ELBO}} = E_{q_\phi(z|x)}[\log p_\theta(x|z)] - D_{KL}(q_\phi(z|x) \| p(z))$$
+
+Le premier terme est la reconstruction. Le second terme force le posterior approximé $q_\phi(z|x)$ à rester proche du prior $p(z) = \mathcal{N}(0, I)$.
+
+Pour des gaussiennes, la KL a une formule analytique fermée :
+
+$$D_{KL}(\mathcal{N}(\mu, \sigma^2) \| \mathcal{N}(0, 1)) = \frac{1}{2}\left(\mu^2 + \sigma^2 - \log \sigma^2 - 1\right)$$
+
+C'est pourquoi les VAE utilisent des gaussiennes : la KL est calculable exactement, pas besoin d'approximation.
+
+### Distillation de connaissances
+
+La distillation transfère les connaissances d'un gros modèle (teacher) vers un petit modèle (student). On minimise :
+
+$$D_{KL}(p_{\text{teacher}} \| q_{\text{student}})$$
+
+où les distributions sont les sorties softmax avec une température élevée. Le student apprend non seulement la bonne classe, mais aussi les relations entre classes capturées par les probabilités du teacher.
+
+### RLHF et PPO
+
+Dans le RLHF (Reinforcement Learning from Human Feedback), on ajuste un LLM selon les préférences humaines tout en restant proche du modèle de base. La loss contient un terme :
+
+$$\text{Reward} - \beta \cdot D_{KL}(\pi_\theta \| \pi_{\text{ref}})$$
+
+Le terme KL empêche le modèle aligné $\pi_\theta$ de trop s'éloigner du modèle de référence $\pi_{\text{ref}}$, ce qui évite le mode collapse et maintient la diversité du langage.
+
+### Choix de la direction KL
+
+| Application | Direction KL | Raison |
+|---|---|---|
+| Entraînement classique | $D_{KL}(p_{\text{data}} \| q_\theta)$ | Forward KL via cross-entropy |
+| Inférence variationnelle (VAE) | $D_{KL}(q_\phi \| p)$ | Reverse KL, tractable |
+| Distillation | $D_{KL}(p_{\text{teacher}} \| q_{\text{student}})$ | Forward KL, couvrir le teacher |
+| RLHF | $D_{KL}(\pi_\theta \| \pi_{\text{ref}})$ | Pénaliser les écarts au modèle de base |
+
+## Autres divergences et distances
+
+### Jensen-Shannon divergence
+
+La JS divergence est la version symétrique de la KL :
+
+$$D_{JS}(p \| q) = \frac{1}{2} D_{KL}(p \| m) + \frac{1}{2} D_{KL}(q \| m), \quad m = \frac{p + q}{2}$$
+
+Elle est symétrique, bornée entre 0 et $\log 2$, et sa racine carrée est une vraie distance. C'est la divergence utilisée dans l'objectif original des GAN.
+
+### Wasserstein distance
+
+Aussi appelée Earth Mover's Distance, elle mesure le "coût de transport" pour transformer $p$ en $q$. Utilisée dans les Wasserstein GAN (WGAN) pour résoudre les problèmes d'entraînement des GAN classiques.
+
+## Ce qu'il faut retenir
+
+- La cross-entropie $H(p, q) = -\sum p \log q$ est la loss standard de la classification
+- La divergence KL mesure le "surcoût" d'utiliser $q$ au lieu de $p$ pour encoder
+- La KL n'est pas symétrique : forward KL couvre tout, reverse KL se concentre
+- Entraîner par cross-entropy = minimiser la forward KL entre données et prédictions
+- La KL apparaît dans les VAE, la distillation et le RLHF avec des rôles différents
+- Pour des gaussiennes, la KL a une forme analytique, ce qui simplifie les calculs

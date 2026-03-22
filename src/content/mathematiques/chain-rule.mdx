@@ -1,0 +1,143 @@
+---
+title: "Règle de la chaîne : le cœur de la backpropagation"
+description: "Comment la règle de la chaîne permet de dériver des fonctions composées, et pourquoi c'est exactement ce que fait la backpropagation dans un réseau de neurones."
+---
+
+## Les fonctions composées sont partout
+
+Quand tu fais cuire un gâteau, la température intérieure du gâteau dépend du temps passé au four. Et la cuisson du gâteau (moelleux, trop cuit, cru) dépend de la température intérieure. Au final, la cuisson dépend du temps -- mais **à travers** la température. C'est une fonction composée : cuisson = $f(\text{température}(\text{temps}))$.
+
+En mathématiques, une **fonction composée** est simplement une fonction appliquée au résultat d'une autre fonction. Si $f$ et $g$ sont deux fonctions, la composée s'écrit :
+
+$$h(x) = f(g(x))$$
+
+On applique d'abord $g$ à $x$, puis $f$ au résultat. C'est un enchaînement, une **chaîne** de transformations.
+
+### Pourquoi c'est crucial en IA
+
+Un réseau de neurones **est** une composition de fonctions. Chaque couche applique une transformation linéaire (multiplication par une matrice de poids + biais), suivie d'une fonction d'activation non linéaire. Un réseau à 3 couches, c'est :
+
+$$\hat{y} = f_3(f_2(f_1(x)))$$
+
+Où chaque $f_i$ représente une couche : multiplication matricielle + activation. L'entrée $x$ traverse couche après couche, chaque transformation s'appliquant au résultat de la précédente. Plus le réseau est profond, plus la composition est longue.
+
+## La règle de la chaîne
+
+Comment dériver une fonction composée ? C'est la **règle de la chaîne** (chain rule) qui répond à cette question. Si $h(x) = f(g(x))$, alors :
+
+$$h'(x) = f'(g(x)) \cdot g'(x)$$
+
+En mots : la dérivée de la composée, c'est la dérivée de la fonction extérieure (évaluée au point intermédiaire) **multipliée** par la dérivée de la fonction intérieure.
+
+### L'analogie des engrenages
+
+Imagine deux engrenages connectés. Le premier tourne à 3 tours par minute. Le second, connecté au premier par un rapport de 2, tourne donc à $3 \times 2 = 6$ tours par minute. Pour trouver la vitesse finale, tu **multiplies** les rapports de chaque étage. La règle de la chaîne fonctionne exactement pareil : on multiplie les "rapports de variation" à chaque étape de la composition.
+
+### Notation de Leibniz
+
+La notation de Leibniz rend la règle de la chaîne encore plus intuitive. Si $y = f(u)$ et $u = g(x)$, alors :
+
+$$\frac{dy}{dx} = \frac{dy}{du} \cdot \frac{du}{dx}$$
+
+On dirait presque que les $du$ "s'annulent" comme dans une fraction. Ce n'est pas exactement le cas mathématiquement, mais cette intuition fonctionne toujours pour la règle de la chaîne et aide à ne jamais se tromper.
+
+## Exemples concrets
+
+### Exemple 1 : dériver $(3x + 1)^2$
+
+Posons $u = 3x + 1$ et $y = u^2$. Alors :
+
+$$\frac{dy}{dx} = \frac{dy}{du} \cdot \frac{du}{dx} = 2u \cdot 3 = 6(3x + 1)$$
+
+### Exemple 2 : dériver $e^{-x^2}$
+
+Posons $u = -x^2$ et $y = e^u$. Alors :
+
+$$\frac{dy}{dx} = e^u \cdot (-2x) = -2x \cdot e^{-x^2}$$
+
+Cette fonction est la forme de la **distribution gaussienne**, omniprésente en ML.
+
+### Exemple 3 : dériver $\ln(\sigma(x))$ (cross-entropy)
+
+Posons $u = \sigma(x) = \frac{1}{1 + e^{-x}}$ et $y = \ln(u)$. Alors :
+
+$$\frac{dy}{dx} = \frac{1}{u} \cdot \sigma'(x) = \frac{1}{\sigma(x)} \cdot \sigma(x)(1 - \sigma(x)) = 1 - \sigma(x)$$
+
+Ce résultat élégant explique pourquoi la cross-entropy fonctionne si bien avec la sigmoïde : le gradient a une forme simple et ne sature pas.
+
+## Chaîne à plusieurs maillons
+
+Quand la composition est plus longue, la règle se généralise naturellement. Pour $h(x) = f(g(k(x)))$ :
+
+$$h'(x) = f'(g(k(x))) \cdot g'(k(x)) \cdot k'(x)$$
+
+On multiplie les dérivées de chaque maillon de la chaîne, de l'extérieur vers l'intérieur. Pour un réseau à $n$ couches, on obtient un produit de $n$ termes -- un pour chaque couche traversée.
+
+$$\frac{\partial \mathcal{L}}{\partial \theta_1} = \frac{\partial \mathcal{L}}{\partial a_n} \cdot \frac{\partial a_n}{\partial a_{n-1}} \cdot \ldots \cdot \frac{\partial a_2}{\partial a_1} \cdot \frac{\partial a_1}{\partial \theta_1}$$
+
+C'est un **produit de matrices** (ou de scalaires dans le cas simple). Et c'est exactement ce que calcule la backpropagation.
+
+## La backpropagation, pas à pas
+
+Prenons un réseau simple à 2 couches pour rendre les choses concrètes. L'entrée $x$ passe par :
+
+1. **Couche 1** : $z_1 = w_1 \cdot x + b_1$, puis $a_1 = \text{ReLU}(z_1)$
+2. **Couche 2** : $z_2 = w_2 \cdot a_1 + b_2$, puis $\hat{y} = \sigma(z_2)$
+3. **Loss** : $\mathcal{L} = -(y \ln(\hat{y}) + (1-y)\ln(1-\hat{y}))$
+
+Pour mettre à jour $w_1$, on a besoin de $\frac{\partial \mathcal{L}}{\partial w_1}$. Par la règle de la chaîne :
+
+$$\frac{\partial \mathcal{L}}{\partial w_1} = \frac{\partial \mathcal{L}}{\partial \hat{y}} \cdot \frac{\partial \hat{y}}{\partial z_2} \cdot \frac{\partial z_2}{\partial a_1} \cdot \frac{\partial a_1}{\partial z_1} \cdot \frac{\partial z_1}{\partial w_1}$$
+
+Chaque terme est simple à calculer individuellement :
+
+- $\frac{\partial \mathcal{L}}{\partial \hat{y}}$ : dérivée de la loss par rapport à la prédiction
+- $\frac{\partial \hat{y}}{\partial z_2}$ : dérivée de la sigmoïde
+- $\frac{\partial z_2}{\partial a_1} = w_2$ : le poids de la couche 2
+- $\frac{\partial a_1}{\partial z_1}$ : dérivée du ReLU ($1$ si $z_1 > 0$, $0$ sinon)
+- $\frac{\partial z_1}{\partial w_1} = x$ : l'entrée
+
+La **backpropagation** consiste à calculer ces termes de droite à gauche (de la sortie vers l'entrée) et à les propager couche par couche. D'où le nom : propagation **arrière** du gradient.
+
+## Le graphe de calcul
+
+Pour organiser tous ces calculs, on utilise un **graphe de calcul** (computational graph). C'est un graphe orienté acyclique (DAG) où :
+
+- Chaque **nœud** représente une opération (addition, multiplication, activation)
+- Chaque **arête** représente le flux des données
+
+Le forward pass parcourt le graphe de l'entrée vers la sortie. Le backward pass le parcourt en sens inverse, en multipliant les dérivées locales le long de chaque chemin. C'est exactement ce que font les frameworks comme PyTorch et TensorFlow : ils construisent automatiquement ce graphe pendant le forward pass, puis le parcourent à l'envers pour calculer tous les gradients.
+
+### Autograd : la différentiation automatique
+
+En PyTorch, quand tu écris `loss.backward()`, le framework :
+
+1. Parcourt le graphe de calcul à l'envers
+2. Applique la règle de la chaîne à chaque nœud
+3. Accumule les gradients dans l'attribut `.grad` de chaque paramètre
+
+Tu n'as jamais besoin de dériver à la main. Mais comprendre la règle de la chaîne te permet de **diagnostiquer** les problèmes quand l'entraînement ne se passe pas bien.
+
+## Le problème du vanishing gradient
+
+La règle de la chaîne implique un **produit** de dérivées. Pour un réseau profond (50, 100 couches), ce produit contient des dizaines de termes. Si chaque dérivée est inférieure à 1 (ce qui arrive avec la sigmoïde, dont la dérivée maximale est $0{,}25$), le produit tend exponentiellement vers zéro :
+
+$$0{,}25^{50} \approx 10^{-30}$$
+
+Le gradient qui arrive aux premières couches est quasi nul : elles n'apprennent plus rien. C'est le **vanishing gradient problem**, le fléau des réseaux profonds avant les innovations modernes.
+
+Les solutions qui ont permis le deep learning reposent toutes sur la gestion de ce produit de dérivées :
+
+- **ReLU** : sa dérivée vaut $1$ pour les valeurs positives, ce qui évite la multiplication par des fractions
+- **Batch Normalization** : stabilise les activations intermédiaires pour que les gradients restent dans une plage raisonnable
+- **Connexions résiduelles** (ResNet) : ajoutent un chemin direct de l'entrée à la sortie, créant un "raccourci" pour le gradient qui contourne le produit destructeur
+- **LSTM et GRU** : en séquences, les gates contrôlent le flux du gradient pour éviter qu'il ne s'évanouisse sur de longues dépendances
+
+## Points clés à retenir
+
+- La **règle de la chaîne** permet de dériver des fonctions composées en multipliant les dérivées de chaque étape
+- Un réseau de neurones est une **composition de fonctions**, donc la backpropagation est une application directe de la règle de la chaîne
+- Le **graphe de calcul** organise le forward et le backward pass
+- La **différentiation automatique** (autograd) applique la règle de la chaîne automatiquement dans les frameworks modernes
+- Le **vanishing gradient** est une conséquence directe du produit de dérivées dans la règle de la chaîne : des dérivées inférieures à 1, multipliées de nombreuses fois, tendent vers zéro
+- ReLU, batch norm et connexions résiduelles sont des solutions directes à ce problème mathématique

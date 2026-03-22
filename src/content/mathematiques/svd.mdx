@@ -1,0 +1,162 @@
+---
+title: "Décomposition en valeurs singulières (SVD)"
+description: "Comprendre la SVD — la factorisation la plus puissante de l'algèbre linéaire — et ses applications en LoRA, réduction de dimension, compression et embeddings."
+---
+
+## Introduction : la factorisation universelle
+
+La décomposition propre est puissante, mais elle ne marche que sur les matrices carrées. Or en ML, les matrices sont rarement carrées : un dataset $1000 \times 50$, une matrice de poids $4096 \times 768$, une matrice d'embeddings $50000 \times 300$.
+
+La **SVD** (Singular Value Decomposition) est la généralisation qui fonctionne pour **n'importe quelle matrice**, quelle que soit sa forme. C'est probablement la factorisation la plus importante de toute l'algèbre linéaire appliquée.
+
+## L'intuition : rotation, étirement, rotation
+
+Toute transformation linéaire (matrice) peut être décomposée en trois étapes simples :
+
+1. **Rotation** (ou réflexion) dans l'espace d'entrée
+2. **Étirement** (ou compression) le long des axes
+3. **Rotation** (ou réflexion) dans l'espace de sortie
+
+Imagine que tu prends un cercle et que tu lui appliques une matrice. Le cercle devient une ellipse. La SVD te dit exactement : quelles rotations, et quels étirements. C'est une radiographie complète de la transformation.
+
+## La formule
+
+Pour toute matrice $\mathbf{A} \in \mathbb{R}^{m \times n}$, la SVD est :
+
+$$
+\mathbf{A} = \mathbf{U} \mathbf{\Sigma} \mathbf{V}^T
+$$
+
+Où :
+
+- $\mathbf{U} \in \mathbb{R}^{m \times m}$ est une matrice **orthogonale** (ses colonnes sont les **vecteurs singuliers gauches**)
+- $\mathbf{\Sigma} \in \mathbb{R}^{m \times n}$ est une matrice **diagonale** contenant les **valeurs singulières** $\sigma_1 \geq \sigma_2 \geq \ldots \geq \sigma_r > 0$ (ordonnées par valeur décroissante)
+- $\mathbf{V}^T \in \mathbb{R}^{n \times n}$ est une matrice **orthogonale** (ses lignes sont les **vecteurs singuliers droits**)
+
+Le nombre $r$ est le **rang** de la matrice — le nombre de valeurs singulières non nulles.
+
+### Ce que chaque composante représente
+
+- **$\mathbf{V}^T$** : la première rotation. Elle identifie les directions importantes dans l'espace d'entrée.
+- **$\mathbf{\Sigma}$** : l'étirement. Chaque valeur singulière $\sigma_i$ dit de combien la transformation étire dans la $i$-ème direction.
+- **$\mathbf{U}$** : la deuxième rotation. Elle place le résultat dans l'espace de sortie.
+
+### Exemple concret
+
+Prenons une matrice simple :
+
+$$
+\mathbf{A} = \begin{pmatrix} 3 & 0 \\ 0 & 1 \end{pmatrix}
+$$
+
+Cette matrice étire l'axe horizontal par 3 et laisse l'axe vertical inchangé. Sa SVD est triviale :
+
+- $\mathbf{U} = \mathbf{I}$, $\mathbf{V} = \mathbf{I}$ (pas de rotation nécessaire)
+- $\sigma_1 = 3$, $\sigma_2 = 1$
+
+Pour une matrice plus complexe, les rotations $\mathbf{U}$ et $\mathbf{V}$ sont non triviales, mais l'idée reste la même : on décompose la transformation en ses composantes élémentaires.
+
+## Lien avec les valeurs propres
+
+La SVD et la décomposition propre sont étroitement liées :
+
+- Les **valeurs singulières** de $\mathbf{A}$ sont les racines carrées des **valeurs propres** de $\mathbf{A}^T\mathbf{A}$ : $\sigma_i = \sqrt{\lambda_i(\mathbf{A}^T\mathbf{A})}$
+
+- Les **vecteurs singuliers droits** (colonnes de $\mathbf{V}$) sont les vecteurs propres de $\mathbf{A}^T\mathbf{A}$
+
+- Les **vecteurs singuliers gauches** (colonnes de $\mathbf{U}$) sont les vecteurs propres de $\mathbf{A}\mathbf{A}^T$
+
+Pour une matrice symétrique semi-définie positive, la SVD coïncide avec la décomposition propre.
+
+L'avantage de la SVD : les valeurs singulières sont **toujours réelles et non négatives**, même quand les valeurs propres de $\mathbf{A}$ sont complexes ou négatives.
+
+## Approximation de rang faible
+
+C'est là que la SVD devient vraiment puissante pour le ML.
+
+### Le théorème d'Eckart-Young
+
+L'approximation de rang $k$ de $\mathbf{A}$ est obtenue en ne gardant que les $k$ plus grandes valeurs singulières :
+
+$$
+\mathbf{A}_k = \sum_{i=1}^{k} \sigma_i \mathbf{u}_i \mathbf{v}_i^T
+$$
+
+Ce théorème dit : parmi toutes les matrices de rang $k$, $\mathbf{A}_k$ est la **meilleure approximation** de $\mathbf{A}$ (au sens de la norme de Frobenius ou de la norme spectrale).
+
+L'erreur d'approximation est :
+
+$$
+\|\mathbf{A} - \mathbf{A}_k\|_F = \sqrt{\sigma_{k+1}^2 + \sigma_{k+2}^2 + \ldots + \sigma_r^2}
+$$
+
+Si les valeurs singulières décroissent vite, on peut approximer la matrice avec très peu de composantes. Une matrice $1000 \times 1000$ de rang 5 peut être reconstruite exactement avec seulement $5 \times (1000 + 1000 + 5)$ nombres au lieu de $1\,000\,000$.
+
+## Applications en machine learning
+
+### LoRA : adaptation efficace des LLMs
+
+**LoRA** (Low-Rank Adaptation) est directement inspiré de la SVD. L'idée : quand on fine-tune un grand modèle de langage, les changements de poids $\Delta\mathbf{W}$ sont souvent de **rang faible** — ils n'affectent que quelques directions dans l'espace des paramètres.
+
+Au lieu de modifier la matrice complète $\mathbf{W} \in \mathbb{R}^{d \times d}$ (des millions de paramètres), on apprend :
+
+$$
+\Delta\mathbf{W} = \mathbf{B}\mathbf{A}
+$$
+
+Où $\mathbf{B} \in \mathbb{R}^{d \times r}$ et $\mathbf{A} \in \mathbb{R}^{r \times d}$ avec $r \ll d$ (typiquement $r = 8$ ou $r = 16$).
+
+C'est une approximation de rang faible. Au lieu de stocker $d^2$ paramètres, on n'en stocke que $2dr$. Pour $d = 4096$ et $r = 16$, on passe de 16 millions à 131 000 paramètres. Un facteur 120 de compression.
+
+### Réduction de dimension
+
+Comme la PCA (qui est un cas particulier de SVD appliquée aux données centrées), la SVD permet de réduire la dimension des données en ne gardant que les composantes les plus importantes.
+
+La **SVD tronquée** est souvent préférée à la PCA classique car elle est plus efficace numériquement pour les grandes matrices creuses (sparse).
+
+### Compression d'images
+
+Une image en niveaux de gris est une matrice $m \times n$. Sa SVD donne $r$ composantes. En ne gardant que les $k$ premières ($k \ll r$), on obtient une version compressée qui conserve les structures principales (formes, contrastes) tout en éliminant le bruit et les détails fins.
+
+Le taux de compression est environ $\frac{mn}{k(m + n + 1)}$.
+
+### Systèmes de recommandation
+
+Netflix, Spotify et les moteurs de recommandation utilisent la **factorisation matricielle**, cousine de la SVD. La matrice utilisateurs-films (avec beaucoup de cases vides) est approximée par un produit de deux matrices de rang faible :
+
+$$
+\mathbf{R} \approx \mathbf{U}\mathbf{V}^T
+$$
+
+Les lignes de $\mathbf{U}$ sont les "profils latents" des utilisateurs, les colonnes de $\mathbf{V}^T$ sont les "profils latents" des films. Le produit prédit les notes manquantes.
+
+### Embeddings et Latent Semantic Analysis
+
+La **LSA** (Latent Semantic Analysis) applique la SVD à la matrice terme-document pour découvrir des "concepts latents". Les mots qui apparaissent dans des contextes similaires finissent proches dans l'espace réduit. C'est un ancêtre des embeddings modernes comme Word2Vec.
+
+## SVD en pratique
+
+En Python avec NumPy :
+
+```python
+import numpy as np
+
+# SVD complète
+U, S, Vt = np.linalg.svd(A)
+
+# Approximation de rang k
+A_k = U[:, :k] @ np.diag(S[:k]) @ Vt[:k, :]
+```
+
+Pour les grandes matrices creuses, on utilise la SVD tronquée de `scipy.sparse.linalg.svds` ou `sklearn.decomposition.TruncatedSVD`, qui ne calculent que les $k$ premières composantes — beaucoup plus rapide.
+
+## Pourquoi c'est important pour l'IA
+
+La SVD est un outil transversal en ML :
+
+- **LoRA** rend le fine-tuning des LLMs accessible à tous grâce aux approximations de rang faible
+- La **compression de modèles** réduit la taille et le coût d'inférence
+- La **factorisation matricielle** alimente les systèmes de recommandation
+- La **réduction de dimension** permet de visualiser et de débruiter les données
+
+Quand tu vois un concept de "rang faible" ou de "factorisation" en ML, la SVD n'est jamais loin. C'est l'outil qui dit : cette matrice gigantesque peut être bien approximée par quelque chose de beaucoup plus petit. Et en ML, plus petit veut souvent dire plus rapide, moins cher, et parfois même meilleur.

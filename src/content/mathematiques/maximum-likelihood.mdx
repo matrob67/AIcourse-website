@@ -1,0 +1,163 @@
+---
+title: "Maximum de vraisemblance (MLE) et MAP"
+description: "Maximum de vraisemblance, log-vraisemblance, lien avec la cross-entropy, estimation MAP et connexion avec la régularisation en deep learning."
+---
+
+## La question fondamentale
+
+Vous avez un modèle avec des paramètres $\theta$ et des données $\mathcal{D}$. La question centrale de l'apprentissage est : quels sont les "meilleurs" paramètres ? Le maximum de vraisemblance et le MAP sont deux réponses à cette question, et elles sont intimement liées à ce que font les réseaux de neurones pendant l'entraînement.
+
+## La vraisemblance
+
+### Définition
+
+La vraisemblance est la probabilité d'observer les données sachant les paramètres du modèle :
+
+$$\mathcal{L}(\theta) = P(\mathcal{D} | \theta)$$
+
+Attention à la subtilité : c'est la même expression mathématique que la probabilité conditionnelle, mais on la regarde sous un angle différent. Au lieu de fixer $\theta$ et de se demander quelles données pourraient être générées, on fixe les données (déjà observées) et on se demande quels paramètres les expliquent le mieux.
+
+### Analogie
+
+Imaginez que vous trouviez des empreintes de pas dans la neige. La vraisemblance demande : "Si un animal de type X avait marché ici, quelle serait la probabilité de voir exactement ces empreintes ?" On teste différents animaux (différents $\theta$) et on cherche celui qui rend les empreintes observées les plus probables.
+
+### Pour des données i.i.d.
+
+Si les données sont indépendantes et identiquement distribuées (i.i.d.), la vraisemblance est le produit des probabilités individuelles :
+
+$$\mathcal{L}(\theta) = \prod_{i=1}^n P(x_i | \theta)$$
+
+C'est un produit de termes entre 0 et 1, donc il devient très petit très vite quand $n$ grandit. C'est un problème pratique majeur.
+
+## Le maximum de vraisemblance (MLE)
+
+### Principe
+
+Le MLE cherche les paramètres qui maximisent la vraisemblance :
+
+$$\theta^*_{\text{MLE}} = \arg\max_\theta \mathcal{L}(\theta) = \arg\max_\theta \prod_{i=1}^n P(x_i | \theta)$$
+
+C'est simple et intuitif : on choisit les paramètres qui rendent les données observées les plus probables.
+
+### Exemple : estimer la probabilité d'un pile ou face
+
+On lance une pièce 100 fois et on observe 60 piles. Le paramètre $p$ (probabilité de pile) qui maximise la vraisemblance est simplement $p^* = 60/100 = 0.6$. L'intuition coïncide avec le calcul.
+
+## La log-vraisemblance : pourquoi le logarithme
+
+### Le problème des produits
+
+Un produit de milliers de nombres entre 0 et 1 donne un nombre astronomiquement petit, au-delà de la précision des floats. De plus, optimiser un produit est plus compliqué qu'optimiser une somme.
+
+### La solution
+
+Le logarithme transforme les produits en sommes :
+
+$$\log \mathcal{L}(\theta) = \sum_{i=1}^n \log P(x_i | \theta)$$
+
+Comme le log est une fonction strictement croissante, maximiser $\log \mathcal{L}$ et maximiser $\mathcal{L}$ donnent le même $\theta^*$. On ne perd rien, et on gagne :
+
+- **Stabilité numérique** : on additionne des nombres au lieu de multiplier des nombres proches de zéro
+- **Simplicité** : les dérivées de sommes sont plus simples que les dérivées de produits
+- **Gradient propre** : le gradient de la log-vraisemblance a de meilleures propriétés
+
+## Lien avec la cross-entropy loss
+
+### La connexion fondamentale
+
+En classification, la cross-entropy loss que tout le monde utilise est exactement la log-vraisemblance négative. Minimiser la cross-entropy revient à maximiser la log-vraisemblance.
+
+Pour la classification multi-classe avec des labels one-hot $y$ et des prédictions softmax $\hat{y}$ :
+
+$$\text{Cross-Entropy} = -\sum_{k=1}^K y_k \log \hat{y}_k$$
+
+Comme $y$ est one-hot (un seul $y_c = 1$, les autres valent 0), cela se réduit à :
+
+$$\text{Cross-Entropy} = -\log \hat{y}_c$$
+
+C'est exactement $-\log P(\text{classe correcte} | x, \theta)$, soit la log-vraisemblance négative.
+
+### Pour la classification binaire
+
+La binary cross-entropy :
+
+$$\text{BCE} = -[y \log \hat{y} + (1 - y) \log (1 - \hat{y})]$$
+
+C'est la log-vraisemblance négative d'une Bernoulli de paramètre $\hat{y}$.
+
+### Pour la régression
+
+La MSE (Mean Squared Error) correspond à la log-vraisemblance négative d'une gaussienne à variance constante :
+
+$$\text{MSE} = \frac{1}{n}\sum_{i=1}^n (y_i - \hat{y}_i)^2 \propto -\log \mathcal{L}(\theta)$$
+
+si on suppose $y_i \sim \mathcal{N}(\hat{y}_i, \sigma^2)$.
+
+Autrement dit : minimiser la MSE, c'est supposer que le bruit est gaussien et maximiser la vraisemblance.
+
+## L'estimation MAP
+
+### Au-delà du MLE
+
+Le MLE a un défaut : il ne considère que les données et ignore toute connaissance préalable sur les paramètres. Si on a peu de données, le MLE peut donner des estimations aberrantes. On lance la pièce 3 fois, on obtient 3 piles, le MLE dit $p = 1$. Mais on sait bien qu'une pièce équitable est plus vraisemblable.
+
+### Maximum A Posteriori
+
+Le MAP ajoute un prior $P(\theta)$ sur les paramètres et maximise le posterior :
+
+$$\theta^*_{\text{MAP}} = \arg\max_\theta P(\theta | \mathcal{D}) = \arg\max_\theta P(\mathcal{D} | \theta) \cdot P(\theta)$$
+
+En log :
+
+$$\theta^*_{\text{MAP}} = \arg\max_\theta \left[\sum_{i=1}^n \log P(x_i | \theta) + \log P(\theta)\right]$$
+
+Le MAP est un MLE avec un terme bonus qui pénalise les paramètres "improbables" selon le prior.
+
+## MAP et régularisation : la connexion
+
+### Prior gaussien = régularisation L2
+
+Si on choisit un prior gaussien centré en zéro : $P(\theta) = \mathcal{N}(0, \sigma^2 I)$, alors :
+
+$$\log P(\theta) = -\frac{1}{2\sigma^2} \|\theta\|^2 + \text{constante}$$
+
+Le MAP devient :
+
+$$\theta^*_{\text{MAP}} = \arg\max_\theta \left[\sum_{i=1}^n \log P(x_i | \theta) - \frac{\lambda}{2} \|\theta\|^2\right]$$
+
+avec $\lambda = 1/\sigma^2$. On retrouve exactement la loss + régularisation L2 (weight decay) !
+
+La régularisation L2, utilisée dans presque tous les entraînements de réseaux de neurones, n'est rien d'autre qu'un prior bayésien gaussien sur les poids. Elle dit : "je crois a priori que les poids sont petits".
+
+### Prior laplacien = régularisation L1
+
+Si on choisit un prior laplacien : $P(\theta) \propto \exp(-\lambda |\theta|)$, on obtient la régularisation L1, qui pousse les poids vers exactement zéro (sparsité).
+
+### Tableau récapitulatif
+
+| Prior | Régularisation | Effet |
+|---|---|---|
+| Gaussien $\mathcal{N}(0, \sigma^2)$ | L2 (weight decay) | Poids petits |
+| Laplacien | L1 (lasso) | Poids sparse |
+| Uniforme (pas de prior) | Pas de régularisation | MLE pur |
+
+## MLE vs MAP en pratique
+
+En deep learning moderne :
+
+- **L'entraînement standard** avec une cross-entropy loss et du weight decay, c'est du MAP avec un prior gaussien
+- **Sans weight decay**, c'est du MLE pur
+- **Dropout** peut être interprété comme une forme d'inférence bayésienne approximative
+- **L'augmentation de données** agit comme un prior implicite sur l'invariance du modèle
+
+Le MLE et le MAP ne sont pas des concepts abstraits déconnectés de la pratique. Ce sont exactement ce que font les frameworks quand on appelle `loss.backward()` et `optimizer.step()`.
+
+## Ce qu'il faut retenir
+
+- La vraisemblance mesure la compatibilité entre les paramètres et les données observées
+- Le MLE choisit les paramètres qui maximisent cette vraisemblance
+- On utilise la log-vraisemblance pour des raisons numériques et algébriques
+- La cross-entropy loss = log-vraisemblance négative (le lien est direct)
+- Le MAP ajoute un prior : c'est du MLE régularisé
+- Régularisation L2 = prior gaussien, régularisation L1 = prior laplacien
+- En pratique, entraîner un réseau avec weight decay, c'est faire du MAP

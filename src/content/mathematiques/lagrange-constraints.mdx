@@ -1,0 +1,137 @@
+---
+title: "Optimisation sous contraintes : Lagrange et KKT"
+description: "Multiplicateurs de Lagrange, conditions KKT et optimisation sous contraintes : les outils mathématiques derrière les SVM, la normalisation et la régularisation."
+---
+
+## Pourquoi des contraintes ?
+
+En machine learning, on ne cherche pas simplement à minimiser une fonction. On veut le faire en respectant des règles. Les probabilités doivent sommer à 1. Les embeddings doivent avoir une norme unitaire. La marge d'un SVM doit être maximale tout en classant correctement les points. L'optimisation sous contraintes formalise ces situations.
+
+## Le problème général
+
+### Formulation
+
+On veut minimiser une fonction objectif $f(x)$ sous des contraintes :
+
+$$\min_x f(x) \quad \text{sous} \quad g_i(x) = 0, \quad i = 1, \ldots, m$$
+
+Par exemple : minimiser une loss, sous la contrainte que les poids de softmax somment à 1.
+
+Sans contraintes, on utilise la condition $\nabla f(x) = 0$. Mais avec des contraintes, le minimum peut se trouver à un endroit où le gradient n'est pas nul : la contrainte "empêche" d'aller plus bas.
+
+## Les multiplicateurs de Lagrange
+
+### L'intuition géométrique
+
+Imaginez que vous marchiez sur le flanc d'une montagne (la fonction $f$) mais que vous soyez obligé de rester sur un sentier (la contrainte $g(x) = 0$). Le point le plus bas que vous puissiez atteindre est celui où le sentier est tangent à une courbe de niveau de la montagne. À cet endroit, la pente de la montagne est perpendiculaire au sentier.
+
+Mathématiquement : au point optimal, le gradient de $f$ est parallèle au gradient de $g$ :
+
+$$\nabla f(x^*) = \lambda \nabla g(x^*)$$
+
+Le scalaire $\lambda$ est le multiplicateur de Lagrange.
+
+### Le lagrangien
+
+On combine l'objectif et les contraintes dans une seule fonction :
+
+$$\mathcal{L}(x, \lambda) = f(x) + \sum_{i=1}^m \lambda_i g_i(x)$$
+
+Les conditions d'optimalité sont alors :
+
+$$\nabla_x \mathcal{L} = 0 \quad \text{et} \quad \nabla_\lambda \mathcal{L} = 0$$
+
+La première condition donne $\nabla f = -\sum \lambda_i \nabla g_i$ (tangence). La seconde redonne les contraintes $g_i(x) = 0$.
+
+### Exemple concret
+
+Maximiser l'entropie $H = -\sum_i p_i \log p_i$ sous la contrainte $\sum_i p_i = 1$ :
+
+$$\mathcal{L}(p, \lambda) = -\sum_i p_i \log p_i + \lambda\left(\sum_i p_i - 1\right)$$
+
+En dérivant par rapport à $p_i$ et en résolvant, on obtient $p_i = 1/K$ pour toutes les classes : la distribution uniforme maximise l'entropie. Ce résultat élégant découle directement de la méthode de Lagrange.
+
+### Interprétation du multiplicateur
+
+Le multiplicateur $\lambda$ a une interprétation économique : c'est la sensibilité de l'objectif optimal à un relâchement de la contrainte. Si $\lambda$ est grand, la contrainte est "coûteuse" : la relâcher un peu améliorerait beaucoup l'objectif.
+
+## Contraintes d'inégalité et conditions KKT
+
+### Le problème étendu
+
+En pratique, les contraintes sont souvent des inégalités :
+
+$$\min_x f(x) \quad \text{sous} \quad g_i(x) \leq 0, \quad i = 1, \ldots, m$$
+
+Par exemple : la marge d'un SVM doit être au moins 1, soit $g_i(x) = 1 - y_i(\mathbf{w} \cdot \mathbf{x}_i + b) \leq 0$.
+
+### Les conditions KKT
+
+Les conditions de Karush-Kuhn-Tucker (KKT) généralisent les conditions de Lagrange aux inégalités. Au point optimal $(x^*, \lambda^*)$ :
+
+1. **Stationnarité** : $\nabla_x \mathcal{L}(x^*, \lambda^*) = 0$
+2. **Faisabilité primale** : $g_i(x^*) \leq 0$ pour tout $i$
+3. **Faisabilité duale** : $\lambda_i \geq 0$ pour tout $i$
+4. **Complémentarité** : $\lambda_i g_i(x^*) = 0$ pour tout $i$
+
+### La condition de complémentarité
+
+C'est la condition la plus subtile et la plus utile. Elle dit : soit la contrainte est active ($g_i(x^*) = 0$, on est sur la frontière), soit le multiplicateur est nul ($\lambda_i = 0$, la contrainte n'a aucun effet). Les deux ne sont jamais simultanément non nuls.
+
+En termes intuitifs : une contrainte qui n'est pas "tendue" ne coûte rien. Seules les contraintes actives influencent la solution.
+
+## Application majeure : les SVM
+
+### Le problème primal
+
+Un SVM linéaire cherche l'hyperplan qui sépare les classes avec la marge maximale :
+
+$$\min_{\mathbf{w}, b} \frac{1}{2} \|\mathbf{w}\|^2 \quad \text{sous} \quad y_i(\mathbf{w} \cdot \mathbf{x}_i + b) \geq 1, \quad \forall i$$
+
+On minimise la norme des poids (marge maximale) sous la contrainte que chaque point est correctement classé avec une marge d'au moins 1.
+
+### Le dual
+
+En formant le lagrangien et en appliquant KKT, on obtient le problème dual :
+
+$$\max_\alpha \sum_i \alpha_i - \frac{1}{2} \sum_{i,j} \alpha_i \alpha_j y_i y_j (\mathbf{x}_i \cdot \mathbf{x}_j) \quad \text{sous} \quad \alpha_i \geq 0, \quad \sum_i \alpha_i y_i = 0$$
+
+### Les vecteurs supports
+
+Par la condition de complémentarité, $\alpha_i > 0$ seulement si $y_i(\mathbf{w} \cdot \mathbf{x}_i + b) = 1$. Ces points, exactement sur la marge, sont les vecteurs supports. Ils sont les seuls qui comptent pour définir l'hyperplan. Tous les autres points ($\alpha_i = 0$) pourraient être supprimés sans changer la solution.
+
+### Le kernel trick
+
+Le dual ne dépend des données qu'à travers les produits scalaires $\mathbf{x}_i \cdot \mathbf{x}_j$. En remplaçant ce produit scalaire par un noyau $K(\mathbf{x}_i, \mathbf{x}_j)$, on peut séparer des données non linéairement séparables sans jamais calculer explicitement la transformation. C'est le kernel trick, une conséquence directe de la formulation duale.
+
+## Autres applications en ML
+
+### Normalisation des embeddings
+
+Contraindre les vecteurs d'embedding à vivre sur la sphère unitaire ($\|e\| = 1$) est une contrainte d'égalité. En pratique, on normalise directement plutôt que d'utiliser Lagrange, mais la théorie sous-jacente est la même.
+
+### Régularisation comme contrainte
+
+Au lieu de minimiser $L(\theta) + \lambda \|\theta\|^2$ (formulation pénalisée), on peut écrire le problème équivalent :
+
+$$\min_\theta L(\theta) \quad \text{sous} \quad \|\theta\|^2 \leq C$$
+
+Les deux formulations sont liées par la dualité de Lagrange. Pour chaque $\lambda$, il existe un $C$ correspondant, et vice versa. C'est pourquoi la régularisation peut être vue comme une contrainte sur la complexité du modèle.
+
+### Contraintes de fairness
+
+De plus en plus, on veut des modèles équitables. Par exemple : la probabilité de prédiction positive doit être la même pour deux groupes démographiques. Cela s'exprime comme une contrainte d'égalité sur les sorties du modèle, et les multiplicateurs de Lagrange permettent d'intégrer cette contrainte dans l'entraînement.
+
+### Dualité forte et faible
+
+En optimisation convexe, la dualité forte signifie que le problème dual a la même solution optimale que le primal. C'est un résultat puissant car le dual est parfois plus facile à résoudre. La dualité faible ($\text{dual} \leq \text{primal}$) est toujours vraie et fournit une borne inférieure utile.
+
+## Ce qu'il faut retenir
+
+- Les multiplicateurs de Lagrange permettent d'optimiser sous contraintes d'égalité
+- L'intuition géométrique est la tangence entre les courbes de niveau de l'objectif et la contrainte
+- Les conditions KKT étendent la méthode aux contraintes d'inégalité
+- La complémentarité dit que seules les contraintes actives comptent
+- Les SVM sont l'application emblématique : la formulation duale mène au kernel trick
+- La régularisation peut être vue comme une contrainte sur les paramètres
+- Ces outils restent pertinents pour les contraintes de fairness et de normalisation en ML moderne

@@ -1,0 +1,146 @@
+---
+title: "Échantillonnage : Monte Carlo, importance sampling, MCMC"
+description: "Techniques d'échantillonnage en machine learning : Monte Carlo, importance sampling, MCMC, reparameterization trick pour les VAE et temperature sampling dans les LLM."
+---
+
+## Pourquoi échantillonner ?
+
+En machine learning, on rencontre constamment des intégrales impossibles à calculer analytiquement. Par exemple, pour prédire avec un modèle bayésien, il faudrait intégrer sur tous les paramètres possibles :
+
+$$P(y | x, \mathcal{D}) = \int P(y | x, \theta) P(\theta | \mathcal{D}) \, d\theta$$
+
+Si $\theta$ vit dans un espace à des millions de dimensions (comme les poids d'un réseau), cette intégrale est intractable. L'échantillonnage est la solution : au lieu de calculer l'intégrale exactement, on tire des échantillons et on moyenne.
+
+## Monte Carlo basique
+
+### Le principe
+
+L'idée de Monte Carlo est simple et élégante. Pour calculer $E_{p(x)}[f(x)] = \int f(x) p(x) \, dx$, on tire $N$ échantillons $x_1, x_2, \ldots, x_N$ depuis $p(x)$ et on calcule la moyenne :
+
+$$E_{p(x)}[f(x)] \approx \frac{1}{N} \sum_{i=1}^N f(x_i), \quad x_i \sim p(x)$$
+
+Par la loi des grands nombres, cette approximation converge vers la vraie valeur quand $N \to \infty$.
+
+### Analogie
+
+Pour estimer l'aire d'un lac sur une carte, lancez des fléchettes au hasard sur la carte. La proportion de fléchettes qui tombent dans le lac, multipliée par l'aire de la carte, donne une estimation de l'aire du lac. Plus vous lancez de fléchettes, plus l'estimation est précise.
+
+### En ML
+
+- **SGD** est une méthode Monte Carlo : on estime le gradient sur tout le dataset en le calculant sur un mini-batch aléatoire
+- **Dropout** pendant l'inférence : moyenner plusieurs passages avec des masques différents, c'est du Monte Carlo
+
+### Limites
+
+Le problème de Monte Carlo basique est l'efficacité. Si la distribution $p(x)$ est très concentrée dans une petite région de l'espace, la plupart des échantillons tombent dans des zones "inintéressantes" et contribuent peu à l'estimation. En haute dimension, ce problème explose.
+
+## Importance sampling
+
+### L'idée : échantillonner intelligemment
+
+Au lieu de tirer depuis $p(x)$ (qui peut être difficile à échantillonner ou inefficace), on tire depuis une distribution proposée $q(x)$ plus facile, et on corrige avec un poids :
+
+$$E_{p(x)}[f(x)] = \int f(x) \frac{p(x)}{q(x)} q(x) \, dx \approx \frac{1}{N} \sum_{i=1}^N f(x_i) \frac{p(x_i)}{q(x_i)}, \quad x_i \sim q(x)$$
+
+Le ratio $w_i = \frac{p(x_i)}{q(x_i)}$ est le poids d'importance. Si $q$ concentre ses échantillons là où $f(x) \cdot p(x)$ est grand, l'estimation est plus efficace.
+
+### Analogie
+
+Pour estimer la taille moyenne des poissons dans un lac, au lieu de pêcher au hasard (beaucoup de petits poissons, peu de gros), vous pourriez pêcher dans les zones profondes où les gros poissons se concentrent, puis corriger votre estimation en tenant compte de votre biais d'échantillonnage.
+
+### En ML
+
+- **Off-policy learning en RL** : on apprend à partir de données collectées par une ancienne politique, en utilisant des poids d'importance pour corriger
+- **PPO (Proximal Policy Optimization)** utilise l'importance sampling avec un ratio clippé pour la stabilité
+- **Estimation de la log-vraisemblance** dans les modèles à variables latentes
+
+### Problème de haute dimension
+
+En haute dimension, les poids d'importance peuvent varier de plusieurs ordres de grandeur, rendant l'estimation très bruitée. Quelques échantillons avec des poids énormes dominent, et la variance explose. C'est le "curse of dimensionality" de l'importance sampling.
+
+## MCMC : Markov Chain Monte Carlo
+
+### Le problème
+
+On veut échantillonner depuis une distribution $p(\theta)$ dont on connaît la forme (à une constante près) mais dont on ne sait pas tirer directement. Typiquement : le posterior $P(\theta | \mathcal{D}) \propto P(\mathcal{D} | \theta) P(\theta)$.
+
+### L'idée de MCMC
+
+Au lieu de tirer des échantillons indépendants (impossible), on construit une chaîne de Markov dont la distribution stationnaire est $p(\theta)$. En laissant la chaîne évoluer assez longtemps, les états visités forment un échantillon (corrélé) de $p(\theta)$.
+
+### Metropolis-Hastings
+
+L'algorithme le plus classique :
+
+1. Partir d'un point $\theta_0$
+2. Proposer un nouveau point $\theta' \sim q(\theta' | \theta_t)$ (par exemple, un petit pas gaussien)
+3. Calculer le ratio d'acceptation : $\alpha = \min\left(1, \frac{p(\theta') q(\theta_t | \theta')}{p(\theta_t) q(\theta' | \theta_t)}\right)$
+4. Accepter $\theta_{t+1} = \theta'$ avec probabilité $\alpha$, sinon rester $\theta_{t+1} = \theta_t$
+5. Répéter
+
+La beauté de cet algorithme est qu'on n'a besoin que du ratio $p(\theta')/p(\theta_t)$, pas de $p$ normalisée. La constante de normalisation (l'evidence) s'annule dans le ratio.
+
+### Limites en ML
+
+MCMC est exact en théorie mais lent en pratique pour les modèles de haute dimension. Parcourir l'espace des paramètres d'un réseau de neurones avec des millions de poids prendrait un temps astronomique. C'est pourquoi le deep learning bayésien utilise plutôt l'inférence variationnelle.
+
+## Le reparameterization trick
+
+### Le problème des VAE
+
+Dans un Variational Autoencoder, on veut optimiser :
+
+$$\mathcal{L} = E_{z \sim q_\phi(z|x)}[\log p_\theta(x|z)] - D_{KL}(q_\phi(z|x) \| p(z))$$
+
+Le premier terme nécessite d'échantillonner $z$ depuis $q_\phi(z|x)$. Mais un échantillon aléatoire n'est pas différentiable par rapport aux paramètres $\phi$ de l'encodeur. Comment rétropropager le gradient à travers un tirage aléatoire ?
+
+### La solution
+
+Au lieu de tirer $z \sim \mathcal{N}(\mu_\phi, \sigma_\phi^2)$, on écrit :
+
+$$z = \mu_\phi + \sigma_\phi \cdot \epsilon, \quad \epsilon \sim \mathcal{N}(0, 1)$$
+
+L'aléa est déplacé vers $\epsilon$, qui ne dépend pas de $\phi$. Maintenant $z$ est une fonction déterministe et différentiable de $\mu_\phi$ et $\sigma_\phi$, et le gradient peut circuler librement.
+
+### Analogie
+
+Imaginez que vous vouliez régler la température d'une douche (paramètre $\phi$) en vous basant sur l'eau qui sort (échantillon). Si l'eau est aléatoire, vous ne pouvez pas savoir quel robinet tourner. Le reparameterization trick revient à séparer le bruit de la tuyauterie ($\epsilon$) du réglage du robinet ($\phi$). Le bruit existe toujours, mais vous pouvez voir comment le réglage affecte la température moyenne.
+
+### Impact
+
+Ce trick, introduit simultanément par Kingma et Welling (VAE) et Rezende et al. en 2014, a rendu possible l'entraînement des VAE par gradient descent. Sans lui, les modèles génératifs à variables latentes continues seraient restés intractables.
+
+## Temperature sampling dans les LLM
+
+### Comment un LLM génère du texte
+
+À chaque étape, le modèle produit des logits $z_1, \ldots, z_V$ sur tout le vocabulaire. On applique softmax avec une température $T$ :
+
+$$P(\text{token}_i) = \frac{e^{z_i / T}}{\sum_j e^{z_j / T}}$$
+
+Puis on échantillonne un token depuis cette distribution.
+
+### Effet de la température
+
+- **$T = 0$** (en pratique, argmax) : toujours le token le plus probable. Déterministe, mais répétitif et ennuyeux.
+- **$T = 0.7$** : un bon compromis entre cohérence et créativité. Le choix le plus courant.
+- **$T = 1.0$** : la distribution "naturelle" apprise par le modèle.
+- **$T > 1.0$** : plus aléatoire, plus créatif, mais aussi plus incohérent.
+
+### Top-k et top-p (nucleus) sampling
+
+En pratique, on combine la température avec un filtrage :
+
+- **Top-k** : ne considérer que les $k$ tokens les plus probables
+- **Top-p (nucleus)** : ne considérer que les tokens dont la probabilité cumulée atteint $p$
+
+Ces techniques empêchent le modèle de choisir des tokens très improbables qui rendraient le texte incohérent, tout en conservant de la diversité.
+
+## Ce qu'il faut retenir
+
+- L'échantillonnage résout le problème des intégrales intractables en ML
+- Monte Carlo estime une espérance par la moyenne d'échantillons aléatoires
+- L'importance sampling permet d'échantillonner plus efficacement avec des poids de correction
+- MCMC construit une chaîne de Markov pour échantillonner des posteriors complexes
+- Le reparameterization trick rend l'échantillonnage différentiable, ce qui a permis les VAE
+- La température et le nucleus sampling contrôlent la diversité de la génération dans les LLM

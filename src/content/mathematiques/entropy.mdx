@@ -1,0 +1,145 @@
+---
+title: "Entropie : mesurer l'incertitude"
+description: "L'entropie de Shannon, son interprétation en termes de compression et d'incertitude, et son lien direct avec les modèles de langage et la perplexité."
+---
+
+## L'entropie : une mesure universelle de l'incertitude
+
+Quand un modèle de langage prédit le mot suivant, certains contextes rendent la prédiction facile ("Le ciel est...") et d'autres la rendent difficile ("Elle a décidé de..."). L'entropie quantifie exactement cette difficulté : c'est la mesure mathématique de l'incertitude d'une distribution de probabilité. Plus l'incertitude est grande, plus l'entropie est élevée.
+
+## La formule de Shannon
+
+### Définition
+
+Pour une variable aléatoire discrète $X$ avec distribution $P$, l'entropie de Shannon est :
+
+$$H(X) = -\sum_{x} P(x) \log P(x)$$
+
+Par convention, $0 \log 0 = 0$ (la limite quand $p \to 0$).
+
+Si le logarithme est en base 2, l'entropie est en bits. Si c'est le logarithme naturel, elle est en nats. En ML, on utilise généralement le log naturel dans les calculs, mais on raisonne souvent en bits pour l'intuition.
+
+### Pourquoi cette formule ?
+
+Shannon a cherché la seule fonction qui satisfait trois propriétés naturelles :
+- **Continuité** : de petits changements dans les probabilités produisent de petits changements dans l'entropie
+- **Maximum pour l'uniforme** : l'incertitude est maximale quand tous les résultats sont équiprobables
+- **Additivité** : l'entropie d'événements indépendants s'additionne
+
+La formule $H = -\sum p \log p$ est l'unique fonction (à une constante multiplicative près) qui satisfait ces trois propriétés.
+
+## Intuition : combien de bits pour encoder ?
+
+### Le lien avec la compression
+
+L'entropie mesure le nombre moyen minimal de bits nécessaires pour encoder un message tiré de la distribution $P$.
+
+Prenons un exemple. Un alphabet de 4 symboles :
+- Cas 1 : tous équiprobables ($p = 1/4$ chacun). $H = \log_2 4 = 2$ bits. Il faut 2 bits par symbole (00, 01, 10, 11).
+- Cas 2 : $P = (1/2, 1/4, 1/8, 1/8)$. $H = 1.75$ bits. On peut faire mieux qu'un code de longueur fixe : assigner un code court ("0") au symbole fréquent et des codes longs aux symboles rares.
+
+L'entropie dit : on ne peut pas compresser en dessous de $H$ bits par symbole en moyenne. C'est la limite théorique de la compression.
+
+### Les modèles de langage sont des compresseurs
+
+Un language model apprend la distribution $P(\text{token suivant} | \text{contexte})$. Un bon modèle assigne une haute probabilité aux tokens qui apparaissent effectivement, ce qui correspond à une faible surprise moyenne, donc une faible entropie croisée. Autrement dit : un bon modèle de langage compresse bien le texte.
+
+Cette connexion entre prédiction et compression est profonde. Tout bon prédicteur est un bon compresseur, et vice versa.
+
+## Cas extrêmes
+
+### Entropie maximale : l'uniforme
+
+Quand tous les $K$ résultats sont équiprobables ($P(x) = 1/K$ pour tout $x$) :
+
+$$H_{\max} = \log K$$
+
+C'est le cas de plus grande incertitude. Pour un dé à 6 faces équilibré : $H = \log_2 6 \approx 2.58$ bits. Pour le vocabulaire d'un LLM de 50 000 tokens : $H_{\max} = \log_2 50000 \approx 15.6$ bits.
+
+### Entropie minimale : la certitude
+
+Quand un résultat a une probabilité de 1 (les autres valent 0) :
+
+$$H = -1 \cdot \log 1 = 0$$
+
+L'entropie est nulle : il n'y a aucune incertitude. On sait exactement ce qui va se passer. Aucun bit n'est nécessaire pour encoder un message dont on connaît le contenu à l'avance.
+
+### Entre les deux
+
+Pour une Bernoulli de paramètre $p$ :
+
+$$H(p) = -p \log p - (1-p) \log (1-p)$$
+
+L'entropie est maximale à $p = 0.5$ (pile ou face équitable : 1 bit) et tend vers 0 quand $p \to 0$ ou $p \to 1$.
+
+## Entropie conditionnelle
+
+### Définition
+
+L'entropie conditionnelle mesure l'incertitude résiduelle sur $X$ quand on connaît $Y$ :
+
+$$H(X|Y) = -\sum_{x,y} P(x, y) \log P(x|y)$$
+
+C'est la moyenne de l'entropie de $X$ sur les différentes valeurs de $Y$.
+
+### Propriété fondamentale
+
+$$H(X|Y) \leq H(X)$$
+
+Connaître $Y$ ne peut que réduire (ou maintenir) l'incertitude sur $X$. L'information ne peut pas augmenter l'incertitude.
+
+Égalité si et seulement si $X$ et $Y$ sont indépendantes : savoir $Y$ ne dit rien sur $X$.
+
+### En ML
+
+Dans un modèle autorégressif, $H(\text{token}_t | \text{tokens}_{1:t-1})$ diminue à mesure que le contexte grandit. Avec plus de contexte, la prédiction du prochain token est plus facile. C'est pourquoi les modèles avec des contextes plus longs ont tendance à avoir de meilleures perplexités.
+
+## Perplexité : l'entropie rendue lisible
+
+### Définition
+
+La perplexité est simplement l'exponentielle de l'entropie croisée :
+
+$$\text{PPL} = 2^{H(P, Q)}$$
+
+où $H(P, Q)$ est la cross-entropie entre la vraie distribution et les prédictions du modèle (en base 2 pour des bits). En pratique, avec le log naturel :
+
+$$\text{PPL} = e^{-\frac{1}{N}\sum_{i=1}^N \log Q(x_i)}$$
+
+### Interprétation
+
+La perplexité peut être interprétée comme le nombre effectif de choix que le modèle "hésite" entre à chaque pas. Une perplexité de 10 signifie que le modèle est aussi incertain que s'il choisissait uniformément parmi 10 options.
+
+### Les chiffres en pratique
+
+- **Perplexité de 1** : le modèle prédit parfaitement, sans aucune incertitude
+- **Perplexité de 50 000** : le modèle ne sait rien, il choisit uniformément dans le vocabulaire
+- **GPT-2** : perplexité d'environ 30 sur des benchmarks standards
+- **GPT-3/4** : perplexités significativement plus basses
+
+### Pourquoi la perplexité et pas l'entropie directement ?
+
+La perplexité est plus intuitive. Dire "le modèle hésite entre 25 mots" est plus parlant que "l'entropie est de 4.64 bits". Les deux contiennent la même information, mais la perplexité a une interprétation immédiate.
+
+## Entropie et régularisation
+
+### Maximum entropy principle
+
+Quand on a des connaissances partielles sur une distribution (par exemple, sa moyenne), le principe du maximum d'entropie dit : choisir la distribution de plus grande entropie compatible avec ces contraintes. C'est la distribution la plus "honnête", celle qui n'ajoute pas d'hypothèses injustifiées.
+
+- Contrainte sur la moyenne : la distribution de maximum d'entropie est exponentielle
+- Contraintes sur la moyenne et la variance : c'est la gaussienne
+- Pas de contrainte (support fini) : c'est l'uniforme
+
+### Label smoothing
+
+Le label smoothing remplace les labels one-hot $(1, 0, 0, \ldots)$ par des labels "adoucis" $(0.9, 0.033, 0.033, \ldots)$. C'est une forme de régularisation par entropie : on empêche le modèle d'être trop confiant en augmentant l'entropie de la distribution cible.
+
+## Ce qu'il faut retenir
+
+- L'entropie $H(X) = -\sum p(x) \log p(x)$ mesure l'incertitude d'une distribution
+- Elle est maximale pour la distribution uniforme et nulle pour une distribution certaine
+- L'entropie est la limite théorique de la compression
+- Les modèles de langage sont des compresseurs : un bon modèle a une faible cross-entropie
+- La perplexité $= 2^H$ est le nombre effectif de choix, la métrique standard des LLM
+- L'entropie conditionnelle diminue avec le contexte : plus d'information = moins d'incertitude

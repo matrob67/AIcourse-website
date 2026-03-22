@@ -592,7 +592,73 @@ export const courseParts: Part[] = [
   },
 
   // ═══════════════════════════════════════════════════════════
-  // PARTIE 7 : RESSOURCES & GLOSSAIRE
+  // PARTIE 7 : FONDAMENTAUX MATHÉMATIQUES
+  // ═══════════════════════════════════════════════════════════
+  {
+    id: "mathematiques",
+    title: "Fondamentaux Mathématiques",
+    shortTitle: "Maths",
+    description: "Toutes les bases mathématiques nécessaires pour comprendre l'IA : algèbre linéaire, calcul, probabilités, optimisation, théorie de l'information",
+    icon: "🧮",
+    modules: [
+      {
+        id: "algebre-lineaire",
+        title: "Algèbre linéaire",
+        lessons: [
+          { id: "vectors-matrices", number: 308, title: "Vecteurs et matrices : les briques de base", slug: "vectors-matrices" },
+          { id: "matrix-operations", number: 309, title: "Opérations matricielles : multiplication, transposée, inverse", slug: "matrix-operations" },
+          { id: "eigenvalues", number: 310, title: "Valeurs propres et vecteurs propres", slug: "eigenvalues" },
+          { id: "svd", number: 311, title: "Décomposition en valeurs singulières (SVD)", slug: "svd" },
+          { id: "vector-spaces", number: 312, title: "Espaces vectoriels, bases et projections", slug: "vector-spaces" },
+          { id: "norms-distances", number: 313, title: "Normes et distances : L1, L2, cosinus", slug: "norms-distances" },
+        ],
+      },
+      {
+        id: "calcul",
+        title: "Calcul différentiel et intégral",
+        lessons: [
+          { id: "derivatives", number: 314, title: "Dérivées et gradients : l'intuition géométrique", slug: "derivatives" },
+          { id: "chain-rule", number: 315, title: "Règle de la chaîne : le cœur de la backpropagation", slug: "chain-rule" },
+          { id: "partial-derivatives", number: 316, title: "Dérivées partielles et jacobienne", slug: "partial-derivatives" },
+          { id: "taylor-series", number: 317, title: "Séries de Taylor et approximations", slug: "taylor-series" },
+          { id: "integrals-ml", number: 318, title: "Intégrales en ML : marginalisation et espérance", slug: "integrals-ml" },
+        ],
+      },
+      {
+        id: "probabilites",
+        title: "Probabilités et statistiques",
+        lessons: [
+          { id: "probability-basics", number: 319, title: "Probabilités : axiomes, conditionnelle, Bayes", slug: "probability-basics" },
+          { id: "distributions", number: 320, title: "Distributions : gaussienne, Bernoulli, catégorielle, softmax", slug: "distributions" },
+          { id: "expectation-variance", number: 321, title: "Espérance, variance et moments", slug: "expectation-variance" },
+          { id: "maximum-likelihood", number: 322, title: "Maximum de vraisemblance (MLE) et MAP", slug: "maximum-likelihood" },
+          { id: "sampling", number: 323, title: "Échantillonnage : Monte Carlo, importance sampling, MCMC", slug: "sampling" },
+        ],
+      },
+      {
+        id: "optimisation",
+        title: "Optimisation",
+        lessons: [
+          { id: "convexity", number: 324, title: "Convexité : fonctions convexes, minima locaux vs globaux", slug: "convexity" },
+          { id: "gradient-methods", number: 325, title: "Méthodes de gradient : convergence, learning rate, momentum", slug: "gradient-methods" },
+          { id: "lagrange-constraints", number: 326, title: "Optimisation sous contraintes : Lagrange et KKT", slug: "lagrange-constraints" },
+          { id: "numerical-stability", number: 327, title: "Stabilité numérique : overflow, underflow, log-sum-exp", slug: "numerical-stability" },
+        ],
+      },
+      {
+        id: "theorie-information",
+        title: "Théorie de l'information",
+        lessons: [
+          { id: "entropy", number: 328, title: "Entropie : mesurer l'incertitude", slug: "entropy" },
+          { id: "kl-divergence", number: 329, title: "Divergence KL et cross-entropie", slug: "kl-divergence" },
+          { id: "mutual-information", number: 330, title: "Information mutuelle et ses applications en ML", slug: "mutual-information" },
+        ],
+      },
+    ],
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // PARTIE 8 : RESSOURCES & GLOSSAIRE
   // ═══════════════════════════════════════════════════════════
   {
     id: "ressources",

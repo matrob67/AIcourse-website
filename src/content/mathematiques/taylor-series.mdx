@@ -1,0 +1,136 @@
+---
+title: "Séries de Taylor et approximations"
+description: "Comment approximer n'importe quelle fonction par un polynôme, et pourquoi cette idée est le fondement théorique du gradient descent et des optimiseurs modernes."
+---
+
+## L'idée géniale : remplacer le compliqué par le simple
+
+Imagine que tu dois calculer $\sin(0{,}1)$ sans calculatrice. Le sinus est une fonction compliquée. Mais près de zéro, tu sais que $\sin(x) \approx x$. Donc $\sin(0{,}1) \approx 0{,}1$. La vraie valeur est $0{,}09983\ldots$ -- l'approximation est excellente.
+
+C'est l'idée fondamentale des **séries de Taylor** : approximer une fonction compliquée par un **polynôme**, qui est beaucoup plus simple à calculer et à analyser. Plus on ajoute de termes au polynôme, meilleure est l'approximation.
+
+## La formule de Taylor
+
+La série de Taylor de $f$ autour du point $a$ est :
+
+$$f(x) = f(a) + f'(a)(x - a) + \frac{f''(a)}{2!}(x - a)^2 + \frac{f'''(a)}{3!}(x - a)^3 + \cdots$$
+
+Ou de manière compacte :
+
+$$f(x) = \sum_{k=0}^{\infty} \frac{f^{(k)}(a)}{k!}(x - a)^k$$
+
+Chaque terme ajoute un niveau de précision :
+
+- **Ordre 0** : $f(x) \approx f(a)$ -- on suppose que la fonction est constante. Très grossier.
+- **Ordre 1** : $f(x) \approx f(a) + f'(a)(x - a)$ -- on suit la pente. C'est une **droite tangente**.
+- **Ordre 2** : on ajoute la courbure. C'est une **parabole** qui épouse la courbe.
+- **Ordres supérieurs** : on capture des détails de plus en plus fins de la forme de $f$.
+
+### Exemples classiques
+
+L'exponentielle autour de $a = 0$ :
+
+$$e^x = 1 + x + \frac{x^2}{2} + \frac{x^3}{6} + \cdots$$
+
+Le cosinus autour de $a = 0$ :
+
+$$\cos(x) = 1 - \frac{x^2}{2} + \frac{x^4}{24} - \cdots$$
+
+Le logarithme autour de $a = 1$ :
+
+$$\ln(x) = (x - 1) - \frac{(x - 1)^2}{2} + \frac{(x - 1)^3}{3} - \cdots$$
+
+Ces développements ne sont pas juste des curiosités mathématiques. Ils sont au cœur de nombreux algorithmes en ML.
+
+## L'approximation linéaire : c'est le gradient descent
+
+L'approximation de Taylor au **premier ordre** est la plus importante en ML. Si on développe la loss $\mathcal{L}$ autour des paramètres actuels $\theta$ :
+
+$$\mathcal{L}(\theta + \Delta\theta) \approx \mathcal{L}(\theta) + \nabla \mathcal{L}(\theta)^T \cdot \Delta\theta$$
+
+Cette formule dit : la nouvelle loss est environ égale à l'ancienne, plus le produit scalaire entre le gradient et le déplacement. Pour minimiser la loss, on veut que ce produit soit le plus négatif possible. Le choix $\Delta\theta = -\eta \nabla \mathcal{L}(\theta)$ donne :
+
+$$\mathcal{L}(\theta - \eta \nabla \mathcal{L}) \approx \mathcal{L}(\theta) - \eta \|\nabla \mathcal{L}\|^2$$
+
+Le terme $\|\nabla \mathcal{L}\|^2$ est toujours positif, donc la loss **diminue** à chaque step (tant que $\eta$ est assez petit pour que l'approximation linéaire reste valide). C'est la **garantie théorique** du gradient descent : localement, on descend toujours.
+
+### Pourquoi le learning rate doit être petit
+
+L'approximation linéaire n'est valide que **localement** -- quand $\Delta\theta$ est petit. Si tu fais un pas trop grand, tu sors de la zone où la droite tangente approxime bien la courbe. C'est exactement le rôle du learning rate $\eta$ : contrôler la taille du pas pour rester dans la zone de validité de l'approximation de Taylor au premier ordre.
+
+## L'approximation quadratique : la méthode de Newton
+
+Si on ajoute le terme de second ordre, on obtient :
+
+$$\mathcal{L}(\theta + \Delta\theta) \approx \mathcal{L}(\theta) + \nabla \mathcal{L}(\theta)^T \cdot \Delta\theta + \frac{1}{2} \Delta\theta^T \cdot H \cdot \Delta\theta$$
+
+Où $H$ est la **matrice hessienne** (les dérivées secondes). Cette approximation est une parabole (un bol en dimension $n$). On peut trouver analytiquement le minimum de cette parabole en posant le gradient à zéro :
+
+$$\Delta\theta^* = -H^{-1} \nabla \mathcal{L}(\theta)$$
+
+C'est la **méthode de Newton**. Au lieu de suivre le gradient avec un pas fixe, on saute directement au minimum de l'approximation quadratique. Avantages et inconvénients :
+
+- **Avantage** : convergence **quadratique** -- chaque itération double le nombre de décimales correctes. Extrêmement rapide près du minimum.
+- **Inconvénient majeur** : il faut calculer et inverser la hessienne. Pour $n$ paramètres, c'est du $O(n^3)$. Avec un milliard de paramètres, c'est totalement inenvisageable.
+
+### Le dilemme premier ordre vs second ordre
+
+| Propriété | Gradient descent (ordre 1) | Newton (ordre 2) |
+|---|---|---|
+| Information utilisée | Gradient (pente) | Gradient + Hessienne (pente + courbure) |
+| Coût par itération | $O(n)$ | $O(n^3)$ |
+| Nombre d'itérations | Élevé | Très faible |
+| Praticable en DL ? | Oui | Non (trop coûteux) |
+
+C'est pourquoi l'immense majorité du deep learning utilise des méthodes de **premier ordre** (SGD, Adam). Le coût de calcul par itération est bien plus important que la vitesse de convergence théorique.
+
+## Les optimiseurs modernes : entre premier et second ordre
+
+Les meilleurs optimiseurs actuels utilisent l'information de Taylor d'une manière astucieuse : ils **approximent** certains aspects du second ordre sans payer le coût complet.
+
+### Adam : l'approximation diagonale
+
+Adam maintient deux moyennes mobiles pour chaque paramètre :
+
+- $m_t$ : la moyenne mobile du gradient (estimation du premier moment)
+- $v_t$ : la moyenne mobile du **carré** du gradient (estimation du second moment)
+
+La mise à jour est :
+
+$$\theta_{t+1} = \theta_t - \eta \cdot \frac{m_t}{\sqrt{v_t} + \epsilon}$$
+
+Le terme $\sqrt{v_t}$ joue le rôle d'une approximation de la **racine de la courbure** dans chaque direction. Si le gradient oscille beaucoup dans une direction (grande variance, forte courbure), $v_t$ est grand et le pas effectif est petit. Si le gradient est stable (faible variance, faible courbure), le pas est plus grand.
+
+Adam ne calcule pas la hessienne, mais il en capture l'essence : **adapter le learning rate à la géométrie locale de la loss**. C'est un compromis remarquable entre la simplicité du premier ordre et l'intelligence du second ordre.
+
+### AdaGrad et RMSProp
+
+- **AdaGrad** : accumule le carré de tous les gradients passés. Le learning rate effectif diminue au fil du temps pour chaque paramètre. Problème : il peut devenir trop petit trop vite.
+- **RMSProp** : utilise une moyenne mobile exponentielle au lieu d'une somme, ce qui évite le problème d'AdaGrad. C'est l'un des deux ingrédients d'Adam (l'autre étant le momentum).
+
+## Au-delà du second ordre
+
+Les termes d'ordre supérieur ($\frac{f'''(a)}{6}(x-a)^3$, etc.) sont rarement utilisés en ML. La raison est simple : le coût explose. Si la hessienne a $n^2$ éléments, le tenseur des dérivées troisièmes en a $n^3$. Pour un modèle d'un milliard de paramètres, c'est $10^{27}$ nombres. Absolument impensable.
+
+Cependant, des approximations existent :
+
+- **L-BFGS** : approxime l'inverse de la hessienne en utilisant les $m$ derniers gradients (typiquement $m = 10$ à $20$). Utilisé pour de petits modèles ou le fine-tuning.
+- **K-FAC** : approxime la hessienne par un produit de Kronecker de matrices plus petites, exploitant la structure en couches des réseaux.
+- **Shampoo** : un optimiseur développé chez Google qui utilise des approximations de la hessienne par blocs.
+
+## Lien avec la régularisation
+
+L'approximation de Taylor éclaire aussi la **régularisation L2** (weight decay). Si on développe la loss autour de $\theta^*$ (le minimum sans régularisation) :
+
+$$\mathcal{L}(\theta) \approx \mathcal{L}(\theta^*) + \frac{1}{2}(\theta - \theta^*)^T H (\theta - \theta^*)$$
+
+Ajouter un terme de régularisation $\frac{\lambda}{2}\|\theta\|^2$ revient à déplacer le minimum vers l'origine. Les directions de faible courbure (petites valeurs propres de $H$) sont les plus affectées : la régularisation les pousse vers zéro. Cela élimine les directions où le modèle est "incertain", ce qui réduit le surapprentissage.
+
+## Points clés à retenir
+
+- Les **séries de Taylor** approximent une fonction par un polynôme de degré croissant
+- L'approximation au **premier ordre** est le fondement théorique du gradient descent : on minimise un modèle linéaire local de la loss
+- L'approximation au **second ordre** (Newton) converge plus vite mais coûte $O(n^3)$ -- impraticable en DL
+- **Adam** est un compromis intelligent : il approxime les éléments diagonaux de la hessienne à partir de la variance des gradients, sans le coût du second ordre
+- Le **learning rate** doit être assez petit pour rester dans la zone de validité de l'approximation linéaire
+- La régularisation L2 s'interprète comme un déplacement du minimum dans l'espace des paramètres, gouverné par la courbure de la loss

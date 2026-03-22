@@ -1,0 +1,137 @@
+---
+title: "Convexité : fonctions convexes, minima locaux vs globaux"
+description: "Convexité et non-convexité en optimisation : pourquoi les loss functions des réseaux sont non convexes, et pourquoi l'entraînement fonctionne malgré tout."
+---
+
+## L'optimisation : trouver le fond de la vallée
+
+Entraîner un modèle de machine learning revient à résoudre un problème d'optimisation : trouver les paramètres $\theta$ qui minimisent une fonction de perte $L(\theta)$. La forme de cette fonction de perte détermine la difficulté du problème. Et la convexité est la propriété qui distingue les problèmes "faciles" des problèmes "difficiles".
+
+## Fonctions convexes : le bol
+
+### Définition
+
+Une fonction $f$ est convexe si, pour tous points $x$ et $y$ et tout $t \in [0, 1]$ :
+
+$$f(tx + (1-t)y) \leq t \cdot f(x) + (1-t) \cdot f(y)$$
+
+En termes géométriques : le segment reliant deux points du graphe de $f$ est toujours au-dessus du graphe. La fonction "creuse vers le haut".
+
+### Analogie : le bol
+
+Imaginez une bille dans un bol. Peu importe où vous la lâchez, elle finira toujours au fond. C'est exactement la propriété clé des fonctions convexes : tout minimum local est un minimum global. Il n'y a qu'un seul fond, et la descente de gradient y mène inévitablement.
+
+### Exemples de fonctions convexes
+
+- $f(x) = x^2$ (parabole)
+- $f(x) = |x|$ (valeur absolue)
+- $f(x) = e^x$ (exponentielle)
+- $f(\mathbf{x}) = \|\mathbf{x}\|^2$ (norme au carré)
+- La MSE pour la régression linéaire
+
+### Propriété fondamentale
+
+Pour une fonction convexe différentiable, la condition d'optimalité est simple :
+
+$$\nabla f(x^*) = 0 \implies x^* \text{ est un minimum global}$$
+
+Gradient nul signifie minimum global. Pas d'ambiguïté, pas de piège.
+
+## Fonctions non convexes : le paysage montagneux
+
+### La réalité du deep learning
+
+Les fonctions de perte des réseaux de neurones sont massivement non convexes. Dès qu'on introduit des non-linéarités (ReLU, sigmoid, tanh) et plusieurs couches, la surface de perte devient un paysage complexe avec de multiples vallées, collines et cols.
+
+### Analogie : la montagne
+
+Imaginez un randonneur aveugle dans un massif montagneux qui cherche le point le plus bas. En ne suivant que la pente descendante, il peut finir dans une vallée qui n'est pas la plus profonde. Un minimum local.
+
+### Types de points critiques
+
+En haute dimension, les points où le gradient est nul se classent en trois catégories :
+
+- **Minimum local** : la fonction monte dans toutes les directions
+- **Maximum local** : la fonction descend dans toutes les directions
+- **Point selle (saddle point)** : la fonction monte dans certaines directions et descend dans d'autres
+
+Un point selle ressemble à une selle de cheval : un minimum dans la direction avant-arrière mais un maximum dans la direction gauche-droite.
+
+## Pourquoi les réseaux fonctionnent malgré la non-convexité
+
+C'est la grande question. Si la loss est non convexe, avec des milliards de minima locaux, comment SGD trouve-t-il de bonnes solutions ? Plusieurs éléments de réponse :
+
+### Les saddle points dominent
+
+En très haute dimension (des millions ou milliards de paramètres), les vrais minima locaux sont extrêmement rares. Pourquoi ? Pour qu'un point critique soit un minimum local, la courbure doit être positive dans toutes les directions simultanément. Avec des millions de directions, c'est statistiquement improbable.
+
+La grande majorité des points critiques sont des saddle points. Et SGD les traverse naturellement grâce au bruit stochastique : le gradient bruité pousse la trajectoire hors des points selle, même si le gradient moyen est proche de zéro.
+
+### Les bassins d'attraction sont larges
+
+Les bonnes solutions ne sont pas des minima isolés et étroits, mais de larges bassins plats. Les recherches montrent que ces bassins plats correspondent à des solutions qui généralisent bien. L'intuition : un minimum large est "robuste" aux perturbations des paramètres, tout comme une solution qui généralise est robuste aux perturbations des données.
+
+### La surparamétrisation aide
+
+Un réseau avec plus de paramètres que de données a beaucoup de solutions de loss nulle. Ces solutions forment des variétés connectées dans l'espace des paramètres. SGD n'a pas à trouver un point isolé, il a juste à atteindre cette variété, ce qui est beaucoup plus facile.
+
+### Le bruit de SGD est bénéfique
+
+Le bruit du mini-batch dans SGD agit comme un régularisateur naturel. Il empêche de converger vers des minima étroits et "pointus" (qui sur-apprennent) et favorise les minima larges et plats (qui généralisent).
+
+## La hessienne et la convexité
+
+### La hessienne
+
+La hessienne $\mathbf{H}$ est la matrice des dérivées secondes :
+
+$$H_{ij} = \frac{\partial^2 f}{\partial x_i \partial x_j}$$
+
+Elle capture la courbure de la fonction dans chaque direction.
+
+### Lien avec la convexité
+
+- $f$ est convexe si et seulement si $\mathbf{H}$ est semi-définie positive partout (toutes les valeurs propres $\geq 0$)
+- En un point critique $\nabla f = 0$ :
+  - Toutes les valeurs propres $> 0$ : minimum local
+  - Toutes les valeurs propres $< 0$ : maximum local
+  - Valeurs propres de signes mixtes : point selle
+
+### En pratique
+
+Calculer la hessienne complète d'un réseau de neurones est impossible : pour $n$ paramètres, c'est une matrice $n \times n$ qui occuperait des pétaoctets de mémoire. Mais on peut calculer le produit hessienne-vecteur efficacement, ce qui suffit pour certaines méthodes d'optimisation du second ordre.
+
+## Convexité locale et fonctions "presque convexes"
+
+### Convexité forte
+
+Une fonction est $\mu$-fortement convexe si :
+
+$$f(y) \geq f(x) + \nabla f(x)^\top (y - x) + \frac{\mu}{2} \|y - x\|^2$$
+
+Le terme $\frac{\mu}{2}\|y - x\|^2$ garantit une courbure minimale. Plus $\mu$ est grand, plus la fonction est "courbée" et plus la convergence de la descente de gradient est rapide.
+
+### Lissage (smoothness)
+
+Une fonction est $L$-lisse si son gradient ne varie pas trop vite :
+
+$$\|\nabla f(x) - \nabla f(y)\| \leq L \|x - y\|$$
+
+C'est une borne sur la courbure maximale. Pour une fonction $L$-lisse, la descente de gradient converge avec un learning rate $\alpha \leq 1/L$.
+
+### Le ratio $\kappa = L/\mu$
+
+Le nombre de condition $\kappa$ mesure le "déséquilibre" de la courbure :
+- $\kappa$ proche de 1 : la fonction est bien conditionnée, la convergence est rapide
+- $\kappa$ grand : la fonction est mal conditionnée, l'optimisation est lente (vallées étroites et allongées)
+
+C'est exactement ce qui motive l'utilisation d'optimiseurs adaptatifs comme Adam, qui s'adaptent à la courbure locale dans chaque direction.
+
+## Ce qu'il faut retenir
+
+- Une fonction convexe a un unique minimum global : l'optimisation est "facile"
+- Les fonctions de perte des réseaux de neurones sont non convexes : multiples minima locaux et points selle
+- En haute dimension, les saddle points sont bien plus fréquents que les minima locaux
+- SGD fonctionne malgré la non-convexité grâce au bruit stochastique, à la surparamétrisation et aux larges bassins d'attraction
+- La hessienne capture la courbure locale et détermine la nature des points critiques
+- Le nombre de condition $\kappa$ quantifie la difficulté de l'optimisation

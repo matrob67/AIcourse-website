@@ -1,0 +1,163 @@
+---
+title: "Stabilité numérique : overflow, underflow, log-sum-exp"
+description: "Les pièges numériques du deep learning : représentation des nombres flottants, overflow, underflow, log-sum-exp trick, et solutions au vanishing/exploding gradient."
+---
+
+## Les nombres ne sont pas exacts
+
+Un ordinateur ne manipule pas les nombres réels. Il manipule des approximations avec une précision limitée. En deep learning, où l'on multiplie des millions de nombres entre eux, ces approximations peuvent s'accumuler et provoquer des catastrophes : des valeurs qui explosent vers l'infini, d'autres qui s'effondrent vers zéro. Comprendre ces pièges est essentiel pour entraîner des modèles stables.
+
+## Représentation des nombres flottants
+
+### Le format IEEE 754
+
+Un nombre flottant est stocké sous la forme $(-1)^s \times m \times 2^e$, avec un bit de signe $s$, une mantisse $m$ et un exposant $e$.
+
+### Les formats courants en ML
+
+| Format | Bits | Mantisse | Exposant | Plage approximative | Usage |
+|---|---|---|---|---|---|
+| Float32 (FP32) | 32 | 23 bits | 8 bits | $\pm 3.4 \times 10^{38}$ | Entraînement classique |
+| Float16 (FP16) | 16 | 10 bits | 5 bits | $\pm 6.5 \times 10^{4}$ | Inférence, mixed precision |
+| BFloat16 (BF16) | 16 | 7 bits | 8 bits | $\pm 3.4 \times 10^{38}$ | Entraînement sur TPU/GPU modernes |
+
+### BFloat16 : le compromis du deep learning
+
+BFloat16 est un format inventé par Google spécifiquement pour le deep learning. Il sacrifie de la précision (7 bits de mantisse au lieu de 10 pour FP16) mais garde la même plage que FP32 (8 bits d'exposant). En deep learning, avoir une grande plage est plus important que la précision fine, car les gradients et les activations varient sur plusieurs ordres de grandeur.
+
+## Overflow : les nombres trop grands
+
+### Le problème
+
+Quand un calcul produit un nombre supérieur à la valeur maximale représentable, on obtient `inf` (infini). Cela arrive typiquement avec des exponentielles de grands nombres.
+
+### Exemple : softmax naïf
+
+Calculons softmax de $[1000, 1001, 1002]$ :
+
+$$\text{softmax}(z_i) = \frac{e^{z_i}}{\sum_j e^{z_j}}$$
+
+$e^{1000}$ est de l'ordre de $10^{434}$, bien au-delà de la limite de Float32 ($\approx 10^{38}$). Résultat : `inf / inf = NaN`. Le calcul est détruit.
+
+### Exemple : exponentielle dans la loss
+
+La binary cross-entropy $-\log(\sigma(z))$ avec un logit $z = -100$ donne $\sigma(z) \approx 0$, et $\log(0) = -\infty$. Explosion.
+
+## Underflow : les nombres trop petits
+
+### Le problème
+
+Quand un calcul produit un nombre plus petit que la valeur minimale représentable (mais non nulle), il est arrondi à zéro. Cela arrive avec des produits de probabilités.
+
+### Exemple : produit de probabilités
+
+Si on multiplie 1 000 probabilités de 0.01 :
+
+$$\prod_{i=1}^{1000} 0.01 = 10^{-2000}$$
+
+En Float32, tout nombre inférieur à $\approx 10^{-38}$ est arrondi à zéro. Le produit devient exactement 0, et on perd toute information sur les différences relatives entre les termes.
+
+### Conséquence en ML
+
+C'est exactement pourquoi on utilise la log-vraisemblance au lieu de la vraisemblance. Le log transforme le produit en somme : $\log(10^{-2000}) = -2000 \cdot \log(10) \approx -4605$, un nombre parfaitement représentable.
+
+## Le log-sum-exp trick
+
+### Le problème du softmax
+
+On a vu que calculer naïvement $e^{z_i}$ pour de grands logits provoque un overflow. Comment calculer softmax de manière stable ?
+
+### La solution
+
+On utilise l'invariance par translation du softmax : soustraire le maximum des logits avant l'exponentiation.
+
+$$\text{softmax}(z_i) = \frac{e^{z_i - z_{\max}}}{\sum_j e^{z_j - z_{\max}}} \quad \text{avec} \quad z_{\max} = \max_j z_j$$
+
+Après soustraction, le plus grand exposant vaut 0 ($e^0 = 1$), et tous les autres sont négatifs (donc entre 0 et 1). Plus d'overflow possible.
+
+### Le log-sum-exp
+
+Pour calculer $\log\left(\sum_j e^{z_j}\right)$ de manière stable :
+
+$$\text{LogSumExp}(z_1, \ldots, z_K) = z_{\max} + \log\left(\sum_j e^{z_j - z_{\max}}\right)$$
+
+Ce trick est utilisé partout : dans la cross-entropy loss, dans les modèles de langage, dans l'inférence variationnelle. PyTorch et JAX l'implémentent nativement via `torch.logsumexp` et `jax.scipy.special.logsumexp`.
+
+### Règle d'or
+
+Chaque fois que vous voyez $\log(\sum \exp(\cdot))$ dans une formule, pensez log-sum-exp trick. C'est le réflexe de stabilité numérique le plus important.
+
+## Gradient vanishing et exploding
+
+### Le problème fondamental des réseaux profonds
+
+Lors de la rétropropagation, le gradient traverse les couches en étant multiplié par les dérivées locales à chaque couche. Pour un réseau à $L$ couches :
+
+$$\frac{\partial L}{\partial \theta_1} = \frac{\partial L}{\partial h_L} \cdot \frac{\partial h_L}{\partial h_{L-1}} \cdots \frac{\partial h_2}{\partial h_1} \cdot \frac{\partial h_1}{\partial \theta_1}$$
+
+C'est un produit de matrices. Si chaque facteur a des valeurs propres légèrement supérieures à 1, le produit explose exponentiellement. Si elles sont légèrement inférieures à 1, le produit s'effondre vers zéro.
+
+### Vanishing gradient
+
+Quand le gradient devient exponentiellement petit en remontant vers les premières couches :
+- Les premières couches n'apprennent presque plus
+- Le réseau se comporte comme si seules les dernières couches étaient entraînées
+- C'est le problème historique qui a bloqué les réseaux profonds pendant des décennies
+
+Les fonctions d'activation saturantes (sigmoid, tanh) aggravent le problème : leur dérivée est proche de zéro pour les grandes valeurs.
+
+### Exploding gradient
+
+Le problème inverse : le gradient croît exponentiellement et les mises à jour des poids deviennent gigantesques. Les poids divergent, la loss explose, l'entraînement échoue.
+
+## Solutions au vanishing/exploding gradient
+
+### Gradient clipping
+
+La solution la plus directe contre l'explosion du gradient : si la norme du gradient dépasse un seuil, on le réduit :
+
+$$g \leftarrow g \cdot \frac{\text{max\_norm}}{\max(\|g\|, \text{max\_norm})}$$
+
+Utilisé systématiquement dans l'entraînement des RNN et des transformers. C'est un garde-fou simple mais efficace.
+
+### Initialisation de Xavier/He
+
+Initialiser les poids avec la bonne variance pour que les activations et les gradients restent dans une plage stable à travers les couches :
+
+- **Xavier** (pour tanh/sigmoid) : $W \sim \mathcal{N}\left(0, \frac{2}{n_{\text{in}} + n_{\text{out}}}\right)$
+- **He** (pour ReLU) : $W \sim \mathcal{N}\left(0, \frac{2}{n_{\text{in}}}\right)$
+
+L'idée est que la variance des activations et des gradients ne change pas d'une couche à l'autre.
+
+### Batch normalization
+
+Normaliser les activations au sein de chaque mini-batch :
+
+$$\hat{x}_i = \frac{x_i - \mu_B}{\sqrt{\sigma_B^2 + \epsilon}}$$
+
+En ramenant les activations à une moyenne nulle et une variance unitaire, on empêche les valeurs de dériver. Le $\epsilon$ dans le dénominateur est un autre exemple de précaution contre l'instabilité numérique (division par un nombre proche de zéro).
+
+### Layer normalization
+
+Variante de batch norm qui normalise sur les dimensions de feature plutôt que sur le batch. C'est la norme standard dans les transformers, car elle ne dépend pas de la taille du batch.
+
+### Residual connections (skip connections)
+
+L'innovation des ResNets :
+
+$$h_{l+1} = h_l + F(h_l)$$
+
+Le gradient de la loss par rapport à $h_l$ contient toujours un terme direct (le "1" de la dérivée de $h_l + F(h_l)$ par rapport à $h_l$). Même si $\frac{\partial F}{\partial h_l}$ est petit, le gradient a un chemin direct vers les premières couches. C'est pourquoi les réseaux à 100+ couches sont devenus possibles.
+
+### Mixed precision training
+
+Utiliser FP16 ou BF16 pour les calculs rapides, mais garder une copie des poids en FP32 pour les accumulations de gradient. Cela divise la mémoire par deux tout en maintenant la stabilité numérique des mises à jour.
+
+## Ce qu'il faut retenir
+
+- Les nombres flottants ont une précision et une plage limitées : overflow et underflow sont des dangers réels
+- BFloat16 sacrifie la précision pour la plage, un compromis adapté au deep learning
+- Le log-sum-exp trick est la technique fondamentale pour calculer softmax et cross-entropy de manière stable
+- Le vanishing/exploding gradient est le problème numérique central des réseaux profonds
+- Les solutions combinent clipping, initialisation adaptée, normalisation et skip connections
+- La stabilité numérique n'est pas un détail d'implémentation : c'est une condition nécessaire pour que l'entraînement fonctionne
