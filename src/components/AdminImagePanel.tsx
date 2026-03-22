@@ -7,7 +7,8 @@ type InputMode = "url" | "paste" | "search";
 
 interface Block { index: number; text: string; }
 interface EditState { blockIndex: number; caption: string; source: string; sourceUrl: string; alt: string; size: ImageSize; }
-interface SearchResult { url: string; thumb: string; title: string; source: string; width: number; height: number; }
+interface SearchResult { url: string; thumb: string; title: string; source: string; width: number; height: number; sourceUrl?: string; }
+interface SuggestGroup { query: string; images: SearchResult[]; }
 
 export default function AdminImagePanel({ partId, slug }: { partId: string; slug: string }) {
   const [open, setOpen] = useState(false);
@@ -27,6 +28,10 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
   const [searching, setSearching] = useState(false);
   const [selectedSearchImage, setSelectedSearchImage] = useState<SearchResult | null>(null);
   const [downloading, setDownloading] = useState(false);
+
+  // Auto-suggest state
+  const [suggestGroups, setSuggestGroups] = useState<SuggestGroup[]>([]);
+  const [suggesting, setSuggesting] = useState(false);
 
   const [alt, setAlt] = useState("");
   const [caption, setCaption] = useState("");
@@ -95,6 +100,25 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
     const file = e.dataTransfer.files[0];
     if (file?.type.startsWith("image/")) uploadFile(file);
   }, [uploadFile]);
+
+  // Auto-suggest images for the current page
+  const handleSuggest = async () => {
+    setSuggesting(true);
+    setSuggestGroups([]);
+    setSearchResults([]);
+    try {
+      const res = await fetch("/api/admin/suggest-images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partId, slug }),
+      });
+      const data = await res.json();
+      if (data.results) {
+        setSuggestGroups(data.results);
+      }
+    } catch { alert("Erreur de suggestion"); }
+    setSuggesting(false);
+  };
 
   // Search Google Images
   const handleSearch = async () => {
@@ -298,8 +322,16 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
             {/* SEARCH MODE */}
             {inputMode === "search" && (
               <div>
+                {/* Auto-suggest button */}
+                <button onClick={handleSuggest} disabled={suggesting}
+                  className="w-full py-2.5 rounded-lg text-sm font-medium text-white mb-3 transition-colors"
+                  style={{ background: suggesting ? "var(--card-border)" : "var(--accent)" }}>
+                  {suggesting ? "Analyse de la page en cours..." : "✨ Trouver des images pour cette page"}
+                </button>
+
+                {/* Manual search */}
                 <div className="flex gap-2 mb-3">
-                  <input type="text" placeholder="Ex: transformer architecture diagram..."
+                  <input type="text" placeholder="Ou recherche manuelle..."
                     value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && handleSearch()}
                     className="flex-1 rounded-lg border px-3 py-2 text-sm outline-none"
@@ -311,8 +343,40 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
                   </button>
                 </div>
 
-                {/* Results grid */}
-                {searchResults.length > 0 && (
+                {/* Auto-suggest results (grouped by query) */}
+                {suggestGroups.length > 0 && (
+                  <div className="space-y-3 max-h-96 overflow-y-auto">
+                    {suggestGroups.map((group, gi) => (
+                      <div key={gi}>
+                        <p className="text-xs font-medium mb-1.5 px-1" style={{ color: "var(--accent)" }}>🔍 {group.query}</p>
+                        <div className="grid grid-cols-3 gap-2 rounded-lg border p-2" style={{ borderColor: "var(--card-border)" }}>
+                          {group.images.map((img, i) => (
+                            <div key={i}
+                              onClick={() => !downloading && selectSearchImage(img)}
+                              className="relative rounded-lg overflow-hidden cursor-pointer hover:opacity-80 transition-opacity border"
+                              style={{
+                                borderColor: selectedSearchImage?.url === img.url ? "var(--accent)" : "var(--card-border)",
+                                borderWidth: selectedSearchImage?.url === img.url ? 2 : 1,
+                                aspectRatio: "1",
+                              }}>
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={img.thumb || img.url} alt={img.title || "result"} className="w-full h-full object-cover"
+                                onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+                                referrerPolicy="no-referrer" />
+                              <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 text-[9px] truncate"
+                                style={{ background: "rgba(0,0,0,0.6)", color: "white" }}>
+                                {img.source}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Manual search results */}
+                {searchResults.length > 0 && suggestGroups.length === 0 && (
                   <div className="grid grid-cols-3 gap-2 max-h-72 overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--card-border)" }}>
                     {searchResults.map((img, i) => (
                       <div key={i}
@@ -336,10 +400,7 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
                   </div>
                 )}
 
-                {searching && <p className="text-sm text-center py-4" style={{ color: "var(--muted)" }}>Recherche en cours...</p>}
-                {!searching && searchResults.length === 0 && searchQuery && (
-                  <p className="text-xs text-center py-3" style={{ color: "var(--muted)" }}>Tape un mot-clé et appuie sur Entrée</p>
-                )}
+                {(searching || suggesting) && <p className="text-sm text-center py-4" style={{ color: "var(--muted)" }}>{suggesting ? "Mistral analyse la page..." : "Recherche..."}</p>}
 
                 {/* Download status */}
                 {downloading && (
