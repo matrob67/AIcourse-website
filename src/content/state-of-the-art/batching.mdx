@@ -5,12 +5,12 @@ description: "Faire traiter 100 questions au modèle en parallèle au lieu de le
 
 ## Le problème du batching classique
 
-Imagine un restaurant ou le serveur attend que les 8 clients à sa table aient tous fini de manger avant de débarrasser. Si un client finit son entrée en 5 minutes et un autre prend 45 minutes pour son plat, les 7 premiers restent plantés la a attendre. Le serveur est bloqué, les tables suivantes ne sont pas servies.
+Imagine un restaurant où le serveur attend que les 8 clients à sa table aient tous fini de manger avant de débarrasser. Si un client finit son entrée en 5 minutes et un autre prend 45 minutes pour son plat, les 7 premiers restent plantés là à attendre. Le serveur est bloqué, les tables suivantes ne sont pas servies.
 
 C'est exactement ce qui arrive avec le batching classique (statique) pour les LLM. Tu groupes 8 requêtes ensemble et les traites en parallèle. Mais si une requête génère 500 tokens et une autre seulement 50, le GPU calcule du vide pour les 7 requêtes terminées pendant que la dernière finit sa génération. C'est du gaspillage pur et simple.
 
 <Callout type="info" title="L'ampleur du gaspillage">
-Avec un batch statique de 8 requêtes de longueurs variées, le GPU passe jusqu'à **90% de son temps à calculer du padding** pour les requêtes déja terminées. Le throughput réel est une fraction du potentiel théorique du matériel.
+Avec un batch statique de 8 requêtes de longueurs variées, le GPU passe jusqu'à **90% de son temps à calculer du padding** pour les requêtes déjà terminées. Le throughput réel est une fraction du potentiel théorique du matériel.
 </Callout>
 
 ## Continuous Batching : la solution
@@ -22,9 +22,9 @@ Au lieu de traiter les requêtes du début à la fin en bloc, le continuous batc
 1. À chaque step, générer **un token** pour chaque requête active dans le batch
 2. Quand une requête finit (token EOS ou limite atteinte), la **retirer immédiatement** du batch
 3. La remplacer instantanément par une **nouvelle requête** depuis la file d'attente
-4. Le batch reste **constamment rempli** a pleine capacité
+4. Le batch reste **constamment rempli** à pleine capacité
 
-Le GPU ne tourne jamais a vide. Des qu'une place se libère, une nouvelle requête prend le relais. C'est comme un restaurant ou on débarrasse chaque assiette individuellement et ou on sert le client suivant immédiatement.
+Le GPU ne tourne jamais à vide. Dès qu'une place se libère, une nouvelle requête prend le relais. C'est comme un restaurant où on débarrasse chaque assiette individuellement et où on sert le client suivant immédiatement.
 
 ### Prefill vs Decode
 
@@ -33,7 +33,7 @@ Les LLM ont deux phases de traitement très différentes :
 - **Prefill** : traiter le prompt d'entrée en une seule passe. C'est une opération **parallélisable** qui exploite bien les GPU (toute la séquence d'entrée est traitée simultanément).
 - **Decode** : générer la réponse token par token. C'est **séquentiel** par nature et beaucoup moins efficace en termes d'utilisation GPU.
 
-Le continuous batching mélange les deux phases dans le même batch : certaines requêtes en sont à leur phase de prefill tandis que d'autres génèrent déja des tokens. Ça maximise l'utilisation du GPU à tout instant.
+Le continuous batching mélange les deux phases dans le même batch : certaines requêtes en sont à leur phase de prefill tandis que d'autres génèrent déjà des tokens. Ça maximise l'utilisation du GPU à tout instant.
 
 <Callout type="tip" title="Gain de throughput">
 Le continuous batching peut améliorer le throughput de **2 à 8x** par rapport au batching statique, selon la variabilité des longueurs de réponse. Plus les longueurs sont hétérogènes (ce qui est le cas en production), plus le gain est important.
@@ -58,7 +58,7 @@ Exemple : un prompt de 8000 tokens est découpé en chunks de 512 tokens. Chaque
 
 ### Le problème mémoire
 
-Le **KV cache** (Key-Value cache) stocke les clés et valeurs d'attention déja calculées pour chaque requête. Sans lui, il faudrait recalculer toute l'attention à chaque nouveau token. Mais sa taille croît avec la longueur de la séquence :
+Le **KV cache** (Key-Value cache) stocke les clés et valeurs d'attention déjà calculées pour chaque requête. Sans lui, il faudrait recalculer toute l'attention à chaque nouveau token. Mais sa taille croît avec la longueur de la séquence :
 
 Pour un modèle 7B (32 couches, 32 têtes, 128 dimensions par tête) :
 
@@ -75,7 +75,7 @@ C'est **énorme**. Et le problème, c'est qu'on ne connaît pas la longueur fina
 Trois approches existent :
 
 1. **Pré-allocation maximale** : réserver la longueur max pour chaque requête. Simple, mais gaspille 60-80% de la mémoire avec du vide.
-2. **PagedAttention** : allocation par pages de taille fixe, à la demande. Réduit le gaspillage a < 4%. C'est le standard actuel.
+2. **PagedAttention** : allocation par pages de taille fixe, à la demande. Réduit le gaspillage à < 4%. C'est le standard actuel.
 3. **Radix Tree** : organiser les KV caches en arbre pour partager automatiquement les préfixes communs entre requêtes.
 
 <Callout type="warning" title="Le vrai facteur limitant">
@@ -107,13 +107,13 @@ Au lieu de prendre des décisions de scheduling à chaque token, planifier plusi
 | TensorRT-LLM | ✓ | ✓ | ✓ |
 | SGLang | ✓ | ✓ | ✓ |
 
-Tous les frameworks de serving modernes implementent ces techniques. C'est devenu la base minimum.
+Tous les frameworks de serving modernes implémentent ces techniques. C'est devenu la base minimum.
 
 ## Métriques de performance
 
 ### Les trois mesures essentielles
 
-- **TTFT** (Time To First Token) : le temps avant que le premier token de réponse apparaisse. Détermine la "réactivité" percue par l'utilisateur.
+- **TTFT** (Time To First Token) : le temps avant que le premier token de réponse apparaisse. Détermine la "réactivité" perçue par l'utilisateur.
 - **TPOT** (Time Per Output Token) : le temps moyen entre chaque token généré. Détermine la "fluidité" de la génération.
 - **Throughput** : le nombre total de tokens/seconde que le système produit, toutes requêtes confondues.
 

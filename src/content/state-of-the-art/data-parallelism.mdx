@@ -5,9 +5,9 @@ description: "Data Parallelism et DDP : répliquez le modèle sur 8 GPU, divisez
 
 ## L'idée ultra-simple
 
-**Data Parallelism**, c'est l'approche la plus intuitive pour entraîner plus vite : copie le modèle entier sur chaque GPU, donne a chacun un morceau différent du batch de données, et combine les gradients à la fin. Chaque GPU voit des exemples différents, mais tous convergent vers le même modèle.
+**Data Parallelism**, c'est l'approche la plus intuitive pour entraîner plus vite : copie le modèle entier sur chaque GPU, donne à chacun un morceau différent du batch de données, et combine les gradients à la fin. Chaque GPU voit des exemples différents, mais tous convergent vers le même modèle.
 
-C'est comme avoir 8 étudiants qui lisent chacun un chapitre différent d'un livre, puis qui partagent leurs notes. À la fin, tout le monde à la même compréhension, mais le travail a été fait 8 fois plus vite.
+C'est comme avoir 8 étudiants qui lisent chacun un chapitre différent d'un livre, puis qui partagent leurs notes. À la fin, tout le monde a la même compréhension, mais le travail a été fait 8 fois plus vite.
 
 ## Classique : nn.DataParallel (obsolète)
 
@@ -43,15 +43,15 @@ L'opération clé de DDP est l'all-reduce : combiner les gradients de tous les G
 2. **Reduce-scatter** : les chunks circulent dans un anneau virtuel, chaque GPU accumule progressivement son chunk
 3. **All-gather** : les chunks accumulés sont distribués à tous
 
-Complexité : `2(P-1)/P * M` ou M est la taille totale des gradients. L'élégance de cette formule, c'est que le terme `(P-1)/P` tend vers 1 quand on ajoute des GPU. La communication est quasi-constante quel que soit le nombre de GPU !
+Complexité : `2(P-1)/P * M` où M est la taille totale des gradients. L'élégance de cette formule, c'est que le terme `(P-1)/P` tend vers 1 quand on ajoute des GPU. La communication est quasi-constante quel que soit le nombre de GPU !
 
 <Callout type="info" title="Efficacité du ring">
-Avec 8 GPU, le Ring All-Reduce communique environ 2M de données (ou M = taille des gradients). Avec 100 GPU ? Toujours environ 2M. Le volume de communication par GPU est pratiquement indépendant du nombre de GPU. C'est ce qui rend le DDP si scalable.
+Avec 8 GPU, le Ring All-Reduce communique environ 2M de données (où M = taille des gradients). Avec 100 GPU ? Toujours environ 2M. Le volume de communication par GPU est pratiquement indépendant du nombre de GPU. C'est ce qui rend le DDP si scalable.
 </Callout>
 
 ## Overlap communication et calcul
 
-DDP ne synchronise pas naïvement après tout le backward. Grâce aux **hooks PyTorch**, dès qu'un gradient est calculé pour une couche, son all-reduce commence immédiatement en arrière-plan. Pendant que le backward continue de calculer les gradients des couches précédentes, les gradients des couches plus profondes sont déja en train d'être synchronisés.
+DDP ne synchronise pas naïvement après tout le backward. Grâce aux **hooks PyTorch**, dès qu'un gradient est calculé pour une couche, son all-reduce commence immédiatement en arrière-plan. Pendant que le backward continue de calculer les gradients des couches précédentes, les gradients des couches plus profondes sont déjà en train d'être synchronisés.
 
 Ce chevauchement (overlap) est la clé de la performance de DDP. Pour maximiser cet effet, les gradients sont regroupés en **buckets** (typiquement 25 MB) : on attend que le bucket soit plein avant de lancer l'all-reduce, ce qui amortit l'overhead de chaque communication.
 
@@ -82,7 +82,7 @@ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 \
 `torchrun` gère automatiquement les variables d'environnement (RANK, LOCAL_RANK, WORLD_SIZE) et lance les processus. C'est la manière standard et recommandée.
 
 <Callout type="tip" title="Toujours utiliser torchrun">
-`torchrun` automatise tout le boilerplate de lancement distribué. Ne lance jamais les processus manuellement avec des scripts maison : tu vas perdre du temps a débugger des problèmes de synchronisation.
+`torchrun` automatise tout le boilerplate de lancement distribué. Ne lance jamais les processus manuellement avec des scripts maison : tu vas perdre du temps à débugger des problèmes de synchronisation.
 </Callout>
 
 ## Scaling du learning rate
@@ -103,7 +103,7 @@ L'idéal serait 100% (scaling linéaire parfait), mais c'est rare en pratique à
 
 <Callout type="info" title="Efficacité réelle">
 Au sein d'un nœud avec NVLink : 95-99% d'efficacité. Le lien est si rapide que la communication est quasi-invisible.
-Entre nœuds via InfiniBand : 85-95%, selon la taille du modèle et du batch. Plus le modèle est gros (plus de gradients a synchroniser), plus le ratio calcul/communication se dégrade.
+Entre nœuds via InfiniBand : 85-95%, selon la taille du modèle et du batch. Plus le modèle est gros (plus de gradients à synchroniser), plus le ratio calcul/communication se dégrade.
 </Callout>
 
 ## Limitation majeure : la mémoire
@@ -130,7 +130,7 @@ Dès que l'ensemble poids + optimiseur + gradients + activations ne tient pas su
 
 ## Conclusion
 
-DDP est la fondation de tout entraînement distribué. **Simple a mettre en place, efficace au sein d'un nœud**, et il scale remarquablement bien grâce au Ring All-Reduce. C'est toujours la première technique a essayer.
+DDP est la fondation de tout entraînement distribué. **Simple à mettre en place, efficace au sein d'un nœud**, et il scale remarquablement bien grâce au Ring All-Reduce. C'est toujours la première technique à essayer.
 
 Pour les modèles qui ne tiennent pas en mémoire ou le multi-nœud à grande échelle, DDP s'empile avec d'autres techniques (Zéro, FSDP, Tensor Parallelism). Mais DDP reste la brique de base sur laquelle tout le reste repose.
 

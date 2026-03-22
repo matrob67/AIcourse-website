@@ -5,9 +5,9 @@ description: "Comment DPO simplifie radicalement le RLHF en éliminant le reward
 
 ## "Et si on coupait court à toute cette complexité ?"
 
-Le RLHF fonctionne, mais c'est une veritable usine a gaz. Recapitulons le pipeline : il faut d'abord entraîner un modèle SFT (Supervised Fine-Tuning), puis entraîner un reward model séparé sur des données de préférences humaines, puis lancer un algorithme de reinforcement learning (PPO) qui jongle avec **quatre modèles en mémoire simultanément** (la politique, la référence, le reward model, le critique), une penalite KL pour éviter que le modèle ne diverge trop, et des rollouts qui doivent être générés à chaque étape. Sans compter les problèmes chroniques de stabilité, le reward hacking (le modèle apprend à tromper le reward model plutot qu'a réellement s'améliorer), et le cout de calcul colossal.
+Le RLHF fonctionne, mais c'est une véritable usine à gaz. Récapitulons le pipeline : il faut d'abord entraîner un modèle SFT (Supervised Fine-Tuning), puis entraîner un reward model séparé sur des données de préférences humaines, puis lancer un algorithme de reinforcement learning (PPO) qui jongle avec **quatre modèles en mémoire simultanément** (la politique, la référence, le reward model, le critique), une pénalité KL pour éviter que le modèle ne diverge trop, et des rollouts qui doivent être générés à chaque étape. Sans compter les problèmes chroniques de stabilité, le reward hacking (le modèle apprend à tromper le reward model plutôt qu'à réellement s'améliorer), et le coût de calcul colossal.
 
-En mai 2023, une équipe de chercheurs de Stanford publie un paper qui va surprendre la communaute. Leur contribution : une démonstration mathématique que toute cette machinerie est **superflue**. On peut obtenir des résultats équivalents avec une fraction de la complexité. La technique s'appelle **DPO** (Direct Préférence Optimization).
+En mai 2023, une équipe de chercheurs de Stanford publie un paper qui va surprendre la communauté. Leur contribution : une démonstration mathématique que toute cette machinerie est **superflue**. On peut obtenir des résultats équivalents avec une fraction de la complexité. La technique s'appelle **DPO** (Direct Preference Optimization).
 
 <ArxivLink id="2305.18290" title="Direct Preference Optimization: Your Language Model Is Secretly a Reward Model (Rafailov et al., 2023)" />
 
@@ -15,19 +15,19 @@ En mai 2023, une équipe de chercheurs de Stanford publie un paper qui va surpre
 
 ## L'insight central : le modèle *est déjà* un reward model
 
-Voici l'idée brillante derrière DPO, et c'est vraiment une de ces observations élégantes qui change tout. Rappelons ce que le RLHF cherche à faire : trouver une politique (un modèle de langage) qui maximise les récompenses humaines tout en ne s'eloignant pas trop du modèle SFT de référence. Mathématiquement :
+Voici l'idée brillante derrière DPO, et c'est vraiment une de ces observations élégantes qui change tout. Rappelons ce que le RLHF cherche à faire : trouver une politique (un modèle de langage) qui maximise les récompenses humaines tout en ne s'éloignant pas trop du modèle SFT de référence. Mathématiquement :
 
 $$\max \; \mathbb{E}[r(x, y)] - \beta \cdot D_{KL}(\pi \| \pi_{\text{ref}})$$
 
-La plupart des chercheurs voyaient ce problème comme necessitant du reinforcement learning iteratif : générer des réponses, les évaluer, mettre à jour la politique, recommencer. Les chercheurs de DPO ont démontré quelque chose de remarquable : ce problème d'optimisation à une **solution analytique exacte**. Autrement dit, on peut écrire directement la formule de la politique optimale, sans aucune boucle de RL :
+La plupart des chercheurs voyaient ce problème comme nécessitant du reinforcement learning itératif : générer des réponses, les évaluer, mettre à jour la politique, recommencer. Les chercheurs de DPO ont démontré quelque chose de remarquable : ce problème d'optimisation a une **solution analytique exacte**. Autrement dit, on peut écrire directement la formule de la politique optimale, sans aucune boucle de RL :
 
 $$\pi_{\text{opt}}(y|x) \propto \pi_{\text{ref}}(y|x) \cdot \exp\left(\frac{r(x, y)}{\beta}\right)$$
 
-L'astuce geniale : en inversant cette relation, on peut exprimer la récompense implicitement à travers le ratio des probabilites entre le modèle courant et le modèle de référence :
+L'astuce géniale : en inversant cette relation, on peut exprimer la récompense implicitement à travers le ratio des probabilités entre le modèle courant et le modèle de référence :
 
 $$r(x, y) = \beta \cdot \log \frac{\pi(y|x)}{\pi_{\text{ref}}(y|x)} + C$$
 
-Qu'est-ce que ça dit concrètement ? Que **tout modèle de langage definit implicitement un reward model** via le ratio de ses probabilites avec un modèle de référence. Si le modèle fine-tune assigne une probabilite beaucoup plus élevée à une réponse que le modèle de référence, c'est que cette réponse à une "récompense implicite" élevée. Pas besoin d'entraîner un reward model séparé : le modèle lui-même encode déjà ses préférences dans la façon dont il distribue les probabilites.
+Qu'est-ce que ça dit concrètement ? Que **tout modèle de langage définit implicitement un reward model** via le ratio de ses probabilités avec un modèle de référence. Si le modèle fine-tuné assigne une probabilité beaucoup plus élevée à une réponse que le modèle de référence, c'est que cette réponse a une "récompense implicite" élevée. Pas besoin d'entraîner un reward model séparé : le modèle lui-même encode déjà ses préférences dans la façon dont il distribue les probabilités.
 
 <Callout type="paper" title="Le reward implicite — le coeur du DPO">
 L'idée n'est pas juste une astuce mathématique. Elle dit quelque chose de profond : la façon dont un modèle attribue des probabilités aux tokens encode déjà ses "préférences". Si le modèle fine-tuné donne une probabilité plus élevée à une réponse que le modèle de référence, c'est qu'il la "préfère". DPO exploite directement cette structure.
@@ -35,11 +35,11 @@ L'idée n'est pas juste une astuce mathématique. Elle dit quelque chose de prof
 
 ## La loss DPO : élégamment simple
 
-En substituant le reward implicite dans le modèle de Bradley-Terry (un modèle statistique standard pour comparer des paires de préférences, utilise en économie depuis les années 1950), on obtient directement la loss DPO :
+En substituant le reward implicite dans le modèle de Bradley-Terry (un modèle statistique standard pour comparer des paires de préférences, utilisé en économie depuis les années 1950), on obtient directement la loss DPO :
 
 $$\mathcal{L}_{\text{DPO}} = -\mathbb{E}\left[\log \sigma\left(\beta \left(\log \frac{\pi(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \log \frac{\pi(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right)\right]$$
 
-Decodons cette formule. Pour chaque paire de données (une réponse choisie $y_w$ et une réponse rejetee $y_l$ au même prompt $x$), on calcule deux choses : à quel point le modèle courant "préfère" la bonne réponse par rapport au modèle de référence, et à quel point il "préfère" la mauvaise réponse. La loss maximise l'écart entre ces deux préférences. Si le modèle attribue déjà une probabilite bien plus haute à la bonne réponse qu'à la mauvaise (relativement au modèle de référence), la loss est faible. Sinon, elle est forte.
+Decodons cette formule. Pour chaque paire de données (une réponse choisie $y_w$ et une réponse rejetée $y_l$ au même prompt $x$), on calcule deux choses : à quel point le modèle courant "préfère" la bonne réponse par rapport au modèle de référence, et à quel point il "préfère" la mauvaise réponse. La loss maximise l'écart entre ces deux préférences. Si le modèle attribue déjà une probabilité bien plus haute à la bonne réponse qu'à la mauvaise (relativement au modèle de référence), la loss est faible. Sinon, elle est forte.
 
 Le point fondamental : c'est du **supervised learning** avec une loss spéciale. Pas de RL, pas de sampling de réponses pendant l'entraînement, pas de value network. Juste un forward pass sur les paires de données et un backward pass pour mettre à jour les poids.
 
@@ -66,9 +66,9 @@ Chaque exemple d'entraînement est un triplet : (prompt, réponse_choisie, répo
 
 ## Les hyperparamètres qui comptent
 
-- **beta** : contrôle la force de la contrainte KL, c'est-a-dire à quel point le modèle est autorise a s'éloigner de la référence. Typiquement entre 0.1 et 0.5. Trop faible : le modèle diverge fortement de la référence et peut perdre ses capacités de base. Trop fort : le modèle reste trop proche de la référence et n'apprend pas assez des préférences.
-- **Learning rate** : beaucoup plus faible que pour le SFT, typiquement entre 5e-7 et 1e-6. L'alignement est un réglage fin et delicat. Aller trop vite dégradé les capacités acquises pendant le SFT.
-- **Nombre d'époques** : 1 à 3 maximum. Le surentrainement avec DPO est rapide et brutal. Le modèle commence à "sur-apprendre" les paires et perd en diversite et en qualité générale. Surveille la loss de validation de près.
+- **beta** : contrôle la force de la contrainte KL, c'est-à-dire à quel point le modèle est autorisé à s'éloigner de la référence. Typiquement entre 0.1 et 0.5. Trop faible : le modèle diverge fortement de la référence et peut perdre ses capacités de base. Trop fort : le modèle reste trop proche de la référence et n'apprend pas assez des préférences.
+- **Learning rate** : beaucoup plus faible que pour le SFT, typiquement entre 5e-7 et 1e-6. L'alignement est un réglage fin et délicat. Aller trop vite dégrade les capacités acquises pendant le SFT.
+- **Nombre d'époques** : 1 à 3 maximum. Le surentraînement avec DPO est rapide et brutal. Le modèle commence à "sur-apprendre" les paires et perd en diversité et en qualité générale. Surveille la loss de validation de près.
 
 ## Avantages concrets : ce que DPO change vraiment
 
@@ -114,8 +114,8 @@ De nombreux modèles populaires de la communauté utilisent DPO : Zephyr, Neural
 | Complexité | Très élevée | Faible |
 | Stabilité | Difficile | Stable |
 | Mémoire GPU | 4 modèles | 2 modèles |
-| Performance maximale | Légèrement superieure | Très proche |
+| Performance maximale | Légèrement supérieure | Très proche |
 | Online learning | Oui (nouvelles réponses) | Non par défaut |
 | Reward model réutilisable | Oui | Non |
 
-Pour la grande majorite des praticiens et des équipes de taille modeste, DPO est le meilleur point de depart pour l'alignement. Il offre un excellent rapport qualité/complexité et permet d'obtenir des résultats competitifs avec une fraction des ressources nécessaires pour le RLHF. Le RLHF avec PPO reste pertinent pour les grands laboratoires qui cherchent les derniers pourcents de performance et qui ont les équipes et l'infrastructure pour gerer sa complexité. En pratique, beaucoup de laboratoires utilisent les deux : DPO pour l'alignement initial (rapide et stable), puis du RLHF pour affiner les derniers détails.
+Pour la grande majorité des praticiens et des équipes de taille modeste, DPO est le meilleur point de départ pour l'alignement. Il offre un excellent rapport qualité/complexité et permet d'obtenir des résultats compétitifs avec une fraction des ressources nécessaires pour le RLHF. Le RLHF avec PPO reste pertinent pour les grands laboratoires qui cherchent les derniers pourcents de performance et qui ont les équipes et l'infrastructure pour gérer sa complexité. En pratique, beaucoup de laboratoires utilisent les deux : DPO pour l'alignement initial (rapide et stable), puis du RLHF pour affiner les derniers détails.

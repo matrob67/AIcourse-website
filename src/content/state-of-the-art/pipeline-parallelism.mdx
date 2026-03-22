@@ -27,12 +27,12 @@ Chaque GPU ne stocke que les paramètres de ses propres couches. Ça divise la m
 
 ### Le problème de la bulle de pipeline
 
-Même avec le micro-batching, il y à un moment d'inefficacité inévitable : la **bulle de pipeline**. Au tout début, seul le GPU 0 a du travail (le premier micro-batch). À l'étape suivante, GPU 0 et GPU 1 sont occupés. Ce n'est qu'à la 8ème étape (pour 8 GPU) que tout le pipeline est enfin rempli et que tous les GPU travaillent. Cette phase de remplissage, c'est du temps perdu.
+Même avec le micro-batching, il y a un moment d'inefficacité inévitable : la **bulle de pipeline**. Au tout début, seul le GPU 0 a du travail (le premier micro-batch). À l'étape suivante, GPU 0 et GPU 1 sont occupés. Ce n'est qu'à la 8ème étape (pour 8 GPU) que tout le pipeline est enfin rempli et que tous les GPU travaillent. Cette phase de remplissage, c'est du temps perdu.
 
 De même, à la fin du traitement, le pipeline se vide progressivement : le GPU 0 finit en premier et attend les autres.
 
 <Callout type="warning" title="Le coût de la bulle">
-La fraction de temps perdue due à la bulle se calcule simplement : $(P - 1) / (M + P - 1)$, ou P est le nombre de stages (GPU) et M le nombre de micro-batches. Avec P=8 et M=32 : la bulle ne représente que 7/39 = 18% du temps. Mais avec M=8 seulement : 7/15 = 47% du temps est perdu ! La leçon : plus tu as de micro-batches, plus la bulle est amortie. En pratique, on vise M >> P.
+La fraction de temps perdue due à la bulle se calcule simplement : $(P - 1) / (M + P - 1)$, où P est le nombre de stages (GPU) et M le nombre de micro-batches. Avec P=8 et M=32 : la bulle ne représente que 7/39 = 18% du temps. Mais avec M=8 seulement : 7/15 = 47% du temps est perdu ! La leçon : plus tu as de micro-batches, plus la bulle est amortie. En pratique, on vise M >> P.
 </Callout>
 
 ## Les deux stratégies principales
@@ -52,7 +52,7 @@ Avec 16 micro-batches et un contexte de 4096 tokens, les activations stockées p
 
 1F1B signifie "One Forward, One Backward". Au lieu de séparer les phases, tu **alternes** : fais un forward sur un micro-batch, puis immédiatement un backward sur un micro-batch plus ancien, puis un forward, un backward, et ainsi de suite.
 
-L'avantage crucial : tu libères les activations d'un micro-batch dès que son backward est terminé, au lieu de les garder toutes jusqu'à la fin. En régime permanent, tu ne stockes en mémoire que les activations d'environ P micro-batches simultanément (ou P est le nombre de stages), au lieu de M micro-batches avec GPipe. Quand M = 32 et P = 8, c'est 4x moins de mémoire d'activations.
+L'avantage crucial : tu libères les activations d'un micro-batch dès que son backward est terminé, au lieu de les garder toutes jusqu'à la fin. En régime permanent, tu ne stockes en mémoire que les activations d'environ P micro-batches simultanément (où P est le nombre de stages), au lieu de M micro-batches avec GPipe. Quand M = 32 et P = 8, c'est 4x moins de mémoire d'activations.
 
 ### Interleaved 1F1B : réduire encore la bulle
 
