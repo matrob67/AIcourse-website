@@ -3,20 +3,11 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
 type ImageSize = "small" | "medium" | "large" | "full";
+type InputMode = "url" | "paste" | "search";
 
-interface Block {
-  index: number;
-  text: string;
-}
-
-interface EditState {
-  blockIndex: number;
-  caption: string;
-  source: string;
-  sourceUrl: string;
-  alt: string;
-  size: ImageSize;
-}
+interface Block { index: number; text: string; }
+interface EditState { blockIndex: number; caption: string; source: string; sourceUrl: string; alt: string; size: ImageSize; }
+interface SearchResult { url: string; thumb: string; title: string; source: string; width: number; height: number; }
 
 export default function AdminImagePanel({ partId, slug }: { partId: string; slug: string }) {
   const [open, setOpen] = useState(false);
@@ -24,11 +15,18 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
   const [loadingBlocks, setLoadingBlocks] = useState(false);
   const [selectedBlock, setSelectedBlock] = useState<number | null>(null);
 
-  const [inputMode, setInputMode] = useState<"url" | "paste">("url");
+  const [inputMode, setInputMode] = useState<InputMode>("search");
   const [imageUrl, setImageUrl] = useState("");
   const [pastedImage, setPastedImage] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selectedSearchImage, setSelectedSearchImage] = useState<SearchResult | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   const [alt, setAlt] = useState("");
   const [caption, setCaption] = useState("");
@@ -42,7 +40,6 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<"idle" | "success" | "error">("idle");
 
-  // Edit panel (separate from insert)
   const [editState, setEditState] = useState<EditState | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingImage, setDeletingImage] = useState<number | null>(null);
@@ -62,7 +59,11 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
     if (inputMode === "url") setImagePreview(imageUrl);
   }, [imageUrl, inputMode]);
 
-  const currentSrc = inputMode === "url" ? imageUrl : pastedImage;
+  // Determine current image src based on mode
+  const currentSrc = inputMode === "url" ? imageUrl
+    : inputMode === "paste" ? pastedImage
+    : selectedSearchImage ? imagePreview // after download, this is the local URL
+    : null;
 
   const uploadFile = useCallback(async (file: File) => {
     const form = new FormData();
@@ -94,6 +95,72 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
     const file = e.dataTransfer.files[0];
     if (file?.type.startsWith("image/")) uploadFile(file);
   }, [uploadFile]);
+
+  // Search Google Images
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setSearchResults([]);
+    setSelectedSearchImage(null);
+    try {
+      const res = await fetch("/api/admin/search-images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: searchQuery }),
+      });
+      const data = await res.json();
+      setSearchResults(data.images || []);
+    } catch { alert("Erreur de recherche"); }
+    setSearching(false);
+  };
+
+  // Select a search result → download locally
+  const selectSearchImage = async (img: SearchResult) => {
+    setSelectedSearchImage(img);
+    setDownloading(true);
+    setSource(img.source);
+    setSourceUrl(img.url);
+    try {
+      const res = await fetch("/api/admin/download-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: img.url }),
+      });
+      const data = await res.json();
+      if (data.localUrl) {
+        setImagePreview(data.localUrl);
+        // Auto-generate caption with Mistral
+        autoAnalyze(data.localUrl, img.source);
+      } else {
+        alert("Erreur: " + (data.error || "Impossible de télécharger"));
+        setSelectedSearchImage(null);
+      }
+    } catch {
+      alert("Erreur de téléchargement");
+      setSelectedSearchImage(null);
+    }
+    setDownloading(false);
+  };
+
+  // Auto analyze image after download
+  const autoAnalyze = async (src: string, imgSource: string) => {
+    setAiLoading(true);
+    const contextText = selectedBlock !== null ? blocks.find(b => b.index === selectedBlock)?.text || "" : "";
+    try {
+      const res = await fetch("/api/admin/analyze-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ src, partId, slug, contextText, model: aiModel }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        if (data.alt) setAlt(data.alt);
+        if (data.caption) setCaption(data.caption);
+        if (data.source && data.source !== imgSource) setSource(data.source);
+      }
+    } catch { /* silent */ }
+    setAiLoading(false);
+  };
 
   const generateWithAI = async () => {
     if (!currentSrc) return;
@@ -130,7 +197,8 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
         setStatus("success");
         await reloadBlocks();
         setImageUrl(""); setImagePreview(""); setPastedImage(null);
-        setAlt(""); setCaption(""); setSource(""); setSourceUrl(""); setSelectedBlock(null);
+        setAlt(""); setCaption(""); setSource(""); setSourceUrl("");
+        setSelectedBlock(null); setSelectedSearchImage(null); setSearchResults([]);
       } else setStatus("error");
     } catch { setStatus("error"); }
     setSaving(false);
@@ -209,24 +277,87 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
 
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
 
-          {/* 1. IMAGE */}
+          {/* 1. IMAGE SOURCE */}
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--muted)" }}>1. Image</h3>
-            <div className="flex gap-2 mb-3">
-              {(["url", "paste"] as const).map(mode => (
+            <div className="flex gap-1.5 mb-3">
+              {([
+                { mode: "search" as InputMode, label: "🔍 Rechercher" },
+                { mode: "url" as InputMode, label: "🔗 URL" },
+                { mode: "paste" as InputMode, label: "📋 Coller" },
+              ]).map(({ mode, label }) => (
                 <button key={mode}
-                  onClick={() => { setInputMode(mode); if (mode === "url") { setPastedImage(null); setImagePreview(imageUrl); } else setImagePreview(pastedImage || ""); }}
-                  className="flex-1 py-2 rounded-lg text-sm font-medium border transition-colors"
+                  onClick={() => { setInputMode(mode); if (mode === "url") { setPastedImage(null); setImagePreview(imageUrl); } else if (mode === "paste") setImagePreview(pastedImage || ""); }}
+                  className="flex-1 py-2 rounded-lg text-xs font-medium border transition-colors"
                   style={{ background: inputMode === mode ? "var(--accent)" : "transparent", color: inputMode === mode ? "white" : "var(--muted)", borderColor: inputMode === mode ? "var(--accent)" : "var(--card-border)" }}>
-                  {mode === "url" ? "🔗 URL" : "📋 Coller / Glisser"}
+                  {label}
                 </button>
               ))}
             </div>
+
+            {/* SEARCH MODE */}
+            {inputMode === "search" && (
+              <div>
+                <div className="flex gap-2 mb-3">
+                  <input type="text" placeholder="Ex: transformer architecture diagram..."
+                    value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && handleSearch()}
+                    className="flex-1 rounded-lg border px-3 py-2 text-sm outline-none"
+                    style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
+                  <button onClick={handleSearch} disabled={searching || !searchQuery.trim()}
+                    className="px-4 py-2 rounded-lg text-sm font-medium text-white shrink-0"
+                    style={{ background: searching ? "var(--card-border)" : "var(--accent)" }}>
+                    {searching ? "..." : "🔍"}
+                  </button>
+                </div>
+
+                {/* Results grid */}
+                {searchResults.length > 0 && (
+                  <div className="grid grid-cols-3 gap-2 max-h-72 overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--card-border)" }}>
+                    {searchResults.map((img, i) => (
+                      <div key={i}
+                        onClick={() => !downloading && selectSearchImage(img)}
+                        className="relative rounded-lg overflow-hidden cursor-pointer hover:opacity-80 transition-opacity border"
+                        style={{
+                          borderColor: selectedSearchImage?.url === img.url ? "var(--accent)" : "var(--card-border)",
+                          borderWidth: selectedSearchImage?.url === img.url ? 2 : 1,
+                          aspectRatio: "1",
+                        }}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={img.url} alt={img.title || "result"} className="w-full h-full object-cover"
+                          onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+                          referrerPolicy="no-referrer" />
+                        <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 text-[9px] truncate"
+                          style={{ background: "rgba(0,0,0,0.6)", color: "white" }}>
+                          {img.source}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {searching && <p className="text-sm text-center py-4" style={{ color: "var(--muted)" }}>Recherche en cours...</p>}
+                {!searching && searchResults.length === 0 && searchQuery && (
+                  <p className="text-xs text-center py-3" style={{ color: "var(--muted)" }}>Tape un mot-clé et appuie sur Entrée</p>
+                )}
+
+                {/* Download status */}
+                {downloading && (
+                  <div className="mt-2 text-xs text-center py-2 rounded-lg" style={{ background: "var(--card-bg)", color: "var(--accent)" }}>
+                    Téléchargement + analyse IA en cours...
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* URL MODE */}
             {inputMode === "url" && (
               <input type="text" placeholder="https://..." value={imageUrl} onChange={e => setImageUrl(e.target.value)}
                 className="w-full rounded-lg border px-3 py-2 text-sm outline-none font-mono"
                 style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
             )}
+
+            {/* PASTE MODE */}
             {inputMode === "paste" && (
               <div onDrop={handleDrop} onDragOver={e => e.preventDefault()} onClick={() => fileInputRef.current?.click()} tabIndex={0}
                 className="rounded-xl border-2 border-dashed p-6 text-center cursor-pointer hover:opacity-80"
@@ -241,15 +372,20 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
                   <div>
                     <p className="text-3xl mb-1">📋</p>
                     <p className="text-sm" style={{ color: "var(--muted)" }}>Ctrl+V ou glisser-déposer</p>
-                    <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>ou cliquer pour choisir un fichier</p>
                   </div>
                 )}
               </div>
             )}
+
             <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) uploadFile(f); }} />
+
+            {/* Preview */}
             {imagePreview && (
               <div className="mt-3 rounded-lg border overflow-hidden" style={{ borderColor: "var(--card-border)" }}>
-                <div className="px-3 py-1.5 text-xs border-b" style={{ color: "var(--muted)", borderColor: "var(--card-border)", background: "var(--card-bg)" }}>Aperçu</div>
+                <div className="flex items-center justify-between px-3 py-1.5 text-xs border-b" style={{ color: "var(--muted)", borderColor: "var(--card-border)", background: "var(--card-bg)" }}>
+                  <span>Aperçu</span>
+                  {aiLoading && <span style={{ color: "var(--accent)" }}>✨ Analyse IA...</span>}
+                </div>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={imagePreview} alt="preview" className="w-full object-contain max-h-48" onError={() => setImagePreview("")} />
               </div>
@@ -258,9 +394,7 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
 
           {/* 2. BLOCKS */}
           <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--muted)" }}>
-              2. Contenu de la page
-            </h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--muted)" }}>2. Emplacement</h3>
             <div className="rounded-lg border overflow-hidden" style={{ borderColor: "var(--card-border)", maxHeight: 280, overflowY: "auto" }}>
               {loadingBlocks && <p className="p-3 text-xs" style={{ color: "var(--muted)" }}>Chargement...</p>}
               {blocks.map(block => {
@@ -270,14 +404,12 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
                 const imgCaption = isImage ? (block.text.match(/caption="([^"]*)"/)?.[1] || "") : "";
                 const imgSrc = isImage ? (block.text.match(/src="([^"]*)"/)?.[1] || "") : "";
                 const imgSize = isImage ? (block.text.match(/size="([^"]*)"/)?.[1] || "large") : "";
-
                 return (
                   <div key={block.index}
                     onClick={() => !isImage && setSelectedBlock(block.index)}
                     className="px-3 py-2 text-xs border-b last:border-0 transition-colors"
                     style={{
-                      borderColor: "var(--card-border)",
-                      cursor: isImage ? "default" : "pointer",
+                      borderColor: "var(--card-border)", cursor: isImage ? "default" : "pointer",
                       background: isEditingThis ? "rgba(99,102,241,0.08)" : isSelected ? "var(--accent-light)" : isImage ? "var(--card-bg)" : "transparent",
                       borderLeft: isEditingThis ? "3px solid var(--accent)" : isSelected ? "3px solid var(--accent)" : "3px solid transparent",
                     }}>
@@ -289,14 +421,12 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: "var(--card-border)", color: "var(--muted)" }}>{imgSize}</span>
                         </div>
                         <div className="flex gap-1.5 mt-1.5" onClick={e => e.stopPropagation()}>
-                          <button
-                            onClick={() => isEditingThis ? setEditState(null) : openEdit(block)}
+                          <button onClick={() => isEditingThis ? setEditState(null) : openEdit(block)}
                             className="px-2 py-1 rounded text-[10px] font-medium border transition-colors"
                             style={{ borderColor: "var(--card-border)", color: isEditingThis ? "white" : "var(--accent)", background: isEditingThis ? "var(--accent)" : "transparent" }}>
                             {isEditingThis ? "✕ Fermer" : "Modifier"}
                           </button>
-                          <button
-                            onClick={() => { if (confirm("Supprimer cette image ?")) handleDeleteImage(block.index); }}
+                          <button onClick={() => { if (confirm("Supprimer cette image ?")) handleDeleteImage(block.index); }}
                             disabled={deletingImage === block.index}
                             className="px-2 py-1 rounded text-[10px] font-medium border hover:opacity-80"
                             style={{ borderColor: "#fecaca", color: "#dc2626" }}>
@@ -310,7 +440,7 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
                       </span>
                     )}
                     {isSelected && !isImage && (
-                      <div className="mt-1 text-xs font-medium" style={{ color: "var(--accent)" }}>↓ image insérée ici</div>
+                      <div className="mt-1 text-xs font-medium" style={{ color: "var(--accent)" }}>↓ image ici</div>
                     )}
                   </div>
                 );
@@ -318,108 +448,69 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
             </div>
           </section>
 
-          {/* EDIT PANEL — shown outside list when an image is selected for editing */}
+          {/* EDIT PANEL */}
           {editState && (
             <section className="rounded-xl border p-4 space-y-3" style={{ borderColor: "var(--accent)", background: "rgba(99,102,241,0.04)" }}>
-              <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--accent)" }}>
-                ✏️ Modifier l&apos;image
-              </h3>
-              <div>
-                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Légende</label>
-                <input type="text" placeholder="Légende..." value={editState.caption}
-                  onChange={e => setEditState(s => s ? { ...s, caption: e.target.value } : s)}
-                  className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                  style={{ borderColor: "var(--card-border)", background: "var(--background)" }} />
+              <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--accent)" }}>✏️ Modifier</h3>
+              <input type="text" placeholder="Légende..." value={editState.caption}
+                onChange={e => setEditState(s => s ? { ...s, caption: e.target.value } : s)}
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                style={{ borderColor: "var(--card-border)", background: "var(--background)" }} />
+              <input type="text" placeholder="Source..." value={editState.source}
+                onChange={e => setEditState(s => s ? { ...s, source: e.target.value } : s)}
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                style={{ borderColor: "var(--card-border)", background: "var(--background)" }} />
+              <div className="flex gap-2">
+                {(["small", "medium", "large", "full"] as ImageSize[]).map(s => (
+                  <button key={s} onClick={() => setEditState(st => st ? { ...st, size: s } : st)}
+                    className="flex-1 py-1.5 rounded-lg text-xs border transition-colors"
+                    style={{ background: editState.size === s ? "var(--accent)" : "transparent", color: editState.size === s ? "white" : "var(--muted)", borderColor: editState.size === s ? "var(--accent)" : "var(--card-border)" }}>
+                    {s}
+                  </button>
+                ))}
               </div>
-              <div>
-                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Source</label>
-                <input type="text" placeholder="Source..." value={editState.source}
-                  onChange={e => setEditState(s => s ? { ...s, source: e.target.value } : s)}
-                  className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                  style={{ borderColor: "var(--card-border)", background: "var(--background)" }} />
-              </div>
-              <div>
-                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>URL source</label>
-                <input type="text" placeholder="https://..." value={editState.sourceUrl}
-                  onChange={e => setEditState(s => s ? { ...s, sourceUrl: e.target.value } : s)}
-                  className="w-full rounded-lg border px-3 py-2 text-sm outline-none font-mono text-xs"
-                  style={{ borderColor: "var(--card-border)", background: "var(--background)" }} />
-              </div>
-              <div>
-                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Taille</label>
-                <div className="flex gap-2">
-                  {(["small", "medium", "large", "full"] as ImageSize[]).map(s => (
-                    <button key={s} onClick={() => setEditState(st => st ? { ...st, size: s } : st)}
-                      className="flex-1 py-1.5 rounded-lg text-xs border transition-colors"
-                      style={{ background: editState.size === s ? "var(--accent)" : "transparent", color: editState.size === s ? "white" : "var(--muted)", borderColor: editState.size === s ? "var(--accent)" : "var(--card-border)" }}>
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex gap-2 pt-1">
+              <div className="flex gap-2">
                 <button onClick={saveEdit} disabled={savingEdit}
-                  className="flex-1 py-2 rounded-xl text-sm font-semibold text-white transition-colors"
+                  className="flex-1 py-2 rounded-xl text-sm font-semibold text-white"
                   style={{ background: savingEdit ? "var(--card-border)" : "var(--accent)" }}>
-                  {savingEdit ? "Enregistrement..." : "Enregistrer les modifications"}
+                  {savingEdit ? "..." : "Enregistrer"}
                 </button>
-                <button onClick={() => setEditState(null)}
-                  className="px-4 py-2 rounded-xl text-sm border transition-colors"
-                  style={{ borderColor: "var(--card-border)", color: "var(--muted)" }}>
-                  Annuler
-                </button>
+                <button onClick={() => setEditState(null)} className="px-4 py-2 rounded-xl text-sm border"
+                  style={{ borderColor: "var(--card-border)", color: "var(--muted)" }}>Annuler</button>
               </div>
             </section>
           )}
 
-          {/* 3. METADATA (for new image) */}
+          {/* 3. METADATA */}
           <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: "var(--muted)" }}>3. Métadonnées (nouvelle image)</h3>
-            {currentSrc && (
-              <div className="flex items-center gap-2 mb-3 p-3 rounded-lg border" style={{ background: "var(--card-bg)", borderColor: "var(--card-border)" }}>
-                <select value={aiModel} onChange={e => setAiModel(e.target.value)}
-                  className="text-xs rounded border px-2 py-1.5 outline-none"
-                  style={{ borderColor: "var(--card-border)", background: "var(--background)" }}>
-                  <option value="mistral-small-latest">Mistral Small 4</option>
-                  <option value="pixtral-large-latest">Pixtral Large</option>
-                </select>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--muted)" }}>3. Métadonnées</h3>
+              {currentSrc && (
                 <button onClick={generateWithAI} disabled={aiLoading}
-                  className="flex-1 py-1.5 rounded-lg text-xs font-medium text-white"
-                  style={{ background: aiLoading ? "var(--card-border)" : "var(--accent)" }}>
-                  {aiLoading ? "Analyse..." : "✨ Générer avec Mistral"}
+                  className="px-3 py-1 rounded-lg text-xs font-medium border transition-colors"
+                  style={{ borderColor: "var(--accent)", color: aiLoading ? "var(--muted)" : "var(--accent)" }}>
+                  {aiLoading ? "..." : "✨ Générer"}
                 </button>
-              </div>
-            )}
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Légende</label>
-                <input type="text" placeholder="Ex : Figure 2 — Architecture BERT" value={caption} onChange={e => setCaption(e.target.value)}
-                  className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                  style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
-              </div>
-              <div>
-                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Source (optionnel)</label>
-                <input type="text" placeholder="Ex : arXiv 1706.03762" value={source} onChange={e => setSource(e.target.value)}
-                  className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                  style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
-              </div>
-              <div>
-                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>URL source (optionnel)</label>
-                <input type="text" placeholder="https://..." value={sourceUrl} onChange={e => setSourceUrl(e.target.value)}
-                  className="w-full rounded-lg border px-3 py-2 text-sm outline-none font-mono text-xs"
-                  style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
-              </div>
-              <div>
-                <label className="text-xs mb-1 block" style={{ color: "var(--muted)" }}>Taille</label>
-                <div className="flex gap-2">
-                  {(["small", "medium", "large", "full"] as ImageSize[]).map(s => (
-                    <button key={s} onClick={() => setSize(s)}
-                      className="flex-1 py-1.5 rounded-lg text-xs border transition-colors"
-                      style={{ background: size === s ? "var(--accent)" : "transparent", color: size === s ? "white" : "var(--muted)", borderColor: size === s ? "var(--accent)" : "var(--card-border)" }}>
-                      {s}
-                    </button>
-                  ))}
-                </div>
+              )}
+            </div>
+            <div className="space-y-2">
+              <input type="text" placeholder="Légende" value={caption} onChange={e => setCaption(e.target.value)}
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
+              <input type="text" placeholder="Source (optionnel)" value={source} onChange={e => setSource(e.target.value)}
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
+              <input type="text" placeholder="URL source (optionnel)" value={sourceUrl} onChange={e => setSourceUrl(e.target.value)}
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none font-mono text-xs"
+                style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
+              <div className="flex gap-1.5">
+                {(["small", "medium", "large", "full"] as ImageSize[]).map(s => (
+                  <button key={s} onClick={() => setSize(s)}
+                    className="flex-1 py-1.5 rounded-lg text-xs border transition-colors"
+                    style={{ background: size === s ? "var(--accent)" : "transparent", color: size === s ? "white" : "var(--muted)", borderColor: size === s ? "var(--accent)" : "var(--card-border)" }}>
+                    {s}
+                  </button>
+                ))}
               </div>
             </div>
           </section>
@@ -427,8 +518,8 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
 
         {/* FOOTER */}
         <div className="sticky bottom-0 p-4 border-t space-y-2" style={{ background: "var(--background)", borderColor: "var(--card-border)" }}>
-          {status === "success" && <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#dcfce7", color: "#166534" }}>Image insérée ! Rechargez pour voir.</div>}
-          {status === "error" && <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#fef2f2", color: "#991b1b" }}>Erreur lors de l&apos;insertion.</div>}
+          {status === "success" && <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#dcfce7", color: "#166534" }}>Image insérée !</div>}
+          {status === "error" && <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#fef2f2", color: "#991b1b" }}>Erreur</div>}
           {!canInsert && (
             <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "var(--card-bg)", color: "var(--muted)" }}>
               Manque : {[!currentSrc && "image", selectedBlock === null && "emplacement"].filter(Boolean).join(", ")}
