@@ -216,7 +216,6 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
       else {
         if (data.alt) setAlt(data.alt);
         if (data.caption) setCaption(data.caption);
-        if (data.source) setSource(data.source);
       }
     } catch { alert("Erreur de connexion"); }
     setAiLoading(false);
@@ -644,6 +643,10 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
               )}
             </div>
             <div className="space-y-2">
+              <textarea placeholder="Légende (cliquer ✨ Générer pour remplir automatiquement)" value={caption} onChange={e => setCaption(e.target.value)}
+                rows={3}
+                className="w-full rounded-lg border px-3 py-2 text-sm outline-none resize-none"
+                style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
               <input type="text" placeholder="URL source (optionnel)" value={sourceUrl} onChange={e => setSourceUrl(e.target.value)}
                 className="w-full rounded-lg border px-3 py-2 text-sm outline-none font-mono text-xs"
                 style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
