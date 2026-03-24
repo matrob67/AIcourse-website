@@ -214,6 +214,8 @@ export const courseParts: Part[] = [
           { id: "model-merging-ties", number: 113, title: "Model merging : TIES", slug: "model-merging-ties", arxiv: ["2306.01708"] },
           { id: "model-merging-dare", number: 114, title: "Model merging : DARE, model soups, SLERP", slug: "model-merging-dare", arxiv: ["2311.03099"] },
           { id: "eval-post-finetuning", number: 115, title: "Evaluation post fine-tuning : benchmarks et human eval", slug: "eval-post-finetuning" },
+          { id: "cpt-long-context", number: 116, title: "CPT & Long context extension", slug: "cpt-long-context", keywords: ["Continued Pre-Training", "CPT", "long context", "RoPE scaling", "YaRN", "Position Interpolation"] },
+          { id: "muon-lr-schedulers", number: 117, title: "Muon & LR schedulers avancés", slug: "muon-lr-schedulers", keywords: ["Muon optimizer", "WSD", "warmup-stable-decay", "schedule-free", "learning rate scheduling"] },
         ],
       },
       {
@@ -236,6 +238,9 @@ export const courseParts: Part[] = [
           { id: "serving-frameworks", number: 129, title: "Serving frameworks comparés : vLLM, TGI, Triton, SGLang", slug: "serving-frameworks" },
           { id: "ollama-local", number: 130, title: "Ollama et llama.cpp : inférence locale", slug: "ollama-local" },
           { id: "memory-optimization", number: 131, title: "Optimisation mémoire : activation offloading, tensor offloading", slug: "memory-optimization" },
+          { id: "qat", number: 132, title: "QAT : Quantization Aware Training", slug: "qat", keywords: ["Quantization Aware Training", "fake quantization", "Straight-Through Estimator", "STE"] },
+          { id: "model-serving", number: 133, title: "Model serving : déployer un LLM en production", slug: "model-serving", keywords: ["vLLM", "TGI", "PagedAttention", "speculative decoding", "continuous batching"] },
+          { id: "model-conversions", number: 134, title: "Model conversions : formats et compatibilité", slug: "model-conversions", keywords: ["safetensors", "GGUF", "ONNX", "TensorRT", "conversion"] },
         ],
       },
       {
@@ -342,6 +347,7 @@ export const courseParts: Part[] = [
           { id: "cloud-ai", number: 182, title: "Cloud AI : AWS SageMaker vs GCP Vertex AI vs Azure ML", slug: "cloud-ai" },
           { id: "cluster-management", number: 183, title: "Cluster management : Slurm, Kubernetes, Ray", slug: "cluster-management" },
           { id: "networking", number: 184, title: "Networking pour distributed training : InfiniBand, NVLink, NVSwitch", slug: "networking" },
+          { id: "advanced-parallelism", number: 185, title: "Parallélisme avancé : Expert Parallelism, 3D parallelism, Ulysses", slug: "advanced-parallelism", keywords: ["Expert Parallelism", "3D parallelism", "Ulysses", "DeepSpeed-Ulysses", "context parallelism", "sequence parallelism avancé"] },
         ],
       },
       {
@@ -363,7 +369,7 @@ export const courseParts: Part[] = [
         lessons: [
           { id: "prompt-management", number: 192, title: "Prompt management et versioning (LangSmith, Humanloop)", slug: "prompt-management" },
           { id: "llm-eval-benchmarks", number: 193, title: "Evaluation de LLM : benchmarks automatiques", slug: "llm-eval-benchmarks" },
-          { id: "llm-as-judge", number: 194, title: "LLM-as-judge : utiliser un LLM pour évaluer un LLM", slug: "llm-as-judge" },
+          { id: "llm-as-judge", number: 194, title: "LLM-as-judge : utiliser un LLM pour évaluer un LLM", slug: "llm-as-judge", keywords: ["LLM-as-a-Judge", "évaluation automatique", "pairwise", "pointwise", "position bias", "MT-Bench", "Alpaca Eval"] },
           { id: "guardrails", number: 195, title: "Guardrails : content filtering, input/output validation", slug: "guardrails" },
           { id: "safety-redteaming", number: 196, title: "Safety : jailbreak prevention, red teaming", slug: "safety-redteaming" },
           { id: "cost-optimization", number: 197, title: "Cost optimization : prompt caching, semantic caching, model routing", slug: "cost-optimization" },
@@ -382,6 +388,7 @@ export const courseParts: Part[] = [
           { id: "rlhf-annotation", number: 204, title: "Annotation RLHF : outils et pipelines", slug: "rlhf-annotation" },
           { id: "synthetic-data", number: 205, title: "Synthetic data generation : techniques et qualité", slug: "synthetic-data" },
           { id: "data-governance", number: 206, title: "Data governance : GDPR, AI Act européen, compliance", slug: "data-governance" },
+          { id: "dataloaders", number: 207, title: "Dataloaders & data pipelines pour le training", slug: "dataloaders", keywords: ["DataLoader", "PyTorch DataLoader", "streaming", "WebDataset", "Mosaic StreamingDataset", "prefetch", "num_workers"] },
         ],
       },
     ],
@@ -682,6 +689,7 @@ export const courseParts: Part[] = [
           { id: "podcasts-newsletters", number: 307, title: "Podcasts & Newsletters", slug: "podcasts-newsletters" },
           { id: "certifications", number: 308, title: "Certifications et parcours complémentaires", slug: "certifications" },
           { id: "communities", number: 309, title: "Communautés : r/LocalLLaMA, Hugging Face Discord, EleutherAI", slug: "communities" },
+          { id: "glossaire-it", number: 310, title: "Glossaire IT : terminologie informatique pour l'IA", slug: "glossaire-it", keywords: ["API", "REST", "gRPC", "Docker", "Kubernetes", "CI/CD", "microservices", "load balancer", "reverse proxy"] },
         ],
       },
     ],

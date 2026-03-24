@@ -1,0 +1,178 @@
+---
+title: "HSDP & Context Parallelism : parallélisme avancé"
+description: "Au-delà de TP et FSDP : HSDP combine sharding intra-nœud et réplication inter-nœuds, Context Parallelism distribue les séquences longues sur plusieurs GPU."
+---
+
+## Le problème de FSDP à grande échelle
+
+Tu connais déjà FSDP : chaque GPU ne stocke qu'un fragment des paramètres, gradients et états d'optimiseur. Quand il a besoin des paramètres complets pour un forward ou un backward, il lance un all-gather pour les récupérer temporairement. Ca fonctionne très bien.
+
+Mais voici le souci : FSDP partitionne le modèle entre **tous** les GPU du cluster. Si tu as 256 GPU répartis sur 32 nœuds, chaque all-gather implique 256 GPU qui communiquent ensemble. Au sein d'un même nœud (8 GPU reliés par NVLink à ~900 GB/s), c'est très rapide. Mais entre nœuds, la communication passe par le réseau (InfiniBand, ~400 Gb/s par lien), qui est 10 à 20 fois plus lent que NVLink.
+
+Résultat : plus tu ajoutes de nœuds, plus les communications inter-nœuds deviennent le goulot d'étranglement. Tu passes plus de temps à attendre les données qu'à calculer. C'est comme organiser une réunion où 256 personnes doivent se mettre d'accord : ça prend beaucoup plus de temps que si 8 personnes dans la même salle se coordonnent.
+
+## HSDP : le meilleur des deux mondes
+
+**HSDP (Hybrid Sharded Data Parallelism)** est la solution élégante à ce problème. L'idée : exploiter la hiérarchie naturelle du matériel en combinant deux stratégies de parallélisme à deux niveaux différents.
+
+### Le principe : sharding local, réplication globale
+
+Au lieu de partitionner le modèle entre tous les GPU du cluster, HSDP fait deux choses distinctes :
+
+1. **Intra-nœud (FSDP)** : au sein de chaque nœud, les 8 GPU se partagent le modèle via FSDP classique (full sharding). Les all-gather et reduce-scatter ne traversent que le bus NVLink ultra-rapide. Chaque GPU ne stocke que 1/8ème du modèle.
+
+2. **Inter-nœuds (DDP)** : entre les nœuds, le modèle est **répliqué** en entier (chaque nœud a sa propre copie complète, distribuée entre ses 8 GPU). La seule communication inter-nœuds est la synchronisation des gradients via all-reduce, exactement comme en DDP classique.
+
+### Pourquoi c'est efficace
+
+La clé est que chaque type de communication utilise le canal le plus adapté :
+
+- Les all-gather FSDP (fréquents, gros volumes) restent **dans le nœud** via NVLink, là où la bande passante est maximale
+- Les all-reduce de gradients (une fois par step d'optimisation) passent **entre nœuds** via le réseau, mais c'est un seul échange par itération au lieu de multiples all-gather
+
+<Callout type="info" title={"L'analogie des équipes"}>
+Imagine plusieurs équipes travaillant sur le même projet. Au sein de chaque équipe (même bureau), les membres partagent tous les documents librement : chacun ne garde qu'une partie, et ils échangent en permanence à voix haute (FSDP via NVLink). Entre équipes (bureaux différents), on ne s'envoie qu'un résumé à la fin de chaque réunion : "voici nos conclusions" (DDP via réseau). On ne fait pas circuler tous les documents bruts entre bureaux, seulement les résultats finaux.
+</Callout>
+
+### Configuration en pratique
+
+HSDP se configure en spécifiant deux dimensions de parallélisme via un `DeviceMesh` (la grille logique qui organise les GPU) :
+
+- **Dimension de réplication** (`replicate`) : combien de copies du modèle existent dans le cluster. C'est le nombre de groupes inter-nœuds qui se synchronisent via all-reduce.
+- **Dimension de sharding** (`shard`) : combien de GPU se partagent chaque copie. Typiquement 8 (un nœud complet).
+
+Exemple avec 64 GPU sur 8 nœuds :
+- `shard = 8` (chaque nœud fait du FSDP entre ses 8 GPU)
+- `replicate = 8` (8 nœuds répliquent le modèle)
+- Chaque GPU stocke 1/8ème du modèle, mais les communications lourdes ne sortent jamais du nœud
+
+<Callout type="tip" title="FSDP2 et HSDP">
+Avec FSDP2 (PyTorch 2.x+), HSDP est un cas d'utilisation natif du `DeviceMesh` 2D. Tu n'as qu'à définir ta grille `(replicate, shard)` et FSDP2 gère automatiquement les communications à chaque niveau. C'est exactement l'approche utilisée par Mistral pour entraîner ses modèles avec le framework Forge.
+</Callout>
+
+### Quand utiliser HSDP plutôt que FSDP pur ?
+
+| Situation | Recommandation |
+|-----------|---------------|
+| 1 nœud (8 GPU) | FSDP classique suffit (tout est en NVLink) |
+| 2-4 nœuds, modèle moyen | FSDP peut encore fonctionner, mais HSDP commence à aider |
+| 8+ nœuds | HSDP fortement recommandé |
+| Réseau inter-nœuds lent | HSDP quasi indispensable |
+
+La règle simple : dès que les communications FSDP inter-nœuds deviennent un goulot d'étranglement visible (tu peux le mesurer avec un profiler), passe à HSDP.
+
+## Context Parallelism : distribuer les séquences longues
+
+### Le problème des contextes longs
+
+Les modèles modernes traitent des séquences de plus en plus longues : 128K tokens pour GPT-4, 200K pour Claude, jusqu'à 1M pour Gemini. Or le mécanisme d'attention standard a une complexité quadratique en O(n^2) par rapport à la longueur de séquence. Pour une séquence de 128K tokens, la matrice d'attention fait 128K x 128K = ~16 milliards d'éléments. En BF16, ça représente ~32 GB rien que pour cette matrice, sans compter les tenseurs KV intermédiaires.
+
+Même avec Flash Attention (qui évite de matérialiser la matrice complète), les tenseurs K et V de chaque couche pour 128K tokens occupent une mémoire considérable. Un seul GPU n'a tout simplement pas assez de mémoire pour traiter l'attention sur des séquences aussi longues.
+
+<Callout type="warning" title={"Ne pas confondre SP et CP"}>
+Le **Sequence Parallelism (SP)** qu'on a vu avec Megatron-LM distribue les opérations *hors attention* (LayerNorm, Dropout) sur la dimension de la séquence. Il complète le Tensor Parallelism. Le **Context Parallelism (CP)** est différent : il distribue le *calcul d'attention lui-même* sur plusieurs GPU en découpant la séquence en chunks. SP et CP répondent à deux problèmes distincts et peuvent coexister.
+</Callout>
+
+### Le principe : découper la séquence pour l'attention
+
+Le Context Parallelism divise la séquence d'entrée en chunks (morceaux) répartis entre GPU. Chaque GPU est responsable d'un segment de la séquence pour le calcul d'attention.
+
+Prenons une séquence de 128K tokens sur 8 GPU :
+- GPU 0 : tokens 0 à 15,999 (chunk 0)
+- GPU 1 : tokens 16,000 à 31,999 (chunk 1)
+- ...
+- GPU 7 : tokens 112,000 à 127,999 (chunk 7)
+
+Chaque GPU calcule les vecteurs Q, K, V pour son chunk localement. Mais pour l'attention, chaque token doit potentiellement "voir" tous les autres tokens. Le GPU 0 a les queries du chunk 0, mais il a besoin des keys et values de **tous** les chunks pour calculer les scores d'attention complets. C'est là qu'intervient Ring Attention.
+
+### Ring Attention : la circulation des KV
+
+L'idée de Ring Attention est d'organiser les GPU en anneau et de faire circuler les blocs KV d'un GPU à l'autre :
+
+1. Chaque GPU commence par calculer l'attention entre ses queries (Q locaux) et ses propres KV (KV locaux)
+2. Puis il envoie son bloc KV au GPU suivant dans l'anneau, et reçoit le bloc KV du GPU précédent
+3. Il calcule l'attention entre ses Q et le nouveau bloc KV reçu
+4. On répète jusqu'à ce que chaque GPU ait vu tous les blocs KV
+
+Après un tour complet de l'anneau, chaque GPU a calculé l'attention de ses queries par rapport à l'intégralité de la séquence. Le résultat est mathématiquement identique à un calcul d'attention sur la séquence complète.
+
+<Callout type="info" title={"Le chevauchement calcul-communication"}>
+L'astuce qui rend Ring Attention efficace : pendant qu'un GPU calcule l'attention avec le bloc KV courant, il envoie **simultanément** ce bloc au GPU suivant et reçoit le prochain bloc. Le calcul et la communication se chevauchent (overlap). En pratique, si le calcul d'attention est assez long (séquences longues), la communication est presque entièrement masquée.
+</Callout>
+
+### Attention causale et optimisation
+
+Pour les modèles autorégressifs (GPT, Llama, Mistral...), l'attention est **causale** : chaque token ne peut voir que les tokens précédents, pas les suivants. Cela a une conséquence importante pour le Context Parallelism.
+
+Le GPU qui gère les premiers tokens de la séquence (chunk 0) n'a besoin que de ses propres KV. Le GPU qui gère les derniers tokens (chunk 7) doit voir les KV de tous les chunks. Il y a donc un déséquilibre de charge (load imbalance) : les GPU des derniers chunks travaillent plus que ceux des premiers.
+
+Pour résoudre ce problème, certaines implémentations utilisent un **ordonnancement en zigzag** : au lieu de distribuer les chunks séquentiellement, on alterne de façon à équilibrer la charge. Par exemple, GPU 0 reçoit les chunks 0 et 7, GPU 1 reçoit les chunks 1 et 6, etc. Chaque GPU a ainsi un mélange de tokens "anciens" (peu d'attention à calculer) et "récents" (beaucoup d'attention).
+
+### Quand utiliser Context Parallelism ?
+
+Le CP n'est utile que pour les **très longues séquences**. Pour une séquence de 4K tokens, la mémoire d'attention tient largement sur un seul GPU. Le CP ajoute de la communication inutile.
+
+| Longueur de séquence | CP nécessaire ? |
+|---------------------|----------------|
+| 2K-8K tokens | Non, un seul GPU suffit |
+| 32K-64K tokens | Possible si mémoire GPU limitée |
+| 128K+ tokens | Oui, quasiment indispensable |
+| 1M+ tokens | Oui, avec un degré CP élevé (16-64 GPU) |
+
+## Combiner toutes les formes de parallélisme
+
+### Le parallélisme 3D classique
+
+La combinaison historique est le **parallélisme 3D** : Tensor Parallelism (TP) x Pipeline Parallelism (PP) x Data Parallelism (DP). C'est ce qui a permis d'entraîner les premiers modèles à 100 milliards de paramètres et plus.
+
+Rappel du rôle de chaque dimension :
+- **TP** : partitionne chaque couche (les matrices de poids) entre GPU. Nécessite des all-reduce fréquents, donc se fait intra-nœud (NVLink).
+- **PP** : distribue les couches en stages entre GPU. Communications point-à-point uniquement, adaptées au réseau inter-nœuds.
+- **DP** : réplique le modèle complet et distribue les données. Synchronisation des gradients une fois par step.
+
+### Le parallélisme 4D et 5D
+
+Avec HSDP et CP, on passe à des configurations à 4 ou 5 dimensions. Voici comment tout s'emboîte :
+
+**Configuration 4D typique (HSDP + TP + PP)** sur 512 GPU (64 nœuds de 8 GPU) :
+- TP = 8 (au sein de chaque nœud, via NVLink)
+- PP = 8 (entre 8 nœuds, chaîne de stages)
+- HSDP replicate = 8 (8 répliques du pipeline complet)
+- HSDP shard = 8 (chaque réplique est shardée sur un nœud)
+- Total : 8 x 8 x 8 = 512 GPU
+
+**Configuration 5D (avec CP et Expert Parallelism)** pour les très grands modèles MoE (Mixture-of-Experts) :
+- TP x PP x DP x CP x EP
+- EP (Expert Parallelism) : distribue les différents experts du MoE sur différents GPU. Chaque GPU gère un sous-ensemble des experts.
+
+<Callout type="info" title={"Le setup de Mistral Forge"}>
+Le framework Forge de Mistral utilise HSDP + TP + CP ensemble. Le DeviceMesh est configuré avec les dimensions (replicate, shard, tp, cp). Cette combinaison permet d'entraîner efficacement des modèles denses et MoE sur de grands clusters tout en supportant des contextes longs.
+</Callout>
+
+### Comment choisir la bonne combinaison ?
+
+La règle générale est de suivre la hiérarchie matérielle :
+
+1. **TP en premier** (intra-nœud) : utilise les 8 GPU NVLink pour partitionner chaque couche. C'est le plus gourmand en bande passante, donc il faut le lien le plus rapide.
+
+2. **CP si nécessaire** (intra ou inter-nœud) : si les séquences sont longues (128K+), ajoute du Context Parallelism. Peut fonctionner intra-nœud si le TP ne consomme pas tous les GPU, ou inter-nœud si la bande passante réseau est suffisante.
+
+3. **PP ensuite** (inter-nœud) : distribue les stages du pipeline entre nœuds. Les communications sont point-à-point et tolèrent bien la latence réseau.
+
+4. **HSDP pour scaler** (inter-nœud) : réplique le modèle entre groupes de nœuds pour augmenter le throughput. La synchronisation des gradients se fait une fois par step.
+
+<Callout type="tip" title="L'objectif fondamental">
+Toutes ces techniques de parallélisme poursuivent le même objectif : maximiser le ratio temps-de-calcul / temps-de-communication. On place les communications les plus lourdes (all-reduce de TP) sur les liens les plus rapides (NVLink), et les communications les plus légères (gradients de DDP, activations de PP) sur les liens plus lents (réseau). HSDP et CP ajoutent de la flexibilité pour respecter cette hiérarchie avec des modèles toujours plus grands et des séquences toujours plus longues.
+</Callout>
+
+## Résumé des stratégies de parallélisme
+
+| Stratégie | Ce qu'elle distribue | Type de communication | Placement idéal |
+|-----------|---------------------|----------------------|-----------------|
+| TP | Chaque couche (matrices de poids) | All-reduce (fréquent, gros volume) | Intra-nœud (NVLink) |
+| SP | Opérations hors attention (LayerNorm, Dropout) | All-gather / reduce-scatter | Avec TP, intra-nœud |
+| PP | Les couches en stages séquentiels | Point-à-point (activations) | Inter-nœud |
+| FSDP | Paramètres, gradients, états optimiseur | All-gather + reduce-scatter | Intra-nœud ou tout le cluster |
+| HSDP | FSDP intra-nœud + DDP inter-nœuds | All-gather local + all-reduce global | Multi-nœud |
+| CP | La séquence pour le calcul d'attention | Ring (KV circulants) | Selon longueur de séquence |
+| EP | Les experts d'un modèle MoE | All-to-all (routage des tokens) | Flexible |

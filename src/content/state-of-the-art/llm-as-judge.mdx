@@ -1,0 +1,199 @@
+---
+title: "LLM-as-a-Judge : évaluer avec un LLM"
+description: "Utiliser un LLM puissant pour évaluer les sorties d'un autre modèle — plus rapide et plus scalable que l'évaluation humaine, avec ses propres biais à connaître."
+---
+
+## Le problème : comment évaluer un LLM à grande échelle ?
+
+Tu as fine-tuné un modèle, tu as changé ton prompt, tu as branché un nouveau pipeline. Les réponses ont l'air mieux... mais "ont l'air mieux", c'est pas un protocole d'évaluation.
+
+Historiquement, deux options s'offraient à toi pour mesurer la qualité des sorties d'un LLM :
+
+- **L'évaluation humaine** : des annotateurs lisent les réponses et les notent. C'est le gold standard, mais c'est lent, cher, et ça ne scale pas. Évaluer 10 000 réponses avec des humains, c'est des semaines de travail et des milliers d'euros.
+- **Les métriques automatiques classiques** : BLEU, ROUGE, METEOR. Ces métriques comparent les n-grams entre la réponse générée et une référence. Le problème ? Elles sont beaucoup trop superficielles. Deux réponses peuvent dire exactement la même chose avec des mots différents, et BLEU donnera un score désastreux. À l'inverse, une réponse peut partager plein de mots avec la référence tout en étant factuellement fausse.
+
+Le LLM-as-a-Judge, c'est l'idée de combler ce fossé : utiliser un **LLM puissant** (GPT-4, Claude, Mistral Large) comme juge automatique pour évaluer la qualité des réponses d'un autre modèle. Le juge comprend le sens, le contexte, les nuances — exactement ce que BLEU et ROUGE ne font pas.
+
+<Callout type="info" title={"Pourquoi ça marche"}>
+Les LLM de dernière génération ont développé une capacité remarquable à évaluer la qualité d'un texte : pertinence, exactitude factuelle, clarté, style. On exploite cette capacité pour automatiser ce qui nécessitait auparavant un humain qualifié.
+</Callout>
+
+## Comment ça fonctionne en pratique
+
+Le principe est simple. On donne au LLM juge :
+1. Le **prompt original** (la question ou instruction posée au modèle évalué)
+2. La **réponse du modèle** à évaluer
+3. Des **critères d'évaluation** explicites (helpfulness, accuracy, safety, style...)
+4. Optionnellement, une **réponse de référence** (gold standard)
+
+Le juge analyse la réponse selon les critères demandés et produit un score, un classement, ou un jugement qualitatif.
+
+```python
+# Exemple simplifié de LLM-as-Judge avec un prompt pointwise
+judge_prompt = """Évalue la réponse suivante sur une échelle de 1 à 10.
+
+Critères :
+- Exactitude factuelle (0-10)
+- Pertinence par rapport à la question (0-10)
+- Clarté et structure (0-10)
+
+Question : {question}
+Réponse : {response}
+
+Donne un score pour chaque critère et un score global.
+Justifie brièvement chaque score.
+"""
+```
+
+Le prompt du juge est crucial. Un prompt vague donne des évaluations incohérentes. Un prompt avec des critères précis, des échelles claires et des exemples de notation donne des résultats qui corrèlent fortement avec le jugement humain.
+
+## Les trois patterns d'évaluation
+
+### Pointwise : noter une réponse seule
+
+Le juge reçoit **une seule réponse** et lui attribue un score (typiquement de 1 à 10) sur un ou plusieurs critères. C'est le pattern le plus simple et le plus courant.
+
+```
+Prompt → Réponse A → Score : 7/10
+```
+
+**Avantages** : simple à mettre en place, chaque réponse est évaluée indépendamment, facile à paralléliser.
+
+**Inconvénients** : les LLM ont tendance à donner des scores élevés à tout le monde (biais de complaisance). Un score de 7/10 ne veut pas dire grand-chose si toutes les réponses obtiennent entre 6 et 8.
+
+### Pairwise : comparer deux réponses
+
+Le juge reçoit **deux réponses** à la même question et doit choisir la meilleure. Pas de score absolu — juste un jugement relatif : "A est meilleur que B" ou "B est meilleur que A".
+
+```
+Prompt → Réponse A vs Réponse B → Gagnant : B
+```
+
+**Avantages** : beaucoup plus discriminant que le pointwise. Les humains aussi trouvent plus facile de comparer que de noter dans l'absolu. C'est le format utilisé par Chatbot Arena pour classer les modèles.
+
+**Inconvénients** : le nombre de comparaisons explose avec le nombre de modèles (combinatoire). Et surtout, il y a le **biais de position** (on en reparle juste après).
+
+### Reference-based : comparer à un gold standard
+
+Le juge reçoit la réponse à évaluer **et** une réponse de référence considérée comme correcte. Il évalue à quel point la réponse s'aligne avec la référence.
+
+```
+Prompt → Réponse A + Référence → Score d'alignement : 8/10
+```
+
+**Avantages** : évaluation plus objective, ancrage sur une vérité terrain.
+
+**Inconvénients** : nécessite de produire des réponses de référence (coûteux en annotation humaine). Et une bonne réponse peut être très différente de la référence tout en étant parfaitement correcte.
+
+<Callout type="tip" title={"Quel pattern choisir ?"}>
+**Pairwise** si tu compares deux modèles ou deux versions d'un prompt — c'est le plus fiable. **Pointwise** si tu veux scorer un grand volume de réponses rapidement (filtrage de données, monitoring en production). **Reference-based** si tu as des réponses gold standard disponibles (datasets d'évaluation annotés).
+</Callout>
+
+## Les biais du LLM juge
+
+Le LLM-as-a-Judge n'est pas parfait. Il a ses propres biais systématiques qu'il faut connaître et atténuer.
+
+### Biais de position (position bias)
+
+En évaluation pairwise, le juge a tendance à **préférer la réponse présentée en premier**. C'est un artefact de l'attention du modèle : la première réponse bénéficie d'un traitement préférentiel dans le contexte.
+
+**Mitigation** : on fait deux évaluations en inversant l'ordre des réponses (A/B puis B/A) et on moyenne les résultats. Si le juge dit "A gagne" dans les deux ordres, le résultat est fiable. Si le verdict change selon l'ordre, c'est un signe que la différence est trop faible pour être significative.
+
+### Biais d'auto-préférence (self-bias)
+
+Un modèle a tendance à **mieux noter ses propres réponses** que celles d'un autre modèle. GPT-4 comme juge note GPT-4 comme candidat plus généreusement que Claude, et inversement. Ce biais est documenté et mesurable.
+
+**Mitigation** : utiliser un modèle différent comme juge. Si tu évalues les sorties de Mistral, utilise Claude ou GPT-4 comme juge, pas Mistral lui-même.
+
+### Biais de verbosité (verbosity bias)
+
+Les LLM juges ont tendance à **préférer les réponses plus longues**, même quand une réponse courte et concise serait objectivement meilleure. Une réponse qui fait trois paragraphes sera souvent mieux notée qu'une réponse qui tient en deux phrases, à qualité égale.
+
+**Mitigation** : inclure dans le prompt du juge une instruction explicite du type "Une réponse concise et correcte doit être notée aussi bien qu'une réponse détaillée correcte. La longueur n'est pas un critère de qualité."
+
+### Biais de style (style bias)
+
+Les juges LLM favorisent les réponses bien structurées avec des listes à puces, des titres, du formatage markdown. Une réponse en prose continue qui dit exactement la même chose sera moins bien notée.
+
+**Mitigation** : si tu ne veux pas que le style influence le jugement, demande au juge de se concentrer uniquement sur le contenu factuel et la pertinence.
+
+<Callout type="warning" title={"Ne pas surestimer la corrélation"}>
+GPT-4 comme juge corrèle à environ 80% avec les préférences humaines. C'est bon, mais ça signifie aussi qu'une évaluation sur cinq diverge du jugement humain. Pour les décisions critiques (mise en production, sélection de modèle final), complétez toujours par une évaluation humaine ciblée.
+</Callout>
+
+## Corrélation avec le jugement humain
+
+La question clé : le LLM juge est-il vraiment d'accord avec les humains ?
+
+Les études montrent que GPT-4 atteint environ **80% de concordance** avec les annotateurs humains en évaluation pairwise. Pour comparaison, deux annotateurs humains sont d'accord entre eux environ 80-85% du temps. Le LLM juge est donc presque aussi fiable qu'un humain individuel.
+
+Quelques nuances importantes :
+- La corrélation est meilleure sur les cas **clairement bons ou clairement mauvais**. Sur les cas ambigus (les deux réponses sont de qualité similaire), le juge LLM est moins fiable.
+- La corrélation dépend du **domaine**. Le juge est excellent pour évaluer la clarté, la structure, l'utilité générale. Il est moins fiable pour juger l'exactitude factuelle dans des domaines spécialisés (médecine, droit, finance).
+- La qualité du **prompt du juge** influence énormément les résultats. Un prompt bien conçu avec des critères précis et des exemples de notation peut améliorer la corrélation de 10-15 points.
+
+## Cas d'usage concrets
+
+### Évaluation pendant l'entraînement
+
+Pendant le fine-tuning d'un modèle, on peut utiliser un LLM juge pour évaluer les checkpoints intermédiaires sans attendre une évaluation humaine complète. Le juge donne un feedback rapide sur la progression de l'entraînement.
+
+### Filtrage de données d'entraînement
+
+Avant d'entraîner un modèle sur des données synthétiques ou collectées, on utilise un LLM juge pour **filtrer les exemples de mauvaise qualité**. Le juge note chaque paire (prompt, réponse) et on ne garde que celles au-dessus d'un seuil de qualité. C'est une étape courante dans la construction de datasets d'instruction tuning.
+
+### A/B testing de modèles
+
+Tu as deux versions de ton modèle ou deux stratégies de prompting. Au lieu de mobiliser des annotateurs humains, tu soumets les paires de réponses à un LLM juge en mode pairwise pour déterminer rapidement quelle version est meilleure.
+
+### Signal de récompense pour le RL
+
+Le LLM juge peut servir de **reward model** dans un pipeline de reinforcement learning (RLHF ou variantes). Au lieu d'entraîner un reward model séparé, on utilise directement les scores du juge comme signal de récompense. C'est ce qu'on appelle parfois le RLAIF (Reinforcement Learning from AI Feedback).
+
+### Monitoring en production
+
+Dans un contexte de déploiement (par exemple Mistral Forge), un LLM juge peut évaluer les réponses du modèle **en temps réel** pour détecter les dégradations de qualité, les hallucinations, ou les réponses hors-sujet. C'est plus riche qu'un simple monitoring de latence ou de taux d'erreur.
+
+<Callout type="info" title={"Le juge dans Mistral Forge"}>
+Dans le contexte du model serving sur Mistral Forge, la fonctionnalité "Judge" permet d'évaluer automatiquement les sorties d'un modèle déployé. Le juge analyse chaque réponse en temps réel selon des critères configurables (sécurité, pertinence, format) et remonte des alertes si la qualité descend sous un seuil défini.
+</Callout>
+
+## Outils et benchmarks
+
+Plusieurs outils standardisent l'utilisation du LLM-as-a-Judge :
+
+### Alpaca Eval
+
+Un benchmark d'évaluation automatique qui utilise GPT-4 comme juge pour comparer les réponses de modèles instruction-tuned. Le modèle évalué répond à 805 instructions, et le juge compare chaque réponse à une réponse de référence (GPT-4 Turbo). Le résultat est un **taux de victoire** (win rate) : le pourcentage de fois où le modèle est jugé meilleur que la référence.
+
+La version **Alpaca Eval 2.0** utilise le mode pairwise avec inversion de position pour réduire le biais de position, et pondère les résultats pour réduire le biais de longueur.
+
+### MT-Bench
+
+Un benchmark de 80 questions multi-tour (conversation en deux tours) couvrant 8 catégories : raisonnement, mathématiques, codage, écriture, extraction, STEM, sciences humaines, et jeux de rôle. Le juge (GPT-4) attribue un score de 1 à 10 en mode pointwise.
+
+L'intérêt du multi-tour : il évalue la capacité du modèle à **maintenir la cohérence** sur plusieurs échanges, pas juste à produire une bonne réponse isolée.
+
+### Arena-Hard
+
+Un sous-ensemble de prompts difficiles extraits de Chatbot Arena (la plateforme de comparaison de modèles par vote humain). Arena-Hard utilise l'évaluation pairwise automatique et corrèle fortement avec le classement Elo de Chatbot Arena, tout en étant beaucoup moins coûteux à exécuter.
+
+## Bonnes pratiques
+
+Pour maximiser la fiabilité du LLM-as-a-Judge :
+
+1. **Utiliser un modèle juge puissant** : GPT-4, Claude 3.5 Sonnet ou Mistral Large. Les petits modèles sont des juges médiocres — ils manquent de capacité de raisonnement pour des évaluations nuancées.
+
+2. **Rédiger un prompt de juge précis** : des critères explicites, une échelle de notation claire, des exemples de ce que vaut un 3/10 vs un 8/10. Plus le prompt est précis, plus les évaluations sont reproductibles.
+
+3. **Toujours inverser l'ordre** en pairwise : deux passages avec A/B puis B/A, et moyenner. C'est non-négociable.
+
+4. **Ne pas utiliser un modèle pour se juger lui-même** : éviter le self-bias en choisissant un juge différent du modèle évalué.
+
+5. **Calibrer sur un petit échantillon humain** : faire évaluer 50-100 exemples par des humains ET par le juge, mesurer la corrélation, et ajuster le prompt du juge si la corrélation est trop faible.
+
+6. **Demander une justification** : forcer le juge à expliquer son score avant de le donner (chain-of-thought). Les scores accompagnés de justifications sont plus cohérents et plus fiables.
+
+<Callout type="tip" title={"Astuce : le chain-of-thought du juge"}>
+Demandez au juge de raisonner étape par étape avant de donner son score final. Par exemple : "Analyse d'abord l'exactitude factuelle, puis la pertinence, puis la clarté. Ensuite, donne ton score global." Les scores produits après un raisonnement explicite sont significativement plus stables et mieux corrélés avec le jugement humain.
+</Callout>

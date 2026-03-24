@@ -1,0 +1,169 @@
+---
+title: "CPT & Long context extension"
+description: "Le continued pre-training adapte un modèle base à un domaine spécialisé. Le long context extension étend la fenêtre de contexte bien au-delà de la taille d'entraînement initiale."
+---
+
+## Continued Pre-Training (CPT) : spécialiser sans repartir de zéro
+
+### Le principe
+
+Un LLM (Large Language Model) généraliste comme LLaMA ou Mistral est entraîné sur des centaines de milliards de tokens issus de l'internet. Le résultat : un modèle qui sait un peu de tout, mais qui manque de profondeur dans les domaines spécialisés --- médecine, droit, finance, code, ou une langue spécifique sous-représentée.
+
+Le **Continued Pre-Training** (CPT) consiste à reprendre ce modèle déjà entraîné et à poursuivre son entraînement sur un corpus de données spécialisées. L'objectif d'entraînement reste le même : la **next-token prediction** (prédire le prochain mot). Seul le corpus change.
+
+L'analogie : plutôt que de construire un hôpital à partir de zéro, tu rénoves un immeuble existant. Les fondations (compréhension du langage), la structure (grammaire, syntaxe, raisonnement de base) sont déjà solides. Tu ajoutes les équipements spécialisés par-dessus.
+
+### Pourquoi pas juste du fine-tuning ?
+
+Le fine-tuning classique (SFT, Supervised Fine-Tuning) utilise des paires question/réponse pour ajuster le comportement du modèle. Le CPT, lui, injecte directement de la **connaissance brute** dans les poids du modèle en le laissant absorber des documents entiers --- articles scientifiques, textes de loi, bases de code. La distinction est importante :
+
+- **SFT** : apprend au modèle *comment répondre* (format, style, instructions)
+- **CPT** : apprend au modèle *quoi savoir* (connaissances du domaine)
+
+En pratique, on fait souvent les deux en séquence : CPT d'abord pour injecter les connaissances, puis SFT pour apprendre au modèle à les utiliser dans un format conversationnel.
+
+### Le data mixing : éviter l'oubli catastrophique
+
+Le plus gros risque du CPT s'appelle le **catastrophic forgetting** (oubli catastrophique). En se spécialisant, le modèle peut perdre ses connaissances générales --- comme un médecin généraliste qui se spécialise tellement en cardiologie qu'il oublie comment traiter un rhume.
+
+La solution : **mélanger** les données spécialisées avec un échantillon de données générales pendant l'entraînement. Ce mélange agit comme un rappel permanent pour le modèle, l'empêchant d'oublier ce qu'il savait déjà.
+
+<Callout type="info" title={"Ratios typiques de data mixing"}>
+La pratique courante est de composer chaque batch d'entraînement avec :
+
+- **70-90% de données spécialisées** (domaine cible)
+- **10-30% de données générales** (échantillon du corpus original ou données web génériques)
+
+Le ratio exact dépend de la profondeur de spécialisation souhaitée. Plus tu veux un modèle spécialisé, plus tu augmentes la part domaine --- mais en dessous de 10% de données générales, l'oubli catastrophique devient un vrai risque.
+</Callout>
+
+### Learning rate : y aller doucement
+
+Le modèle de base a été entraîné avec un certain learning rate (taux d'apprentissage) --- typiquement autour de $3 \times 10^{-4}$ pour un modèle 7B. Pour le CPT, on reprend avec un **learning rate plus faible**, généralement entre 10% et 50% du LR initial.
+
+Pourquoi ? Parce que les poids du modèle sont déjà bien calibrés. Des mises à jour trop agressives risquent de détruire les représentations existantes. C'est comme accorder un piano déjà réglé : tu fais de petits ajustements fins, pas de grands coups de clé.
+
+En pratique :
+- **LR du pré-entraînement initial** : $\sim 3 \times 10^{-4}$
+- **LR pour le CPT** : $\sim 3 \times 10^{-5}$ à $1.5 \times 10^{-4}$
+- **Warmup** : court (quelques centaines de steps), car le modèle est déjà dans un bon bassin de convergence
+- **Schedule** : cosinus ou WSD (Warmup-Stable-Decay), le WSD étant préféré car il permet de relancer un nouveau CPT plus facilement
+
+### Exemples concrets
+
+| Modèle | Base | Domaine | Données CPT | Résultat |
+|--------|------|---------|-------------|----------|
+| **BloombergGPT** | BLOOM | Finance | 363B tokens financiers | Surpasse GPT-3 sur les benchmarks financiers |
+| **BioMistral** | Mistral 7B | Biomédical | PubMed + articles médicaux | +25% sur les benchmarks médicaux (MedQA) |
+| **Code LLaMA** | LLaMA 2 | Code | 500B tokens de code | +30% sur HumanEval par rapport à LLaMA 2 |
+| **SaulLM** | Mistral 7B | Droit | Textes juridiques | +40% sur les benchmarks légaux |
+
+### Le coût : 10 à 100 fois moins cher
+
+Pré-entraîner un LLM 7B from scratch demande environ 1 à 2 trillion de tokens et des milliers de GPU-heures. Le CPT nécessite typiquement entre 50B et 500B tokens --- soit 5 à 25% du budget original. En termes de coût :
+
+- **Pré-entraînement from scratch (7B)** : $\sim$ 500K--2M de dollars
+- **CPT sur 100B tokens** : $\sim$ 10K--50K de dollars
+
+C'est cette différence de coût qui rend le CPT si attractif. Tu obtiens un modèle spécialisé compétitif pour une fraction du prix d'un entraînement complet.
+
+<Callout type="tip" title={"Quand choisir le CPT vs. le fine-tuning"}>
+- **CPT** : quand tu as besoin d'injecter de grandes quantités de connaissances d'un domaine entier (des dizaines de milliards de tokens de données spécialisées)
+- **Fine-tuning (SFT/LoRA)** : quand tu veux ajuster le comportement ou le format de sortie du modèle avec quelques milliers d'exemples
+- **Les deux** : la combinaison la plus courante en production. CPT pour les connaissances, puis SFT pour le comportement.
+</Callout>
+
+---
+
+## Long Context Extension : dépasser la fenêtre d'entraînement
+
+### Le problème : une fenêtre fixe
+
+Les LLM sont entraînés avec une longueur de contexte fixe --- 4K tokens pour les premiers LLaMA, 8K pour Mistral 7B. Au-delà de cette limite, les performances s'effondrent brutalement. Le modèle produit des réponses incohérentes, oublie le début du texte, ou génère du charabia.
+
+Pourquoi ? Parce que l'encodage positionnel du modèle --- typiquement RoPE (Rotary Position Embedding) --- n'a jamais vu de positions au-delà de sa fenêtre d'entraînement. RoPE encode la position de chaque token via des rotations à différentes fréquences. À la position 8001 d'un modèle entraîné sur 8K, les rotations prennent des valeurs inconnues du modèle. C'est comme demander à quelqu'un de lire l'heure sur une horloge dont les aiguilles tourneraient soudain à une vitesse jamais vue : les chiffres défilent, mais ça ne veut plus rien dire.
+
+Pourtant, les utilisateurs veulent traiter des documents entiers, des bases de code, des conversations longues --- 32K, 128K, voire 1M de tokens. Comment y arriver ?
+
+### Technique 1 : Position Interpolation (PI)
+
+L'idée la plus directe : **compresser** toutes les positions pour les faire rentrer dans la plage que le modèle connaît.
+
+$$
+\text{position\_compressée} = \text{position\_réelle} \times \frac{L_{\text{train}}}{L_{\text{cible}}}
+$$
+
+Où $L_{\text{train}}$ est la longueur d'entraînement originale et $L_{\text{cible}}$ la longueur souhaitée. Concrètement, pour passer de 4K à 16K : on divise chaque position par 4. La position 16000 devient 4000, et le modèle reste dans sa zone de confort.
+
+**Avantage** : extrêmement simple --- une seule ligne de code, un facteur multiplicatif sur les positions.
+
+**Inconvénient** : on perd en résolution locale. En compressant les positions par un facteur 4, deux tokens adjacents passent d'une distance de 1 à une distance de 0.25. Le modèle distingue moins bien les tokens proches, ce qui dégrade la compréhension fine du texte local. C'est comme prendre une règle graduée en centimètres et l'étirer pour mesurer en mètres : on perd la précision des petites mesures.
+
+### Technique 2 : NTK-aware scaling
+
+L'observation clé : dans RoPE, toutes les fréquences ne jouent pas le même rôle.
+
+- Les **hautes fréquences** (les premières paires de dimensions) encodent les relations locales --- quel token est juste avant ou après moi
+- Les **basses fréquences** (les dernières paires de dimensions) encodent la position globale --- où suis-je dans le document
+
+PI traite toutes les fréquences de la même manière, ce qui est sous-optimal. Le scaling NTK-aware (Neural Tangent Kernel) modifie la **base** de RoPE plutôt que les positions elles-mêmes :
+
+$$
+\text{base}_{\text{new}} = \text{base} \times \alpha^{d/(d-2)}
+$$
+
+Où $\alpha$ est le facteur d'extension (par exemple 4 pour passer de 4K à 16K) et $d$ la dimension des embeddings. L'effet : les basses fréquences sont étirées (pour couvrir la fenêtre plus large) tandis que les hautes fréquences restent quasiment intactes (pour préserver la résolution locale).
+
+C'est plus malin que PI : on ajuste les fréquences de rotation plutôt que d'écraser les positions, ce qui préserve la capacité du modèle à distinguer les tokens voisins.
+
+### Technique 3 : YaRN (Yet another RoPE extensioN)
+
+YaRN combine les meilleures idées de PI et du NTK-aware scaling en ajoutant un troisième ingrédient : un **facteur de correction de l'attention**.
+
+Ses trois composantes :
+
+1. **NTK-by-parts** : divise les fréquences de RoPE en trois groupes --- les hautes fréquences ne sont pas modifiées, les moyennes sont partiellement interpolées, les basses sont complètement interpolées. C'est une version plus granulaire du NTK-aware scaling.
+2. **Interpolation sélective** : chaque fréquence reçoit un traitement adapté à sa sensibilité, plutôt qu'un traitement uniforme.
+3. **Scaling de l'attention** : un facteur $\sqrt{s}$ (où $s$ est le facteur d'extension) est appliqué aux scores d'attention pour compenser l'augmentation du nombre de tokens. Sans cette correction, les scores d'attention se diluent sur un plus grand nombre de positions, ce qui dégrade la qualité.
+
+<Callout type="info" title={"PI vs. NTK vs. YaRN en un coup d'oeil"}>
+- **PI** : compresse toutes les positions uniformément. Simple mais perte de résolution locale.
+- **NTK-aware** : modifie la base de RoPE pour traiter les fréquences différemment. Meilleure préservation locale.
+- **YaRN** : combine NTK + interpolation sélective + correction d'attention. Résultats les plus proches de l'entraînement natif à la longueur cible.
+
+En pratique, YaRN est devenu la méthode standard pour l'extension de contexte dans les modèles open source récents.
+</Callout>
+
+### L'étape indispensable : le fine-tuning sur des séquences longues
+
+Modifier les positions via PI, NTK ou YaRN ne suffit pas en soi. Le modèle n'a jamais appris à **utiliser** des contextes plus longs --- il ne sait pas qu'il faut maintenir l'attention sur des informations situées à 50K tokens de distance.
+
+Après avoir appliqué le scaling RoPE, il faut donc effectuer un **continued pre-training** (ou fine-tuning) sur des documents réellement longs : livres, articles scientifiques de 30 pages, bases de code entières, transcriptions de conversations longues.
+
+Ce fine-tuning est relativement court --- quelques centaines à quelques milliers de steps suffisent --- mais il est crucial pour que le modèle apprenne à exploiter sa nouvelle fenêtre de contexte.
+
+### L'extension progressive : grimper par paliers
+
+Une extension directe de 4K à 128K est possible mais risquée : le saut est trop grand et le modèle peut mal converger. En pratique, on procède souvent par **étapes progressives** :
+
+$$
+4\text{K} \rightarrow 16\text{K} \rightarrow 32\text{K} \rightarrow 128\text{K}
+$$
+
+À chaque étape, on applique le scaling RoPE correspondant, puis on fine-tune sur des séquences de la longueur cible. Le modèle s'adapte graduellement, ce qui produit des résultats plus stables qu'un saut direct.
+
+<Callout type="warning" title={"Le coût mémoire explose avec la longueur"}>
+L'attention standard a une complexité quadratique en $O(n^2)$ par rapport à la longueur de séquence $n$. Passer de 4K à 128K multiplie la mémoire d'attention par $(128/4)^2 = 1024$. C'est pourquoi l'extension de contexte s'accompagne toujours de techniques comme Flash Attention, Ring Attention, ou le Gradient Checkpointing pour rendre le fine-tuning sur de longues séquences physiquement possible.
+</Callout>
+
+### Exemples de modèles avec contexte étendu
+
+| Modèle | Contexte original | Contexte étendu | Technique |
+|--------|-------------------|-----------------|-----------|
+| **LLaMA 2 Long** | 4K | 32K | PI + fine-tuning progressif |
+| **Mistral 7B** | 8K (sliding window) | 32K+ | NTK-aware + fine-tuning |
+| **Code LLaMA** | 4K (LLaMA 2) | 100K | PI + fine-tuning sur du code long |
+| **Yi 34B** | 4K | 200K | YaRN + fine-tuning |
+| **Qwen 2** | 8K | 128K | YaRN + fine-tuning progressif |
+
+Le résultat de ces techniques : des modèles qui peuvent traiter des documents de centaines de pages, des bases de code entières, ou des conversations de plusieurs heures --- tout en conservant la qualité de compréhension qu'ils avaient sur les séquences courtes.

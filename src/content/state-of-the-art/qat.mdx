@@ -1,0 +1,125 @@
+---
+title: "QAT : Quantization Aware Training"
+description: "Contrairement à la quantization post-entraînement (GPTQ, AWQ), le QAT simule la quantization pendant l'entraînement pour que le modèle apprenne à compenser les erreurs de précision."
+---
+
+## Le problème fondamental de la quantification post-entraînement
+
+Avec les méthodes de quantification post-entraînement (PTQ) comme GPTQ ou AWQ, le processus est simple : on prend un modèle déjà entraîné, on compresse ses poids en précision réduite (typiquement 4 bits), et on espère que la qualité tient. Ces méthodes sont ingénieuses — GPTQ compense les erreurs via la Hessienne, AWQ protège les canaux importants — mais elles partagent une limite fondamentale : **le modèle n'a jamais été entraîné à fonctionner avec des poids quantifiés**. Il découvre la quantification après coup, comme un musicien qui découvrirait le jour du concert que son piano n'a plus que la moitié de ses touches.
+
+Le QAT (Quantization-Aware Training) renverse cette logique : au lieu de quantifier après l'entraînement, on **simule la quantification pendant l'entraînement** pour que le modèle apprenne à fonctionner avec des poids en précision réduite. Le musicien répète avec le piano cassé, et il apprend à jouer des morceaux magnifiques malgré les touches manquantes.
+
+## PTQ vs QAT : deux philosophies
+
+| | **PTQ** (Post-Training Quantization) | **QAT** (Quantization-Aware Training) |
+|---|---|---|
+| **Quand** | Après l'entraînement | Pendant l'entraînement |
+| **Principe** | Compresser un modèle figé | Entraîner le modèle à tolérer la compression |
+| **Qualité à 4 bits** | Bonne (légère dégradation) | Excellente (quasi sans perte) |
+| **Qualité à 2 bits** | Médiocre à inutilisable | Encore exploitable |
+| **Coût GPU** | Faible (quelques heures de calibration) | Élevé (entraînement complet ou fine-tuning) |
+| **Vitesse** | Rapide (minutes à heures) | Lent (heures à jours) |
+| **Données requises** | 128-256 exemples de calibration | Dataset d'entraînement complet |
+| **Cas d'usage** | Déploiement rapide, prototypage | Production exigeante, appareils embarqués |
+| **Exemples** | GPTQ, AWQ, NF4 | BitNet, Mistral Forge |
+
+<Callout type="info" title={"En résumé"}>
+PTQ = quantifier un modèle fini. C'est rapide et pratique, mais le modèle subit la quantification.
+QAT = entraîner un modèle qui sait qu'il sera quantifié. C'est plus lent, mais le modèle s'y adapte activement.
+</Callout>
+
+## Comment fonctionne le QAT
+
+### Les nœuds de "fake quantization"
+
+Le cœur du QAT repose sur un mécanisme appelé **fake quantization** (quantification simulée). Pendant le forward pass (la propagation avant), on insère des opérations spéciales qui simulent l'effet de la quantification sur les poids et les activations :
+
+1. **Quantifier** : convertir le poids FP32/FP16 en INT4 (arrondir vers les 16 niveaux discrets disponibles)
+2. **Déquantifier** : reconvertir immédiatement en FP32/FP16
+
+$$w_q = \text{Dequant}(\text{Quant}(w)) = \Delta \cdot \text{round}\left(\frac{w}{\Delta}\right)$$
+
+Où $\Delta$ est le pas de quantification (l'écart entre deux niveaux discrets). Le résultat $w_q$ est toujours un nombre en virgule flottante, mais il ne peut prendre qu'un nombre limité de valeurs distinctes — exactement comme un vrai poids quantifié.
+
+Le modèle "voit" donc les erreurs d'arrondi pendant l'entraînement. Ses gradients tiennent compte de ce bruit de quantification, et les poids s'ajustent pour le compenser. C'est comme s'entraîner à viser avec un fusil dont la mire est légèrement décalée : au bout d'un moment, on intègre le décalage et on touche quand même la cible.
+
+<Callout type="tip" title={"Pourquoi 'fake' ?"}>
+On appelle ça "fake" quantization parce que les calculs restent en virgule flottante pendant l'entraînement. On ne fait que simuler les effets de la quantification (les erreurs d'arrondi) sans réellement passer en arithmétique entière. Le modèle croit qu'il fonctionne en INT4, mais les calculs sont toujours en FP32. C'est au moment du déploiement qu'on applique la vraie quantification.
+</Callout>
+
+### Le Straight-Through Estimator (STE)
+
+Voici le problème technique principal du QAT : la fonction `round()` (arrondi) est **non différentiable**. Sa dérivée est zéro presque partout, et indéfinie aux points de transition. Autrement dit, les gradients ne peuvent pas traverser l'opération de quantification. Sans gradient, pas de backpropagation, et sans backpropagation, pas d'apprentissage.
+
+La solution est le **Straight-Through Estimator** (STE), une astuce mathématique proposée par Bengio et al. (2013). Le principe est brutal mais efficace : **pendant la backpropagation, on fait comme si la quantification n'existait pas**. On laisse le gradient passer tout droit, sans modification.
+
+$$\frac{\partial w_q}{\partial w} \approx 1$$
+
+Concrètement :
+- **Forward pass** : les poids sont quantifiés puis déquantifiés → le modèle voit le bruit de quantification
+- **Backward pass** : les gradients traversent l'opération de quantification comme si elle était une simple fonction identité → les poids peuvent se mettre à jour normalement
+
+C'est une approximation grossière en théorie, mais elle fonctionne remarquablement bien en pratique. Le modèle reçoit des gradients qui lui disent "bouge ce poids dans cette direction", et même si ces gradients ne tiennent pas compte exactement de l'arrondi, le mouvement global pousse les poids vers des valeurs qui survivent bien à la quantification.
+
+<Callout type="warning" title={"Les limites du STE"}>
+Le STE est une heuristique, pas une solution exacte. À des précisions très basses (1-2 bits), l'approximation devient moins fiable et l'entraînement peut devenir instable. Des variantes plus sophistiquées existent (comme le LSQ — Learned Step Size Quantization), qui apprennent aussi le pas de quantification $\Delta$ avec des gradients dédiés.
+</Callout>
+
+### Le pipeline complet
+
+Voici les étapes typiques d'un entraînement QAT :
+
+1. **Partir d'un modèle pré-entraîné** en pleine précision (FP16/FP32)
+2. **Insérer les nœuds de fake quantization** après chaque couche linéaire (et optionnellement sur les activations)
+3. **Fine-tuner le modèle** sur un dataset, avec un learning rate réduit (typiquement 10x à 100x plus faible que le pré-entraînement) — les poids s'adaptent progressivement au bruit de quantification
+4. **Exporter le modèle** en remplaçant les fake quantization par de vraies opérations INT4 — c'est le modèle final déployable
+
+## Pourquoi le QAT surpasse le PTQ
+
+### À 4 bits : la différence est mesurable
+
+En INT4, les méthodes PTQ comme GPTQ et AWQ produisent déjà des résultats impressionnants — la dégradation est souvent de l'ordre de 1-2% sur les benchmarks. Mais le QAT fait mieux : il élimine presque entièrement cette dégradation. Les poids appris ont convergé vers des valeurs qui "tombent juste" sur les niveaux de quantification, au lieu de subir un arrondi subi.
+
+### À 2 bits : le gouffre
+
+C'est à très basse précision que l'écart devient dramatique. En 2 bits, chaque poids ne peut prendre que 4 valeurs distinctes. Le PTQ à cette précision produit des modèles pratiquement inutilisables : la perplexité explose, les réponses deviennent incohérentes. Le QAT, en revanche, permet de maintenir une qualité encore exploitable en 2 bits, parce que le modèle a appris pendant des milliers de steps à fonctionner avec cette contrainte extrême.
+
+### Mistral Forge : le QAT à l'échelle industrielle
+
+Mistral AI utilise son outil Mistral Forge pour proposer des modèles quantifiés en 4 bits avec une qualité décrite comme quasi sans perte. Cette performance n'est possible qu'avec du QAT : un pipeline de quantification qui intègre l'entraînement dans la boucle, pas juste une compression après coup. Mistral Forge combine un stack de quantification de pointe avec un fine-tuning optimisé pour produire des modèles 4-bit qui rivalisent avec leurs versions pleine précision sur les benchmarks.
+
+<Callout type="info" title={"Pourquoi les fournisseurs investissent dans le QAT"}>
+Le QAT coûte cher en GPU, mais pour un fournisseur de modèles, le calcul est simple : quantifier un modèle une seule fois avec QAT, c'est payer le coût d'entraînement une fois pour servir ensuite des millions d'inférences avec un modèle plus petit, plus rapide, et de meilleure qualité qu'en PTQ. Le surcoût du QAT est amorti à grande échelle.
+</Callout>
+
+## Les inconvénients du QAT
+
+### 1. Coût GPU élevé
+
+Le QAT nécessite de faire du fine-tuning ou un entraînement complet, ce qui demande des GPU puissants. Pour un modèle de 70B paramètres, même un fine-tuning QAT peut nécessiter plusieurs GPU A100/H100 pendant des heures voire des jours. En comparaison, une quantification GPTQ du même modèle prend quelques heures sur un seul GPU.
+
+### 2. Données d'entraînement nécessaires
+
+Là où le PTQ ne demande que 128-256 exemples de calibration, le QAT nécessite un vrai dataset d'entraînement, suffisamment grand pour que le fine-tuning soit significatif. Cela implique de disposer des données, de les préparer, et de gérer le pipeline d'entraînement.
+
+### 3. Complexité technique
+
+Mettre en place un pipeline QAT demande plus d'expertise qu'une simple quantification PTQ. Il faut choisir le learning rate, le nombre d'époques, quelles couches quantifier, la stratégie de warm-up, et surveiller la stabilité de l'entraînement. Un PTQ, par comparaison, c'est souvent une seule commande.
+
+## Quand utiliser quoi ?
+
+**Choisissez le PTQ (GPTQ, AWQ, NF4) quand :**
+- Vous voulez déployer rapidement un modèle existant
+- La quantification 4-bit standard suffit pour votre cas d'usage
+- Vous n'avez pas les ressources GPU pour du fine-tuning
+- Vous explorez différents modèles et voulez comparer rapidement
+
+**Choisissez le QAT quand :**
+- Vous avez besoin de la meilleure qualité possible à basse précision
+- Vous ciblez des précisions très basses (2-3 bits) où le PTQ échoue
+- Le modèle sera déployé à grande échelle (le surcoût d'entraînement est amorti par les économies en inférence)
+- Vous déployez sur des appareils embarqués avec des contraintes mémoire strictes
+
+<Callout type="tip" title={"La combinaison gagnante"}>
+En pratique, le QAT est souvent utilisé par les fournisseurs de modèles (Mistral, Meta, Google) qui ont les ressources pour entraîner une fois et servir à l'échelle. Les utilisateurs finaux, eux, utilisent généralement le PTQ pour adapter des modèles à leurs besoins spécifiques. Si un modèle QAT officiel existe pour votre cas d'usage, c'est presque toujours le meilleur choix.
+</Callout>

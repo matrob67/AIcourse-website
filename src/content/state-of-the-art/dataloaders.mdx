@@ -1,0 +1,139 @@
+---
+title: "Dataloaders : alimenter l'entraînement"
+description: "Streaming, packing, chargement multitâche et multimodal — les stratégies pour alimenter efficacement un entraînement LLM à grande échelle."
+---
+
+## Le composant qui nourrit le modèle
+
+Le dataloader est le composant qui alimente le modèle en données pendant l'entraînement. Son rôle : lire les données brutes, les transformer en tenseurs prêts à consommer, et les livrer au GPU au bon moment.
+
+Ça a l'air simple, mais à l'échelle des LLM modernes, c'est tout sauf trivial. Un modèle de 70B paramètres entraîné sur 15 trillions de tokens avec 4096 GPU consomme des dizaines de gigaoctets de données **par seconde**. Si le dataloader ne suit pas le rythme, les GPU attendent. Et un GPU qui attend, c'est de l'argent brûlé --- littéralement des milliers de dollars par heure sur un cluster de cette taille.
+
+Le dataloader est donc un composant critique de performance. Pas le plus glamour, mais un maillon faible ici peut ruiner un entraînement entier.
+
+## Streaming : ne jamais tout charger en mémoire
+
+### Le problème
+
+Un dataset de 15T tokens pèse environ 30 TB une fois tokenisé. Aucune machine ne peut stocker ça en RAM. Même un nœud avec 2 TB de RAM ne peut pas héberger le dataset entier.
+
+### La solution : le streaming
+
+Au lieu de charger tout le dataset en mémoire, on **diffuse** les données depuis le disque ou le réseau à la volée. Le dataloader lit un petit bloc de données, le prépare, l'envoie au GPU, puis passe au bloc suivant. À tout instant, seule une infime fraction du dataset est en mémoire.
+
+C'est le même principe que regarder une vidéo en streaming plutôt que de la télécharger entièrement avant de la lire.
+
+En pratique, le streaming implique :
+- **Prefetching** : charger les prochains batches en avance pendant que le GPU traite le batch courant, pour masquer la latence d'I/O
+- **Sharding** : découper le dataset en milliers de fichiers (shards) pour paralléliser la lecture entre les workers et les nœuds
+- **Shuffling distribué** : mélanger l'ordre des shards (et des exemples au sein de chaque shard) pour garantir la diversité des batches sans nécessiter un accès aléatoire global au dataset entier
+
+<Callout type="info" title={"Formats optimisés pour le streaming"}>
+Les formats classiques (JSON, CSV, texte brut) sont inadaptés au streaming car ils ne supportent pas l'accès par index. Les formats optimisés comme MDS (Mosaic Data Shard), WebDataset (archives TAR indexées) ou Arrow (Hugging Face datasets) permettent un accès positionnel rapide et une lecture séquentielle efficace, avec compression intégrée.
+</Callout>
+
+## Packing et padding : minimiser les tokens gaspillés
+
+### Le problème du padding
+
+Les Transformers traitent des séquences de longueur fixe. Mais les documents réels ont des longueurs très variables : un tweet fait 20 tokens, un article de recherche en fait 8000. Si la longueur maximale est 4096, un tweet de 20 tokens nécessite 4076 tokens de padding (des zéros inutiles). Le GPU calcule des opérations sur ces tokens de padding pour rien --- c'est du gaspillage pur.
+
+### La solution : le packing
+
+Au lieu de padder chaque document individuellement, on **concatène** plusieurs documents dans une même séquence jusqu'à remplir la longueur cible. Un tweet de 20 tokens, un paragraphe de 300 tokens et un article de 3776 tokens remplissent parfaitement une séquence de 4096.
+
+Le packing élimine quasiment tout le padding et augmente l'utilisation effective du GPU de 30 à 50% sur des datasets avec des longueurs très variables.
+
+En pratique, un masque d'attention est utilisé pour empêcher les documents de "se voir" les uns les autres au sein de la même séquence packée. Chaque document reste isolé du point de vue du modèle.
+
+<Callout type="tip" title={"Algorithmes de packing"}>
+L'algorithme naïf de packing (concaténer dans l'ordre) laisse encore du padding en fin de séquence. Des algorithmes plus sophistiqués, comme le bin packing (inspiré du problème classique d'emballage), regroupent les documents par longueur similaire pour maximiser le remplissage. En pratique, un bin packing glouton atteint facilement 98-99% d'utilisation.
+</Callout>
+
+## Chargement multitâche : mixer les objectifs d'entraînement
+
+Un LLM moderne n'est pas entraîné sur un seul type de données. Le pipeline post-pretraining mélange plusieurs objectifs :
+
+- **SFT** (Supervised Fine-Tuning) : des paires instruction/réponse
+- **Données de préférence** : des paires choisies/rejetées pour le RLHF ou le DPO
+- **Code** : des fichiers sources avec leur contexte
+- **Conversations multi-tours** : des dialogues complets avec l'historique
+
+Le dataloader multitâche doit :
+1. **Alterner** entre ces sources selon des proportions définies (par exemple, 50% SFT, 30% code, 20% préférences)
+2. **Adapter le format** de chaque source : les données SFT ont un template `instruction → réponse`, les données de préférence ont des paires `chosen/rejected`, le code a une structure différente
+3. **Gérer les longueurs** : les exemples de code sont souvent beaucoup plus longs que les conversations courtes
+4. **Maintenir le mélange** au sein de chaque batch ou entre batches consécutifs pour éviter que le modèle ne "oublie" un objectif pendant de longues périodes
+
+L'implémentation la plus courante utilise des samplers pondérés : à chaque itération, on tire un dataset source selon les probabilités définies, puis on tire un exemple de ce dataset. C'est simple et efficace.
+
+## Chargement multimodal : texte, images, audio
+
+Les modèles multimodaux (VLM, modèles audio) ajoutent un niveau de complexité supplémentaire au dataloader. Les différentes modalités nécessitent :
+
+- **Des tokenizers différents** : le texte passe par un tokenizer BPE, les images par un encodeur de vision (ViT, SigLIP), l'audio par un encodeur audio (Whisper encoder)
+- **Des préprocesseurs spécifiques** : redimensionnement et normalisation des images, conversion et rééchantillonnage audio, augmentation de données spécifique à chaque modalité
+- **Un assemblage cohérent** : les tokens des différentes modalités doivent être entrelacés correctement dans la séquence finale (par exemple, `[texte] [image_tokens] [texte]`)
+- **Une gestion mémoire adaptée** : une image haute résolution peut produire des centaines de tokens, ce qui change radicalement la taille effective des batches
+
+Le dataloader multimodal doit coordonner tous ces pipelines de transformation et produire des batches homogènes malgré l'hétérogénéité des données d'entrée.
+
+<Callout type="warning" title={"Le piège des batches déséquilibrés"}>
+Un batch contenant beaucoup d'images haute résolution consomme significativement plus de mémoire qu'un batch purement textuel. Sans contrôle, ça peut provoquer des OOM (Out of Memory) sporadiques. La solution : limiter le nombre de tokens visuels par batch et ajuster dynamiquement la composition pour respecter un budget mémoire fixe.
+</Callout>
+
+## Data mixing ratios : contrôler les proportions
+
+Le choix des proportions de chaque source de données influence directement les capacités du modèle final. Un mélange typique pour le pretraining ressemble à :
+
+| Source | Proportion | Rôle |
+|--------|-----------|------|
+| Web (Common Crawl filtré) | 40% | Connaissance générale, diversité linguistique |
+| Code (GitHub, StackOverflow) | 30% | Raisonnement logique, capacités de programmation |
+| Livres et articles longs | 20% | Cohérence sur de longs contextes, connaissances approfondies |
+| Articles scientifiques | 10% | Connaissances spécialisées, raisonnement formel |
+
+Ces ratios ne sont pas arbitraires : ils sont le résultat d'expériences sur des petits modèles (scaling law-guided) ou d'algorithmes d'optimisation automatique comme DoReMi.
+
+Le dataloader doit respecter ces proportions de manière stable tout au long de l'entraînement, tout en garantissant un mélange suffisant au sein de chaque batch. Si le modèle voit 10 batches consécutifs de code puis 10 batches de web, la dynamique d'entraînement diffère de celle où chaque batch contient un mélange équilibré.
+
+## Pré-processing à la volée
+
+Certaines transformations sont appliquées dynamiquement par le dataloader plutôt que lors d'une étape de préparation hors ligne :
+
+- **Tokenisation** : convertir le texte brut en séquences d'identifiants de tokens. Parfois fait à la volée pour économiser l'espace disque (le texte tokenisé est plus volumineux que le texte brut compressé)
+- **Filtrage dynamique** : rejeter les exemples qui ne passent pas certains critères de qualité au moment du chargement, sans avoir à recréer tout le dataset
+- **Augmentation de données** : pour les modalités non-textuelles, appliquer des transformations aléatoires (crop, rotation pour les images) à chaque époque
+- **Déduplication en ligne** : détecter les doublons au sein d'une fenêtre glissante pour éviter de présenter le même contenu trop fréquemment, même si le dataset global a déjà été dédupliqué
+
+Ce pré-processing à la volée ajoute du travail au dataloader, mais il est exécuté sur CPU en parallèle du calcul GPU. L'astuce est d'utiliser suffisamment de workers CPU pour que le pipeline de données soit toujours en avance sur le GPU.
+
+## Outils et frameworks
+
+### Mosaic Streaming (MDS)
+
+Développé par MosaicML (Databricks), Mosaic Streaming est conçu spécifiquement pour l'entraînement distribué à grande échelle. Il gère le sharding, le shuffling distribué, le resumption (reprendre exactement là où on s'est arrêté après un crash) et le streaming depuis le stockage objet (S3, GCS). C'est le choix de référence pour les entraînements multi-nœud sérieux.
+
+### Hugging Face datasets avec streaming
+
+La bibliothèque `datasets` de Hugging Face supporte le mode streaming (`load_dataset(..., streaming=True)`). Les données sont téléchargées et traitées à la volée depuis le Hub. Idéal pour le prototypage et les datasets hébergés sur Hugging Face, mais moins optimisé que MDS pour les très grandes échelles.
+
+### WebDataset
+
+Format basé sur des archives TAR contenant des paires clé-valeur. Particulièrement adapté aux données multimodales (image + texte) et au streaming depuis le stockage objet. Utilisé notamment pour les datasets d'images à grande échelle (LAION).
+
+<Callout type="info" title={"Choisir le bon outil"}>
+Pour un entraînement sérieux sur un cluster multi-nœud, Mosaic Streaming (MDS) est le standard actuel. Pour de l'expérimentation rapide ou du fine-tuning sur un dataset Hugging Face, `datasets` en mode streaming suffit largement. WebDataset reste le choix privilégié pour les datasets multimodaux volumineux avec beaucoup d'images ou de fichiers audio.
+</Callout>
+
+## Résumé
+
+Le dataloader est un composant d'infrastructure souvent négligé, mais qui conditionne l'efficacité de tout l'entraînement. Les stratégies clés :
+
+1. **Streaming** : ne jamais charger le dataset entier en mémoire. Diffuser depuis le disque ou le réseau.
+2. **Packing** : concaténer les documents courts pour éliminer le padding et maximiser l'utilisation GPU.
+3. **Chargement multitâche** : mixer les objectifs d'entraînement selon des proportions contrôlées.
+4. **Chargement multimodal** : coordonner les pipelines de transformation pour les données hétérogènes.
+5. **Data mixing** : respecter les proportions des sources pour orienter les capacités du modèle.
+
+Un dataloader lent transforme un cluster GPU de plusieurs millions de dollars en une machine qui passe la moitié de son temps à attendre des données. Optimiser le data loading, c'est optimiser le retour sur investissement de toute l'infrastructure d'entraînement.
