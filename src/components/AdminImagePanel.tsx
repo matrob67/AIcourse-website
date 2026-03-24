@@ -144,7 +144,7 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
   // Select a search result visually (single click)
   const previewSearchImage = (img: SearchResult) => {
     setSelectedSearchImage(img);
-    setSource(img.source);
+    setSource("");
     setSourceUrl(img.sourceUrl || img.url);
   };
 
@@ -153,7 +153,7 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
     setSelectedSearchImage(img);
     setDownloading(true);
     setDownloadError("");
-    setSource(img.source);
+    setSource("");
     setSourceUrl(img.sourceUrl || img.url);
 
     // Try full URL first, then thumbnail as fallback
@@ -644,12 +644,6 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
               )}
             </div>
             <div className="space-y-2">
-              <input type="text" placeholder="Légende" value={caption} onChange={e => setCaption(e.target.value)}
-                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
-              <input type="text" placeholder="Source (optionnel)" value={source} onChange={e => setSource(e.target.value)}
-                className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
               <input type="text" placeholder="URL source (optionnel)" value={sourceUrl} onChange={e => setSourceUrl(e.target.value)}
                 className="w-full rounded-lg border px-3 py-2 text-sm outline-none font-mono text-xs"
                 style={{ borderColor: "var(--card-border)", background: "var(--card-bg)" }} />
