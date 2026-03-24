@@ -662,6 +662,7 @@ export const courseParts: Part[] = [
           { id: "entropy", number: 330, title: "Entropie : mesurer l'incertitude", slug: "entropy" },
           { id: "kl-divergence", number: 331, title: "Divergence KL et cross-entropie", slug: "kl-divergence" },
           { id: "mutual-information", number: 332, title: "Information mutuelle et ses applications en ML", slug: "mutual-information" },
+          { id: "game-theory", number: 333, title: "Théorie des jeux", slug: "game-theory", keywords: ["Nash", "minimax", "dilemme du prisonnier", "GAN", "multi-agent", "mechanism design", "Pareto"] },
         ],
       },
     ],
