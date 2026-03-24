@@ -8,7 +8,7 @@ type InputMode = "url" | "paste" | "search";
 interface Block { index: number; text: string; }
 interface EditState { blockIndex: number; caption: string; source: string; sourceUrl: string; alt: string; size: ImageSize; }
 interface SearchResult { url: string; thumb: string; title: string; source: string; width: number; height: number; sourceUrl?: string; }
-interface SuggestGroup { query: string; images: SearchResult[]; }
+interface SuggestGroup { query: string; images: SearchResult[]; suggestedBlockIndex?: number | null; }
 
 export default function AdminImagePanel({ partId, slug }: { partId: string; slug: string }) {
   const [open, setOpen] = useState(false);
@@ -37,7 +37,7 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
   const [caption, setCaption] = useState("");
   const [source, setSource] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
-  const [size, setSize] = useState<ImageSize>("large");
+  const [size, setSize] = useState<ImageSize>("medium");
 
   const [aiModel, setAiModel] = useState("mistral-small-latest");
   const [aiLoading, setAiLoading] = useState(false);
@@ -139,9 +139,17 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
   };
 
   const [downloadError, setDownloadError] = useState("");
+  const [hoveredImage, setHoveredImage] = useState<SearchResult | null>(null);
 
-  // Select a search result → download locally
-  const selectSearchImage = async (img: SearchResult) => {
+  // Select a search result visually (single click)
+  const previewSearchImage = (img: SearchResult) => {
+    setSelectedSearchImage(img);
+    setSource(img.source);
+    setSourceUrl(img.sourceUrl || img.url);
+  };
+
+  // Confirm selection and download locally (double click or button)
+  const confirmSearchImage = async (img: SearchResult) => {
     setSelectedSearchImage(img);
     setDownloading(true);
     setDownloadError("");
@@ -292,7 +300,7 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
   return (
     <div className="fixed inset-0 z-50 flex">
       <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
-      <div className="relative ml-auto w-full max-w-2xl h-full overflow-y-auto shadow-2xl flex flex-col"
+      <div className="relative ml-auto w-full max-w-4xl h-full overflow-y-auto shadow-2xl flex flex-col"
         style={{ background: "var(--background)", borderLeft: "1px solid var(--card-border)" }}>
 
         {/* Header */}
@@ -352,58 +360,127 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
 
                 {/* Auto-suggest results (grouped by query) */}
                 {suggestGroups.length > 0 && (
-                  <div className="space-y-3 max-h-96 overflow-y-auto">
+                  <div className="space-y-3 max-h-[600px] overflow-y-auto relative">
+                    {/* Hover preview overlay */}
+                    {hoveredImage && (
+                      <div className="sticky top-0 z-20 rounded-lg overflow-hidden border shadow-lg mb-2" style={{ borderColor: "var(--accent)", background: "var(--background)" }}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={hoveredImage.thumb || hoveredImage.url} alt={hoveredImage.title || "preview"} className="w-full object-contain max-h-64" referrerPolicy="no-referrer" />
+                        <div className="px-3 py-2 text-xs" style={{ color: "var(--foreground)" }}>
+                          <p className="font-medium truncate">{hoveredImage.title}</p>
+                          <p style={{ color: "var(--muted)" }}>{hoveredImage.source} — {hoveredImage.width}×{hoveredImage.height}</p>
+                        </div>
+                      </div>
+                    )}
                     {suggestGroups.map((group, gi) => (
                       <div key={gi}>
-                        <p className="text-xs font-medium mb-1.5 px-1" style={{ color: "var(--accent)" }}>🔍 {group.query}</p>
-                        <div className="grid grid-cols-3 gap-2 rounded-lg border p-2" style={{ borderColor: "var(--card-border)" }}>
+                        <div className="flex items-center gap-2 mb-1.5 px-1">
+                          <p className="text-xs font-medium" style={{ color: "var(--accent)" }}>🔍 {group.query}</p>
+                          {group.suggestedBlockIndex != null && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: "var(--accent-light)", color: "var(--accent)" }}>
+                              📍 bloc {group.suggestedBlockIndex}
+                            </span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 rounded-lg border p-2" style={{ borderColor: "var(--card-border)" }}>
                           {group.images.map((img, i) => (
                             <div key={i}
-                              onClick={() => !downloading && selectSearchImage(img)}
-                              className="relative rounded-lg overflow-hidden cursor-pointer hover:opacity-80 transition-opacity border"
+                              onClick={() => {
+                                if (downloading) return;
+                                previewSearchImage(img);
+                                if (group.suggestedBlockIndex != null && selectedBlock === null) {
+                                  setSelectedBlock(group.suggestedBlockIndex);
+                                }
+                              }}
+                              onDoubleClick={() => !downloading && confirmSearchImage(img)}
+                              onMouseEnter={() => setHoveredImage(img)}
+                              onMouseLeave={() => setHoveredImage(null)}
+                              className="relative rounded-lg overflow-hidden cursor-pointer hover:ring-2 hover:ring-offset-1 transition-all border"
                               style={{
                                 borderColor: selectedSearchImage?.url === img.url ? "var(--accent)" : "var(--card-border)",
                                 borderWidth: selectedSearchImage?.url === img.url ? 2 : 1,
-                                aspectRatio: "1",
+                                ringColor: "var(--accent)",
+                                aspectRatio: "16/9",
                               }}>
                               {/* eslint-disable-next-line @next/next/no-img-element */}
                               <img src={img.thumb || img.url} alt={img.title || "result"} className="w-full h-full object-cover"
                                 onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
                                 referrerPolicy="no-referrer" />
-                              <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 text-[9px] truncate"
-                                style={{ background: "rgba(0,0,0,0.6)", color: "white" }}>
-                                {img.source}
+                              <div className="absolute bottom-0 left-0 right-0 px-2 py-1"
+                                style={{ background: "rgba(0,0,0,0.7)", color: "white" }}>
+                                <p className="text-[11px] truncate font-medium">{img.title}</p>
+                                <p className="text-[10px] truncate opacity-75">{img.source}</p>
                               </div>
+                              {selectedSearchImage?.url === img.url && (
+                                <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-white text-xs" style={{ background: "var(--accent)" }}>✓</div>
+                              )}
                             </div>
                           ))}
                         </div>
                       </div>
                     ))}
+                    {/* Confirm button for selected image */}
+                    {selectedSearchImage && !downloading && !imagePreview && (
+                      <button onClick={() => confirmSearchImage(selectedSearchImage)}
+                        className="w-full py-2.5 rounded-lg text-sm font-medium text-white transition-colors"
+                        style={{ background: "var(--accent)" }}>
+                        Utiliser cette image →
+                      </button>
+                    )}
                   </div>
                 )}
 
                 {/* Manual search results */}
                 {searchResults.length > 0 && suggestGroups.length === 0 && (
-                  <div className="grid grid-cols-3 gap-2 max-h-72 overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--card-border)" }}>
-                    {searchResults.map((img, i) => (
-                      <div key={i}
-                        onClick={() => !downloading && selectSearchImage(img)}
-                        className="relative rounded-lg overflow-hidden cursor-pointer hover:opacity-80 transition-opacity border"
-                        style={{
-                          borderColor: selectedSearchImage?.url === img.url ? "var(--accent)" : "var(--card-border)",
-                          borderWidth: selectedSearchImage?.url === img.url ? 2 : 1,
-                          aspectRatio: "1",
-                        }}>
+                  <div className="relative">
+                    {/* Hover preview overlay */}
+                    {hoveredImage && (
+                      <div className="sticky top-0 z-20 rounded-lg overflow-hidden border shadow-lg mb-2" style={{ borderColor: "var(--accent)", background: "var(--background)" }}>
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={img.url} alt={img.title || "result"} className="w-full h-full object-cover"
-                          onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
-                          referrerPolicy="no-referrer" />
-                        <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 text-[9px] truncate"
-                          style={{ background: "rgba(0,0,0,0.6)", color: "white" }}>
-                          {img.source}
+                        <img src={hoveredImage.thumb || hoveredImage.url} alt={hoveredImage.title || "preview"} className="w-full object-contain max-h-64" referrerPolicy="no-referrer" />
+                        <div className="px-3 py-2 text-xs" style={{ color: "var(--foreground)" }}>
+                          <p className="font-medium truncate">{hoveredImage.title}</p>
+                          <p style={{ color: "var(--muted)" }}>{hoveredImage.source} — {hoveredImage.width}×{hoveredImage.height}</p>
                         </div>
                       </div>
-                    ))}
+                    )}
+                    <div className="grid grid-cols-2 gap-3 max-h-[500px] overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--card-border)" }}>
+                      {searchResults.map((img, i) => (
+                        <div key={i}
+                          onClick={() => !downloading && previewSearchImage(img)}
+                          onDoubleClick={() => !downloading && confirmSearchImage(img)}
+                          onMouseEnter={() => setHoveredImage(img)}
+                          onMouseLeave={() => setHoveredImage(null)}
+                          className="relative rounded-lg overflow-hidden cursor-pointer hover:ring-2 hover:ring-offset-1 transition-all border"
+                          style={{
+                            borderColor: selectedSearchImage?.url === img.url ? "var(--accent)" : "var(--card-border)",
+                            borderWidth: selectedSearchImage?.url === img.url ? 2 : 1,
+                            ringColor: "var(--accent)",
+                            aspectRatio: "16/9",
+                          }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={img.url} alt={img.title || "result"} className="w-full h-full object-cover"
+                            onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+                            referrerPolicy="no-referrer" />
+                          <div className="absolute bottom-0 left-0 right-0 px-2 py-1"
+                            style={{ background: "rgba(0,0,0,0.7)", color: "white" }}>
+                            <p className="text-[11px] truncate font-medium">{img.title}</p>
+                            <p className="text-[10px] truncate opacity-75">{img.source}</p>
+                          </div>
+                          {selectedSearchImage?.url === img.url && (
+                            <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-white text-xs" style={{ background: "var(--accent)" }}>✓</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {/* Confirm button for selected image */}
+                    {selectedSearchImage && !downloading && !imagePreview && (
+                      <button onClick={() => confirmSearchImage(selectedSearchImage)}
+                        className="w-full mt-2 py-2.5 rounded-lg text-sm font-medium text-white transition-colors"
+                        style={{ background: "var(--accent)" }}>
+                        Utiliser cette image →
+                      </button>
+                    )}
                   </div>
                 )}
 
