@@ -31,13 +31,15 @@ Le passage à FP8 nécessite un "scaling" (mise à l'échelle) pour que les vale
 
 ### Per-tensor scaling : le plus simple
 
-Un seul facteur d'échelle par tenseur entier :
+L'approche la plus directe consiste à utiliser un seul facteur d'échelle pour l'ensemble du tenseur. On divise d'abord chaque valeur par ce facteur avant de la quantifier en FP8 :
 
 $$x_{\text{fp8}} = \text{quantize}\!\left(\frac{x}{\text{scaling\_factor}}\right)$$
 
+Puis, lors de la déquantification, on multiplie par le même facteur pour retrouver l'échelle d'origine :
+
 $$x_{\text{dequant}} = x_{\text{fp8}} \times \text{scaling\_factor}$$
 
-Le facteur est calculé à partir du maximum absolu du tenseur. C'est simple et rapide, mais imprécis si le tenseur contient des outliers (une seule valeur extrême compresse toute la plage utile).
+Le facteur est calculé à partir du maximum absolu du tenseur. Cette méthode est simple et rapide, mais elle devient imprécise si le tenseur contient des outliers, car une seule valeur extrême compresse toute la plage utile des autres valeurs.
 
 ### Delayed scaling : gagner du débit
 
@@ -61,14 +63,14 @@ L'avantage : les outliers d'un bloc n'affectent pas les autres. La précision es
 
 | Opération | Format | Raison |
 |-----------|--------|--------|
-| GEMM forward (poids x activations) | E4M3 | Besoin de précision pour les prédictions |
-| GEMM backward (gradients x activ) | E5M2 | Besoin de plage pour les gradients |
-| Softmax | FP32 | Numériquement très sensible |
-| LayerNorm / RMSNorm | FP32 | Statistiques qui requièrent de la précision |
-| Optimiseur (Adam) | FP32 | Accumulation précise des moments |
-| Poids maître | FP32 | Mises à jour fines des poids |
+| GEMM forward (poids x activations) | E4M3 | Les prédictions exigent de la fidélité, d'où le choix du format le plus précis |
+| GEMM backward (gradients x activ) | E5M2 | Les gradients varient sur des plages très larges, ce qui nécessite davantage de plage dynamique |
+| Softmax | FP32 | Cette opération est numériquement très sensible aux erreurs d'arrondi |
+| LayerNorm / RMSNorm | FP32 | Le calcul des statistiques (moyenne, variance) requiert une précision élevée |
+| Optimiseur (Adam) | FP32 | L'accumulation des moments doit rester précise pour garantir la convergence |
+| Poids maître | FP32 | Les mises à jour incrémentales des poids nécessitent une granularité fine |
 
-Le point crucial : les multiplications de matrices (GEMM) se font en FP8 pour la vitesse, mais les **accumulations se font en FP32**. Les Tensor Cores du H100 supportent nativement cette opération mixte : multiplier en FP8, accumuler en FP32. C'est ce qui rend le tout viable.
+Le point crucial de ce pipeline est que les multiplications de matrices (GEMM) se font en FP8 pour la vitesse, tandis que les **accumulations se font en FP32**. Les Tensor Cores du H100 supportent nativement cette opération mixte : multiplier en FP8, accumuler en FP32. C'est ce qui rend le tout viable.
 
 <Callout type="warning" title={"L'accumulation FP32 est non négociable"}>
 Sans accumulation en FP32, la dégradation est catastrophique. Les erreurs d'arrondi s'accumulent à chaque multiplication et le modèle diverge. Les Tensor Cores du H100 gèrent ça en hardware. Sur des GPU plus anciens qui n'ont pas cette capacité, l'entraînement FP8 est extrêmement difficile.
