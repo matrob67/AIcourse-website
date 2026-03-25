@@ -1,0 +1,166 @@
+---
+title: "Benchmaxxing : quand les benchmarks deviennent le but"
+description: "Le benchmaxxing — optimiser les scores de benchmarks au détriment des capacités réelles. Comment les modèles 'trichent', pourquoi ça pose problème, et comment évaluer correctement un LLM."
+---
+
+
+
+## Qu'est-ce que le benchmaxxing ?
+
+Le terme **benchmaxxing**, popularisé par Sebastian Raschka, désigne l'optimisation obsessionnelle des scores de benchmarks — au point où la performance sur les classements devient **le but en soi**, plutôt qu'un indicateur des capacités réelles du modèle.
+
+Le phénomène est simple à comprendre. Chaque sortie de nouveau modèle s'accompagne de graphiques de benchmarks soigneusement présentés. Ces scores influencent directement les décisions d'investissement, l'adoption par les entreprises et la perception médiatique. Il y a donc un **incentive financier massif** à afficher les meilleurs chiffres possibles — par tous les moyens.
+
+<Callout type="info" title={"La loi de Goodhart"}>
+**"Quand une mesure devient un objectif, elle cesse d'être une bonne mesure."**
+
+C'est exactement ce qui se passe avec les benchmarks LLM. MMLU, HumanEval, GSM8K ont été conçus comme des **proxys** pour mesurer le raisonnement, la compréhension et les capacités de codage. Mais dès qu'ils sont devenus des objectifs d'optimisation, ils ont perdu leur valeur diagnostique. Un score élevé sur MMLU ne garantit plus que le modèle "comprend" quoi que ce soit — il garantit que le modèle est bon sur MMLU.
+</Callout>
+
+Le résultat : une course aux armements où les équipes investissent un effort d'ingénierie considérable pour **faire monter des chiffres** plutôt que pour améliorer les capacités fondamentales de leurs modèles.
+
+## Comment les modèles "trichent" : les techniques de benchmaxxing
+
+### 1. Contamination des benchmarks (data leakage)
+
+La technique la plus directe : les données d'entraînement contiennent, **accidentellement ou délibérément**, les questions des benchmarks. Le modèle ne raisonne alors pas sur les questions — il **récite des réponses mémorisées**.
+
+Avec des corpus d'entraînement qui dépassent les milliers de milliards de tokens, extraits massivement du web, comment vérifier qu'aucune question de MMLU ou de GSM8K ne s'y est glissée ? C'est un problème d'aiguille dans une botte de foin. Les questions de benchmarks populaires circulent sur des forums, des blogs et des sites éducatifs. Elles finissent **inévitablement** dans les données d'entraînement.
+
+Et la frontière entre contamination "accidentelle" et "délibérée" est commodément floue. Aucune équipe ne va publiquement admettre qu'elle a ciblé des données de benchmark. Mais la tentation est réelle quand votre prochaine levée de fonds dépend d'un classement.
+
+### 2. Fine-tuning ciblé
+
+Plutôt que de contaminer directement avec les questions exactes, une approche plus subtile consiste à fine-tuner le modèle sur des données **proches du format et des sujets des benchmarks**.
+
+Concrètement, cela implique de :
+- Créer des données synthétiques qui imitent le format QCM de MMLU
+- Entraîner massivement sur des problèmes mathématiques similaires à ceux de GSM8K
+- Surreprésenter les domaines couverts par les benchmarks dans le mix de fine-tuning
+
+Le modèle spike sur les benchmarks ciblés mais reste **médiocre sur tout le reste**. C'est l'équivalent d'un étudiant qui bachotait les annales sans comprendre le cours — il peut obtenir une bonne note à l'examen tout en étant incapable d'appliquer les concepts dans un contexte légèrement différent.
+
+### 3. RLVR sur des tâches adjacentes aux benchmarks
+
+Comme le souligne Andrej Karpathy : les benchmarks sont par nature des **environnements vérifiables** — on peut automatiquement déterminer si la réponse est correcte ou non. Et les environnements vérifiables sont exactement ceux qui sont **immédiatement susceptibles au RLVR** (Reinforcement Learning with Verifiable Rewards).
+
+Les équipes construisent des environnements d'entraînement adjacents aux "poches de l'espace d'embedding" occupées par les benchmarks. Autrement dit, elles n'entraînent pas directement sur les questions du benchmark, mais sur des distributions de problèmes suffisamment proches pour que les améliorations se transfèrent mécaniquement aux scores de benchmark — sans pour autant améliorer les capacités générales du modèle.
+
+<Callout type="warning" title={"Pourquoi le RLVR rend le benchmaxxing si facile"}>
+Le RLVR fonctionne en récompensant les réponses correctes et en pénalisant les incorrectes, sans intervention humaine. Si vous définissez vos récompenses autour de tâches similaires aux benchmarks, le modèle va **automatiquement optimiser** pour ce type de problèmes. C'est du benchmaxxing par construction — et c'est beaucoup plus difficile à détecter qu'une simple contamination de données.
+</Callout>
+
+### 4. Ingénierie du prompt d'évaluation
+
+Un même modèle peut afficher des scores radicalement différents selon la manière dont on le prompt pendant l'évaluation. Les variations incluent :
+
+- **Le template de prompt** : certains formats (avec ou sans instructions système, avec des exemples few-shot soigneusement choisis) peuvent faire varier le score de **5 à 10%** sur le même benchmark
+- **La température** : une température de 0 (déterministe) vs 0.7 (créatif) change les résultats
+- **Le nombre d'exemples few-shot** : 0-shot, 5-shot, 8-shot — chacun donne un score différent
+- **Le format de réponse attendu** : forcer un format spécifique peut avantager un modèle entraîné sur ce format
+
+Résultat : quand un laboratoire publie "notre modèle obtient 87% sur MMLU", il a probablement testé des dizaines de configurations et **choisi la meilleure**.
+
+### 5. Publication sélective
+
+La technique la plus simple et la plus courante :
+
+- Ne montrer que les benchmarks où le modèle excelle, en omettant silencieusement ceux où il est médiocre
+- Comparer avec des **versions obsolètes** des modèles concurrents plutôt qu'avec les dernières versions
+- Utiliser des protocoles d'évaluation différents de ceux utilisés par les concurrents, rendant toute comparaison directe impossible
+- Présenter des résultats sur des sous-ensembles du benchmark plutôt que sur l'ensemble complet
+
+C'est du **cherry-picking scientifique**, et c'est devenu la norme dans les communiqués de presse de l'industrie IA.
+
+## Les conséquences concrètes
+
+### Des performances "en dents de scie"
+
+Karpathy décrit parfaitement le symptôme : les modèles benchmaxxés présentent des **profils de performance amusamment irréguliers** — simultanément un génie polymathe et un élève de primaire confus. Un modèle peut résoudre des intégrales complexes (parce que c'est dans les benchmarks) tout en échouant à suivre une instruction simple en trois étapes (parce que ça ne l'est pas).
+
+### La perte de confiance
+
+Quand les utilisateurs réalisent que le modèle classé n°1 sur les leaderboards ne tient pas ses promesses en pratique, la confiance dans **tout le système d'évaluation** s'effondre. Comment choisir un modèle pour son cas d'usage si les scores publics ne reflètent pas la réalité ?
+
+### L'illusion de progrès
+
+Le benchmaxxing crée un **théâtre de progrès**. Les scores montent de quelques points à chaque release, les graphiques sont impressionnants, les communiqués de presse triomphants — mais les capacités réelles progressent beaucoup moins vite que les chiffres ne le suggèrent. L'effort d'ingénierie investi dans le gaming des benchmarks est un effort qui n'est **pas** investi dans l'amélioration des capacités fondamentales.
+
+<Callout type="warning" title={"Le benchmark theater"}>
+Des équipes entières passent des semaines à optimiser les scores de benchmarks plutôt qu'à résoudre les vrais problèmes de leurs modèles. C'est un gaspillage de talent et de compute à l'échelle de l'industrie — et les utilisateurs finaux en paient le prix.
+</Callout>
+
+## Chameleon Benchmark Overfit Detector (C-BOD)
+
+Comment détecter le benchmaxxing de manière objective ? C'est la question à laquelle tente de répondre **C-BOD** (Chameleon Benchmark Overfit Detector), un outil de recherche conçu pour mesurer le degré de sur-apprentissage (overfitting) des LLM sur les benchmarks.
+
+### Le principe
+
+L'idée est élégante : **reformuler les questions du benchmark** en préservant leur sens, puis vérifier si la performance du modèle chute. Si un modèle a véritablement compris les concepts, une reformulation ne devrait pas le perturber. S'il a simplement mémorisé les questions et leurs réponses, un changement de formulation le déstabilise.
+
+### Les résultats
+
+L'étude, menée sur **26 LLM** évalués sur MMLU, révèle que :
+
+- Même des perturbations modestes des questions provoquent une **dégradation moyenne de ~2.15%** de la performance
+- Les modèles avec les **scores de base les plus élevés** montrent les **chutes les plus importantes** — ils dépendaient davantage de patterns mémorisés
+- Certains modèles perdent jusqu'à 5-8% de performance sur des reformulations qui ne changent absolument rien au contenu sémantique de la question
+
+<Callout type="info" title={"Ce que C-BOD révèle"}>
+Le fait que les modèles les plus performants soient aussi les plus sensibles aux reformulations est un signal fort : leur performance élevée repose en partie sur la **mémorisation de la distribution spécifique** des questions du benchmark, pas uniquement sur une compréhension profonde des sujets.
+</Callout>
+
+## Comment évaluer les modèles correctement ?
+
+Si les benchmarks classiques sont compromis, comment faire ? Plusieurs approches complémentaires émergent.
+
+### Benchmarks privés et dynamiques
+
+**Chatbot Arena (LMSYS)** est devenu la référence de facto. Le principe : des utilisateurs humains interagissent avec deux modèles anonymes en parallèle et votent pour celui qu'ils préfèrent. Les modèles ne peuvent pas se préparer à un test qu'ils ne connaissent pas à l'avance, et les préférences humaines captent des dimensions de qualité (naturel, utilité, nuance) que les benchmarks automatiques ignorent.
+
+**LiveBench** adopte une autre stratégie : le benchmark **change régulièrement**, avec de nouvelles questions générées à partir de données récentes. Un modèle qui a mémorisé l'ancienne version se retrouve face à de nouvelles questions, rendant la contamination inutile.
+
+### Évaluation spécifique à votre cas d'usage
+
+Le conseil le plus pratique : **testez le modèle sur vos propres tâches**. Un modèle classé 5e sur MMLU peut être le meilleur pour votre application spécifique de résumé de documents juridiques, et inversement. Les benchmarks génériques ne capturent pas la diversité des cas d'usage réels.
+
+Construisez votre propre ensemble d'évaluation :
+- Collectez des exemples représentatifs de vos tâches réelles
+- Définissez des critères de qualité pertinents pour votre contexte
+- Comparez les modèles sur **vos** métriques, pas sur celles de l'industrie
+
+### Red-teaming et évaluation adversariale
+
+Plutôt que de vérifier ce que le modèle sait faire, vérifiez ce qu'il ne sait **pas** faire. Le red-teaming consiste à soumettre le modèle à des cas limites, des questions piégeuses et des situations ambiguës pour exposer ses faiblesses réelles. Un modèle benchmaxxé excelle sur les questions standards mais s'effondre face à des reformulations ou des variations inattendues.
+
+### L'évaluation par l'usage (vibes-based evaluation)
+
+Karpathy défend une approche que la communauté appelle la **vibes-based evaluation** : utilisez simplement le modèle pendant quelques heures sur vos tâches réelles et formez-vous un jugement. C'est subjectif, non reproductible, et pourtant remarquablement informatif. Un praticien expérimenté qui interagit avec un modèle pendant une journée développe une intuition plus fiable que n'importe quel score de benchmark.
+
+### La règle d'or : ne jamais faire confiance à un score unique
+
+Aucun benchmark individuel ne capture la qualité d'un modèle. La bonne pratique est de croiser :
+- Plusieurs benchmarks automatiques (pour la couverture)
+- Des évaluations humaines (pour la qualité perçue)
+- Des tests sur votre cas d'usage (pour la pertinence)
+- Du red-teaming (pour la robustesse)
+
+Un modèle qui excelle sur **tous** ces axes est probablement bon. Un modèle qui excelle sur un seul benchmark est probablement benchmaxxé.
+
+## La tendance
+
+### La perte de confiance
+
+Karpathy observe en 2025 une **apathie croissante et une perte de confiance envers les benchmarks** au sein de la communauté. Les praticiens expérimentés ne regardent plus les scores MMLU ou HumanEval pour choisir un modèle. Ils testent eux-mêmes, ils regardent les retours des utilisateurs, ils consultent Chatbot Arena.
+
+### Le conflit d'intérêts structurel
+
+La communauté évolue vers des méthodes d'évaluation plus robustes, mais la **structure d'incentives** de l'industrie continue de récompenser le benchmaxxing. Les investisseurs veulent des chiffres. Les communiqués de presse ont besoin de graphiques. Les classements génèrent du buzz médiatique. Tant que les benchmarks influenceront les levées de fonds et les décisions d'achat, la tentation de les gamer restera.
+
+### Vers l'évaluation en temps réel
+
+La vraie solution se dessine peut-être dans l'**evaluation-as-inference** : tester les modèles en temps réel, sur des tâches réelles, avec des données fraîches. Plutôt qu'un examen standardisé qu'on peut bachoter, c'est une évaluation continue et imprévisible — l'équivalent d'observer un employé au travail plutôt que de lui faire passer un QCM.
+
+<Callout type="info" title={"En résumé"}>
+Le benchmaxxing est un symptôme d'un problème plus profond : l'industrie IA n'a pas encore trouvé de méthode fiable et résistante au gaming pour évaluer les LLM. Les benchmarks actuels sont nécessaires mais insuffisants. La solution passe par une **diversification des approches** — benchmarks dynamiques, évaluation humaine, tests spécifiques au cas d'usage et une bonne dose de scepticisme face aux chiffres trop beaux pour être vrais.
+</Callout>
