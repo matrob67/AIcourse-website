@@ -7,8 +7,6 @@ description: "De GPT-1 à GPT-4 : comment prédire le prochain mot devient la cl
 
 Un **modèle de langue auto-régressif** (comme GPT) fait une chose très simple: regarde tous les tokens précédents, et prédit le prochain.
 
-
-
 > **Donnée** : "Le chat noir"
 >
 > **Prédire** : ?
@@ -24,6 +22,13 @@ $$
 Chaque prédiction conditionne la suivante. C'est **auto-régressif**: la phrase se génère elle-même.
 
 ### Comment ça s'implémente: le masque causal
+
+<ImageWithSource
+  src="/images/admin/img-1774401023623.png"
+  alt="Matrice de masque causal pour l'attention"
+  caption="Cette matrice illustre le principe du masque causal dans les mécanismes d'attention. Chaque token ne peut accéder qu'à lui-même et aux tokens précédents, garantissant que l'information ne circule que dans une seule direction temporelle."
+  size="small"
+/>
 
 Dans l'attention Transformer, tu pourrais théoriquement regarder **tous les tokens** (passé et futur). GPT dit non. Il utilise un **masque causal**: chaque token regarde **à gauche uniquement**.
 
@@ -105,8 +110,6 @@ GPT-2 a ouvert un débat qui reste entier : faut-il toujours publier les modèle
 
 GPT-3 fait quelque chose qui semble impossible: apprendre de **quelques exemples directement dans le prompt**, sans réentraînement.
 
-
-
 > **Prompt few-shot** :
 >
 > Sentiment: "J'adore!" → Positif
@@ -162,13 +165,13 @@ Entre 2018 et 2024, trois architectures compétaient:
 
 Décoder-only a dominé. Pourquoi?
 
-### Raison 1: simplicité = scalabilité
+### Raison 1 : la simplicité permet de scaler
 
-Décoder-only = une pile unique de couches, un flux de tokens avant → après. Pas de module d'encodage séparé, pas de cross-attention (attention entre encoder et décoder). Pur, simple.
+Un décoder-only, c'est une pile unique de couches Transformer — un flux de tokens qui entre d'un côté et sort de l'autre. Pas de module d'encodage séparé, pas de cross-attention entre un encodeur et un décodeur. Une seule architecture, un seul chemin.
 
-Encoder-décoder = deux modules + cross-attention. Plus complexe à optimiser. Quand tu scales à 175B de paramètres, la simplicité compte.
+Un encoder-décoder comme T5, c'est deux modules distincts reliés par de la cross-attention. Plus de composants signifie plus de complexité à optimiser, plus de mémoire, plus de points de friction quand on veut distribuer sur des centaines de GPU. Quand tu scales à 175 milliards de paramètres, chaque simplification compte.
 
-OpenAI, Anthropic, Meta: tous choisissent décoder-only pour leurs gros modèles.
+C'est pour ça qu'OpenAI, Anthropic et Meta ont tous choisi le décoder-only pour leurs plus gros modèles.
 
 ### Raison 2: flexibilité extrême
 
@@ -185,32 +188,39 @@ Un décoder peut faire **n'importe quoi**:
 
 Encoder-décoder brille en traduction/résumé (tâches structurées). Mais décoder-only gère **tout uniformément**: chaque tâche = "générer du texte conditionné par un prompt".
 
-### Raison 3: in-context learning
+### Raison 3 : l'in-context learning change la donne
 
-Décoder-only + prompt = apprentissage sans réentraînement. Encoder-décoder? Doit fine-tuner. GPT est adaptable au runtime (live), T5 moins.
+Avec un décoder-only, tu peux adapter le modèle à une nouvelle tâche **juste en changeant le prompt** — sans toucher aux poids, sans réentraîner quoi que ce soit. Tu mets quelques exemples dans le prompt, et le modèle comprend ce qu'on attend de lui. C'est l'in-context learning (détaillé dans la section dédiée).
 
-<Callout type="tip" title="Paradigmes complémentaires, pas antagonistes">
-Encoder-only reste imbattable pour: classification haute-latence-tolérance, recherche sémantique (rapide, peu cher). Encoder-décoder: traduction/résumé.spécialisé. Décoder-only: flexibilité universelle. Trois outils, trois usages.
+Un encoder-décoder comme T5 n'a pas cette souplesse : pour une nouvelle tâche, il faut généralement le fine-tuner sur un dataset spécifique. Ça prend du temps, des données étiquetées, et du calcul. GPT, lui, s'adapte en temps réel — il suffit de reformuler le prompt.
+
+C'est cette capacité qui a fait de GPT un outil universel : un seul modèle qui fait de la traduction, du code, du résumé, de la classification, du dialogue... juste en changeant les instructions qu'on lui donne.
+
+<Callout type="tip" title={"Paradigmes complémentaires, pas antagonistes"}>
+Chaque architecture garde ses forces. L'encoder-only (BERT) reste imbattable pour la recherche sémantique et la classification — rapide, peu cher, et très performant quand la latence compte. L'encoder-décoder (T5, BART) excelle sur les tâches structurées comme la traduction et le résumé spécialisé. Le décoder-only (GPT) offre une flexibilité universelle — un seul modèle pour tout. Trois outils, trois usages.
 </Callout>
 
-## L'évolution: de GPT-3 à maintenant
+## L'évolution : de GPT-3 à maintenant
 
-**GPT-3** (2020): "Wow, les LLM sont puissants"
-**InstructGPT/GPT-3.5** (2022): RLHF (reinforcement learning from human feedback) = suivre les instructions naturelles, pas juste prédire
-**ChatGPT** (nov. 2022): GPT-3.5 conversationnel. Le moment où l'IA devient culturelle (1 million d'utilisateurs en une semaine)
-**GPT-4** (mars 2023): multimodal (texte + images), raisonnement complexe
-**GPT-4V**: images en entrée
-**GPT-4 Turbo**: fenêtre 128k tokens (vs 4k avant)
+Après GPT-3, l'évolution se fait moins sur l'architecture (qui reste un décoder-only Transformer) et plus sur l'alignement et les capacités.
 
-Le pattern : **scaling + alignment (RLHF)** = capacités émergentes.
+**InstructGPT / GPT-3.5** (2022) marque un tournant majeur : OpenAI applique le RLHF (section 52) pour apprendre au modèle à **suivre des instructions** plutôt qu'à simplement prédire le mot suivant. Le modèle passe de "je complète ton texte" à "je réponds à ta question".
+
+**ChatGPT** (novembre 2022) est GPT-3.5 emballé dans une interface conversationnelle. Techniquement, c'est le même modèle. Mais l'impact est culturel : un million d'utilisateurs en une semaine, le grand public découvre l'IA générative, et tout le monde veut son chatbot.
+
+**GPT-4** (mars 2023) ajoute deux choses fondamentales : le **multimodal** (le modèle accepte des images en entrée, pas seulement du texte) et un bond en **raisonnement complexe** — maths, code, logique juridique. GPT-4 passe le barreau américain dans le top 10%.
+
+**GPT-4 Turbo** étend la fenêtre de contexte de 8K à 128K tokens — le modèle peut maintenant "lire" un livre entier en une seule requête.
+
+Le fil rouge de toute cette évolution : **scaling + alignement (RLHF) = capacités émergentes**. L'architecture n'a quasiment pas changé depuis GPT-1 — c'est la taille, les données, et la méthode d'alignement qui font la différence.
 
 ## Pourquoi c'est important
 
-GPT illustre une vérité profonde: à échelle suffisante, **une tâche simple (prédire le prochain mot) devient un outil universel**.
+GPT illustre une vérité profonde : à échelle suffisante, **une tâche simple — prédire le prochain mot — devient un outil universel**. Personne ne l'avait prévu. Le modèle n'a jamais été explicitement entraîné à traduire, résumer, ou coder. Il a juste appris à prédire le token suivant sur suffisamment de texte, et ces capacités ont émergé.
 
-La famille GPT montre aussi que la question n'est pas "architecture ou idée nouvelle?" mais "scaling + entraînement et alignement". Pas de breakthrough architecturale depuis GPT-1 (toujours le même Transformer). Juste: plus gros, meilleure recette, RLHF pour l'alignement.
+La famille GPT montre aussi que la question dominante en IA n'est plus "quelle nouvelle architecture inventer ?" mais "comment scaler et aligner ce qu'on a déjà ?". Il n'y a pas eu de révolution architecturale depuis GPT-1 — c'est toujours le même Transformer décoder-only. Ce qui a changé, c'est la taille (×1500 entre GPT-1 et GPT-4), la qualité des données, et l'ajout du RLHF pour l'alignement.
 
-Ça a déséquilibré le domaine: code + GPU > papier élégant. Et décentralisé la recherche: OpenAI entraîne à perte, les autres construisent dessus.
+Cette réalité a redistribué les cartes dans le domaine : l'accès au calcul (GPU) et aux données massives pèse désormais plus qu'un papier théorique élégant. OpenAI entraîne les modèles de base, et tout un écosystème construit par-dessus.
 
-GPT n'est pas "gagné pour toujours" (encoder-only a ses cas), mais décoder-only gouverne l'IA générative aujourd'hui.
+Le décoder-only n'est pas "gagné pour toujours" — l'encoder-only garde ses niches, et de nouvelles architectures (SSM, hybrides) émergent. Mais en 2025, le décoder-only reste l'architecture dominante de l'IA générative.
 
