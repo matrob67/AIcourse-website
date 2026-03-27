@@ -110,6 +110,26 @@ Diviser le cache par deux = doubler le batch size = doubler le throughput = **di
 Quantification du cache, GQA, MLA, éviction, PagedAttention : ce ne sont pas des optimisations marginales pour grappiller quelques pourcents de performance. Ce sont des éléments fondamentaux de viabilité économique. Sans eux, servir des LLM à grande échelle serait financièrement impossible.
 </Callout>
 
+## TurboQuant : quantifier le KV cache à 3 bits sans perte (Google, ICLR 2026)
+
+TurboQuant est un algorithme de compression **sans entraînement** développé par Google qui quantifie le KV cache à seulement 3 bits par coordonnée, sans dégradation de précision. Le processus repose sur deux étapes complémentaires :
+
+1. **PolarQuant** : convertit chaque vecteur K/V en coordonnées polaires (rayon = magnitude, angles = direction). Après une rotation orthogonale aléatoire, la distribution de chaque coordonnée devient une distribution Beta connue analytiquement. On peut donc précalculer le quantizer optimal (Lloyd-Max) une seule fois et le réutiliser pour tous les vecteurs, ce qui élimine la normalisation par bloc coûteuse des quantizers classiques.
+
+2. **QJL (Quantized Johnson-Lindenstrauss)** : utilise 1 bit supplémentaire par dimension pour compenser l'erreur résiduelle de PolarQuant. Le résidu est projeté via une matrice gaussienne aléatoire, et seul le signe (+1 ou -1) est stocké. Cette unique bit suffit à rendre l'estimation du produit scalaire **mathématiquement non biaisée**, éliminant l'erreur systématique.
+
+Au total, 2 bits (PolarQuant) + 1 bit (QJL) = **3 bits par coordonnée**, soit une réduction mémoire de 5 à 6x par rapport au FP16. Sur GPU H100, TurboQuant atteint jusqu'à **8x d'accélération** pour le calcul des logits d'attention.
+
+Les résultats sont validés sur **Llama-3.1-8B** et **Mistral-7B** avec les benchmarks LongBench, Needle in a Haystack, ZeroSCROLLS et RULER. Le cache compressé maintient une fidélité quasi parfaite, y compris sur les tâches de récupération en contexte long.
+
+Aucun entraînement ni fine-tuning n'est nécessaire : TurboQuant s'applique directement à n'importe quel modèle existant en une seule passe.
+
+<ArxivLink id="2504.19874" title="TurboQuant: Online Vector Quantization for Quantized KV Cache in Large Language Models" />
+
+<Callout type="info" title={"Implications pour le serving en contexte long"}>
+Avec des fenêtres de contexte qui dépassent désormais le million de tokens (Gemini 1.5, Claude), le KV cache devient le facteur limitant principal. Un cache 6x plus petit signifie pouvoir servir des contextes 6x plus longs sur le même matériel, ou 6x plus de requêtes en parallèle. TurboQuant rend le serving de contextes très longs économiquement viable sans compromis sur la qualité.
+</Callout>
+
 ## En résumé
 
 Le KV Cache est ce qui rend l'inférence autoregressive praticable, mais il devient rapidement un goulot d'étranglement en mémoire et en bande passante. Les techniques de compression (quantification, éviction, MLA) et d'optimisation (PagedAttention, prefix caching) sont des piliers de l'infrastructure LLM moderne. C'est un domaine de recherche très actif, directement lié aux profits et à la viabilité des services LLM.

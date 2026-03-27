@@ -1,0 +1,120 @@
+---
+title: "LeWorldModel : JEPA stable depuis les pixels"
+description: "LeWM est le premier world model JEPA qui s'entraîne de bout en bout depuis les pixels sans effondrement des représentations — 15M de paramètres, un seul GPU, 48× plus rapide que DINO-WM."
+---
+
+<ArxivLink id="2603.19312" title="LeWorldModel (Maes, LeCun et al., 2026)" />
+
+## LeWorldModel (LeWM) : le premier JEPA stable depuis les pixels
+
+Depuis des années, Yann LeCun défend une vision claire : les LLM ne suffisent pas pour atteindre l'intelligence artificielle générale. Il faut des **world models** -- des modèles qui apprennent une représentation interne du monde physique et qui peuvent **planifier** dans cet espace de représentation. L'architecture qu'il propose pour ça s'appelle **JEPA** (Joint Embedding Predictive Architecture).
+
+Le problème ? Jusqu'ici, personne n'arrivait à faire marcher JEPA de bout en bout depuis les pixels sans recourir à des hacks techniques lourds. LeWorldModel, publié en mars 2026 par Lucas Maes, Yann LeCun et al., change la donne.
+
+## Le problème : l'effondrement des représentations
+
+Quand on entraîne un world model directement depuis les pixels, on se heurte à un phénomène dévastateur : le **representation collapse**.
+
+Le modèle doit apprendre à encoder des images en vecteurs de représentation, puis prédire la représentation de l'image suivante. Mais rien ne l'empêche de trouver un raccourci trivial : encoder **toutes les images** vers le même vecteur (ou un sous-espace très réduit). La perte de prédiction tombe alors à zéro, mais les représentations sont inutilisables -- elles ne capturent aucune information sur le monde.
+
+<Callout type="info" title={"L'analogie du collapse"}>
+Imaginez un traducteur qui traduit tous les livres en un seul mot : "ok". Techniquement, il peut prédire parfaitement la traduction de n'importe quel livre (c'est toujours "ok"). Mais la traduction ne contient aucune information utile. C'est exactement ce qui se passe avec le representation collapse.
+</Callout>
+
+Les solutions existantes reposent sur des **heuristiques complexes** :
+- **Stop-gradient** : on empêche le gradient de rétropropager à travers une partie du réseau, ce qui brise la symétrie mais de manière ad hoc
+- **EMA (Exponential Moving Average)** : on maintient une copie lente de l'encodeur comme cible, ajoutant un mécanisme supplémentaire à calibrer
+- **Encodeurs pré-entraînés gelés** : on utilise un réseau comme DINO déjà entraîné et on ne touche plus à ses poids, ce qui empêche l'apprentissage de bout en bout
+
+Ces approches fonctionnent, mais elles introduisent de **nombreux hyperparamètres** (typiquement 6 ou plus) et empêchent le système d'apprendre ses propres représentations optimales. DINO-WM, par exemple, utilise un encodeur DINO gelé qui n'a jamais vu les données de la tâche cible.
+
+## L'architecture LeWM
+
+LeWM est d'une simplicité remarquable. Le système se compose de deux réseaux seulement :
+
+### L'encodeur
+
+Un réseau qui prend une frame en entrée (une image) et produit un **token latent de dimension 192**. C'est la représentation compacte de l'état du monde à cet instant. Pas de backbone pré-entraîné, pas de features gelées : l'encodeur apprend **de zéro**, directement depuis les pixels.
+
+### Le prédicteur
+
+Un réseau qui reçoit l'embedding de la frame courante **et l'action effectuée**, et prédit l'embedding de la frame suivante. C'est le "modèle du monde" proprement dit : il encode la dynamique de l'environnement dans l'espace latent.
+
+### Seulement deux termes de perte
+
+L'entraînement repose sur exactement **deux termes de loss** :
+
+1. **La perte de prédiction** : l'erreur entre l'embedding prédit par le prédicteur et l'embedding réellement produit par l'encodeur pour la frame suivante. C'est l'objectif principal.
+
+2. **Le régulariseur SIGReg** : un terme qui empêche le collapse des représentations (détaillé ci-dessous).
+
+C'est tout. Pas de stop-gradient, pas d'EMA, pas d'encodeur gelé. Le nombre d'hyperparamètres passe de **6 (pour PLDM, une alternative) à 1 seul** : le coefficient $\lambda$ du régulariseur.
+
+## SIGReg : la clé de la stabilité
+
+SIGReg est le composant qui rend tout le système possible. C'est un régulariseur statistique élégant fondé sur un résultat mathématique profond.
+
+### Le théorème de Cramér-Wold
+
+Le principe repose sur le **théorème de Cramér-Wold** : une distribution multivariée est entièrement caractérisée par l'ensemble de ses projections unidimensionnelles. Autrement dit, si toutes les projections 1D d'une distribution correspondent à celles d'une gaussienne standard, alors la distribution est elle-même une gaussienne standard.
+
+<Callout type="info" title={"L'intuition derrière Cramér-Wold"}>
+Au lieu de vérifier directement qu'un nuage de points en 192 dimensions est bien distribué (ce qui est extrêmement difficile), on projette le nuage sur des **droites aléatoires** et on vérifie que chaque projection 1D ressemble à une gaussienne. Si toutes les projections sont bonnes, la distribution complète est bonne. C'est beaucoup plus simple et numériquement stable.
+</Callout>
+
+### Le mécanisme en pratique
+
+1. On projette les embeddings du batch sur $M$ **directions aléatoires** dans l'espace de représentation
+2. Pour chaque projection 1D, on calcule la **statistique de test d'Epps-Pulley**, qui mesure à quel point la distribution projetée s'écarte d'une gaussienne standard
+3. On moyenne ces statistiques pour obtenir le terme de régularisation SIGReg
+
+Le résultat : les embeddings sont poussés vers une distribution isotrope (bien répartie dans toutes les directions), ce qui rend le collapse **mathématiquement impossible**. Si les embeddings deviennent redondants ou s'effondrent vers un sous-espace, les projections 1D s'écarteront fortement d'une gaussienne, et la pénalité augmentera.
+
+### Un seul hyperparamètre
+
+L'avantage pratique est immense. Le seul hyperparamètre à régler est $\lambda$, le poids du régulariseur par rapport à la perte de prédiction. Et sa valeur optimale se trouve par **recherche par bisection** en $O(\log n)$, contre $O(n^6)$ pour la recherche sur grille des 6 hyperparamètres de PLDM.
+
+## Résultats
+
+LeWM est non seulement plus simple, mais aussi plus performant et plus efficace que les approches existantes.
+
+### Compacité et efficacité
+
+- **~15M de paramètres** seulement (contre des centaines de millions pour les approches basées sur DINO)
+- Entraînable sur **un seul GPU** en quelques heures
+- Pas besoin de features pré-entraînées : tout s'apprend de bout en bout
+
+### Vitesse de planification
+
+C'est ici que la différence est la plus spectaculaire. Le world model est utilisé pour **planifier** : à chaque instant, le robot simule des séquences d'actions possibles dans l'espace latent et choisit la meilleure.
+
+| Modèle | Temps par cycle de planification |
+|---|---|
+| DINO-WM | 47 s |
+| LeWM | **0.98 s** |
+
+LeWM planifie **48 fois plus vite** que DINO-WM. La raison principale : l'espace latent est compact (192 dimensions) et appris spécifiquement pour la tâche, au lieu de reposer sur un encodeur DINO généraliste non optimisé pour la planification.
+
+### Benchmark Push-T
+
+Sur le benchmark robotique **Push-T** (une tâche où un robot doit pousser un objet en forme de T vers une position cible), LeWM atteint un **taux de réussite de 96%**, démontrant que les représentations apprises sont non seulement stables mais aussi fonctionnellement excellentes pour le contrôle.
+
+## Pourquoi c'est important
+
+### Le timing est frappant
+
+LeWM a été publié **quelques jours seulement** après la levée de fonds record d'AMI Labs, la startup fondée par Yann LeCun après son départ de Meta. AMI Labs a levé **1.03 milliard de dollars** en seed round, pour une valorisation de 3.5 milliards, avec la mission explicite de construire des world models.
+
+LeWM n'est pas un produit d'AMI Labs (c'est un papier académique), mais il valide expérimentalement la thèse fondamentale qui justifie cette levée : **JEPA peut fonctionner depuis les pixels, sans heuristiques lourdes**.
+
+### "Structure is all you need"
+
+<Callout type="paper" title={"Un contre-pied au paradigme dominant"}>
+Là où l'industrie des LLM pousse vers toujours plus de paramètres et de données ("scale is all you need"), LeWM démontre le contraire : avec la **bonne structure** (JEPA + SIGReg), 15 millions de paramètres et un seul GPU suffisent pour surpasser des systèmes beaucoup plus lourds. La structure mathématique remplace la force brute.
+</Callout>
+
+### La vision de LeCun
+
+LeWM s'inscrit dans une vision plus large défendue par Yann LeCun depuis des années : les LLM, aussi impressionnants soient-ils, ne sont pas le chemin vers l'intelligence réelle. Un système véritablement intelligent doit avoir un **modèle interne du monde** -- une capacité à simuler les conséquences de ses actions avant de les exécuter, comme le fait un être humain quand il planifie un mouvement.
+
+Les LLM manipulent des symboles. Les world models comprennent la **physique**. LeWM montre que cette deuxième voie est non seulement viable, mais qu'elle peut être simple, efficace et accessible -- un seul GPU, quelques heures, 15 millions de paramètres.

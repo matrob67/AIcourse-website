@@ -40,7 +40,15 @@ En clair, chaque matrice à un rôle précis :
 
 ## De continu à discret : traiter du texte
 
-Le texte est une séquence discrète — un token après l'autre — pas un signal continu comme un son. On doit donc **discrétiser** le SSM avec un pas de temps delta, en utilisant la méthode bilinéaire (Tustin) :
+Les équations ci-dessus décrivent un système **continu** — le temps s'écoule de manière fluide, comme un signal audio. Mais le texte, c'est une séquence **discrète** : un token après l'autre, pas un flux continu. On doit donc convertir le système continu en un système discret qui avance par pas.
+
+### Pourquoi discrétiser ?
+
+Imaginez un thermomètre qui mesure la température en continu. Si vous ne relevez la valeur que toutes les 5 minutes, vous avez **discrétisé** le signal. Le pas de temps $\Delta$ (delta) contrôle la finesse de cette conversion : un petit $\Delta$ capture les variations rapides, un grand $\Delta$ ne voit que les tendances lentes.
+
+### La méthode bilinéaire (Tustin)
+
+Pour convertir les matrices continues $A$ et $B$ en leurs versions discrètes $\bar{A}$ et $\bar{B}$, S4 utilise la **méthode bilinéaire** — une technique classique en traitement du signal qui préserve bien la stabilité du système :
 
 $$
 \begin{aligned}
@@ -49,7 +57,18 @@ $$
 \end{aligned}
 $$
 
-Le système discret résultant fonctionne comme un RNN classique :
+Décodons $\bar{A}$ terme par terme :
+- $I$ est la **matrice identité** — le point de départ neutre (ne rien changer)
+- $\frac{\Delta}{2} A$ est la matrice $A$ (évolution de l'état) mise à l'échelle du demi-pas de temps
+- $(I + \frac{\Delta}{2} A)$ dit "prends l'état actuel et fais-le avancer d'un demi-pas"
+- $(I - \frac{\Delta}{2} A)^{-1}$ compense en "remontant" d'un demi-pas — c'est cette combinaison avancer/reculer qui rend la méthode bilinéaire précise et stable
+- Le résultat $\bar{A}$ est la version discrète de $A$ : elle dit exactement comment l'état se transforme d'un token au suivant
+
+Pour $\bar{B}$, c'est plus simple : on prend $B$ (comment l'entrée influence l'état), on le multiplie par $\Delta$ (pour tenir compte du pas de temps), et on applique la même correction de stabilité.
+
+### Le système discret : un RNN
+
+Une fois discrétisé, le SSM fonctionne exactement comme un **RNN classique** — à chaque token $k$, on met à jour l'état :
 
 $$
 \begin{aligned}
@@ -58,7 +77,11 @@ y_k &= C \cdot h_k + D \cdot x_k
 \end{aligned}
 $$
 
-À chaque pas `k`, l'état caché `h_k` est mis à jour à partir de l'état précédent (pondéré par `A_barre`) et de l'entrée courante (modulée par `B_barre`). C'est une récurrence simple — mais ce qui rend S4 spécial, c'est qu'il peut aussi être calculé autrement.
+Première ligne : le nouvel état $h_k$ est un mélange de **ce qu'on retenait déjà** ($\bar{A} \cdot h_{k-1}$, l'état précédent transformé par $\bar{A}$) et de **ce qui arrive maintenant** ($\bar{B} \cdot x_k$, le token courant filtré par $\bar{B}$).
+
+Seconde ligne : la sortie $y_k$ est lue depuis l'état ($C \cdot h_k$) avec éventuellement un raccourci direct depuis l'entrée ($D \cdot x_k$).
+
+C'est une récurrence simple — mais ce qui rend S4 spécial, c'est qu'il peut aussi être calculé **d'une autre manière complètement différente** : comme une convolution.
 
 <Callout type="info" title="La dualité magique : récurrence et convolution">
 Les SSM ont une propriété fascinante et fondamentale : ils peuvent être calculés de **deux manières mathématiquement équivalentes**. En mode récurrence (un token à la fois), ils sont parfaits pour l'inférence — O(1) par token, état fixe. En mode convolution (toute la séquence d'un coup via FFT), ils sont parfaits pour l'entraînement parallèle — O(L log L) pour toute la séquence. Cette dualité est le superpower des SSM : ils prennent le meilleur des RNN (inférence efficace) et des Transformers (entraînement parallèle) sans les défauts de chacun.
