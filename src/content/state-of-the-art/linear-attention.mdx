@@ -82,7 +82,13 @@ $$
 \end{aligned}
 $$
 
-Le gate contrôle combien d'information passée on conserve. C'est exactement le rôle du "forget gate" dans un LSTM. L'état récurrent capture la mémoire à long terme.
+Quelques détails sur cette formulation :
+
+- **$\odot$** désigne le produit de Hadamard, c'est-à-dire la multiplication élément par élément entre deux matrices de même dimension.
+- **gate$[t]$** est un vecteur appris (dépendant de l'entrée au pas $t$) dont chaque composante est comprise entre 0 et 1. Il contrôle combien de l'état précédent est retenu à chaque position — c'est exactement le rôle du "forget gate" dans un LSTM. Un gate proche de 1 conserve la mémoire, un gate proche de 0 l'efface.
+- **$K[t]^\top V[t]$** injecte la nouvelle association clé-valeur dans l'état.
+
+L'intuition : cette récurrence **imite l'attention** en accumulant progressivement les associations clé-valeur dans un état compressé. Au lieu de recalculer l'attention sur tous les tokens passés (coût $O(L^2)$), chaque nouveau token met à jour un résumé de taille fixe. La query $Q[t]$ interroge ensuite ce résumé, comme elle interrogerait la matrice d'attention complète dans l'attention standard.
 
 <Callout type="tip" title="Convergence SSM et attention linéaire">
 Les travaux récents révèlent que SSM (comme Mamba) et attention linéaire sont fondamentalement le même objet mathématique, juste formulé différemment. Mamba-2 a d'ailleurs unifié les deux dans un seul framework. GLA, c'est de l'attention linéaire qui ressemble à un SSM. Mamba, c'est un SSM qui ressemble à de l'attention linéaire.
@@ -102,7 +108,13 @@ z_n &= z_{n-1} + \varphi(K_n) \\
 \end{aligned}
 $$
 
-$S$ est une matrice d'état de taille fixe ($d_\varphi \times d_v$). À chaque nouveau token, on met à jour $S$ et on calcule la sortie. Pas besoin de KV cache qui grandit avec la séquence. L'état à une taille constante.
+Détaillons chaque composante :
+
+- **$S_n$** est la **matrice d'état** de dimension $d_\varphi \times d_v$. Elle accumule les associations clé-valeur transformées : à chaque pas, le terme $\varphi(K_n)^\top V_n$ (un produit externe de dimensions $d_\varphi \times d_v$) vient s'y ajouter. $S$ encode un résumé compressé de tout le contexte passé.
+- **$z_n$** est le **vecteur de normalisation** de dimension $d_\varphi$. Il accumule les clés transformées $\varphi(K_n)$ au fil de la séquence.
+- **La division $\frac{\varphi(Q_n) \times S_n}{\varphi(Q_n) \times z_n}$** joue le rôle du softmax dans l'attention standard. Le numérateur calcule la somme pondérée des valeurs, et le dénominateur normalise pour que les poids effectifs somment à 1. C'est exactement ce que fait le softmax — sauf qu'ici la normalisation se fait via le produit $\varphi(Q) \times z$ au lieu d'une exponentielle globale.
+
+À chaque nouveau token, on met à jour $S$ et $z$ en $O(d^2)$, puis on calcule la sortie. Pas besoin de KV cache qui grandit avec la séquence : l'état a une taille constante.
 
 C'est exactement la structure d'un RNN/SSM : un état caché mis à jour récursivement. L'attention linéaire et les SSM sont les deux faces d'une même pièce.
 

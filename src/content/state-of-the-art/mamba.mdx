@@ -39,17 +39,21 @@ $$
 \Delta = \text{softplus}(\text{Linear}(x))
 $$
 
-**B (matrice d'entrée)** : contrôle comment le token courant influence l'état caché. Chaque token peut influencer l'état de manière différente.
+La fonction softplus ($\log(1 + e^x)$) garantit que $\Delta > 0$ : un pas de temps négatif n'a pas de sens physique — c'est une "durée", toujours positive.
+
+**B (matrice d'entrée — gate d'écriture)** : contrôle **quoi écrire** dans l'état caché. Dans l'équation de récurrence, B multiplie l'entrée $x_k$ pour déterminer comment le token courant modifie l'état. Chaque token peut influencer l'état de manière différente.
 
 $$
 B = \text{Linear}(x)
 $$
 
-**C (matrice de sortie)** : contrôle comment l'état caché produit la sortie. Chaque token peut "lire" l'état différemment.
+**C (matrice de sortie — gate de lecture)** : contrôle **quoi lire** depuis l'état caché. Dans l'équation de récurrence, C multiplie l'état $h_k$ pour déterminer quelle information extraire vers la sortie. Chaque token peut "lire" l'état différemment.
 
 $$
 C = \text{Linear}(x)
 $$
+
+Bien que B et C aient la même forme (projection linéaire de $x$), ils jouent des rôles opposés : B est le gate d'écriture (entrée → état) tandis que C est le gate de lecture (état → sortie). Ils sont appliqués à des endroits différents de l'équation de récurrence et apprennent des poids distincts.
 
 Ces trois projections sont calculées à partir du token courant `x` — d'où le nom de "sélectivité". Le modèle adapte son filtre à chaque position.
 
@@ -67,7 +71,13 @@ $$
 h_k = \bar{A}_k \cdot h_{k-1} + \bar{B}_k \cdot x_k
 $$
 
-Où $\bar{A}_k$ et $\bar{B}_k$ (versions discrétisées de A et B, recalculées à chaque pas via le delta courant) changent à chaque pas — c'est une **récurrence dépendante de l'entrée**, impossible à reformuler comme une convolution simple.
+La notation "barre" désigne les versions **discrétisées** de A et B : les matrices continues sont transformées en matrices discrètes adaptées au traitement token par token, recalculées à chaque pas en utilisant le $\Delta_k$ courant. La discrétisation exacte donne :
+
+$$
+\bar{A}_k = \exp(\Delta_k A), \quad \bar{B}_k = (\Delta_k A)^{-1}(\exp(\Delta_k A) - I) \cdot \Delta_k B
+$$
+
+Puisque $\bar{A}_k$ et $\bar{B}_k$ changent à chaque pas — c'est une **récurrence dépendante de l'entrée**, impossible à reformuler comme une convolution simple.
 
 ### La solution : le scan parallèle
 

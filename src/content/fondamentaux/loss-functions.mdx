@@ -103,9 +103,11 @@ $$
 \mathcal{L} = (1 - y) \cdot d^2 + y \cdot \max(0, m - d)^2
 $$
 
-Où $d$ est la distance entre les deux éléments dans l'espace de représentation, $y$ vaut 0 si les éléments sont de la même classe et 1 sinon, et $m$ est la **marge** — la distance minimale qu'on veut imposer entre éléments de classes différentes.
+Où $d$ est la **distance euclidienne entre les embeddings des deux exemples dans l'espace latent** (l'espace de représentation appris par le modèle), $y$ vaut 0 si les éléments sont de la même classe et 1 sinon, et $m$ est la **marge** — la distance minimale qu'on veut imposer entre éléments de classes différentes.
 
-Les éléments d'une même classe sont attirés ensemble. Les éléments de classes différentes sont repoussés — mais seulement jusqu'à une certaine marge. Au-delà, la pénalité est nulle : inutile de les repousser infiniment loin, il suffit qu'ils soient assez distincts.
+La formule est asymétrique, et c'est voulu :
+- **Paires similaires** ($y = 0$) : le second terme s'annule, il reste $d^2$. On minimise directement la distance entre les deux embeddings — on les rapproche le plus possible.
+- **Paires différentes** ($y = 1$) : le premier terme s'annule, il reste $\max(0, m - d)^2$. On ne pénalise que si la distance $d$ est inférieure à la marge $m$. Si les deux embeddings sont déjà à distance $d > m$, le $\max$ donne 0 et la loss est nulle — on considère qu'ils sont "assez loin" et on arrête de pousser. Inutile de les repousser infiniment loin, il suffit qu'ils soient assez distincts.
 
 ## Triplet Loss : entraîner avec des triplets
 
@@ -137,7 +139,10 @@ $$
 \mathcal{L} = -(1 - \hat{y})^\gamma \cdot \log(\hat{y})
 $$
 
-Le facteur de modulation $(1 - \hat{y})^\gamma$ est la clé. Quand le modèle prédit correctement avec haute confiance ($\hat{y}$ proche de 1), ce facteur vaut presque zéro : le cas facile contribue très peu à la loss. Quand le modèle se trompe ($\hat{y}$ proche de 0), le facteur vaut presque 1 : le cas difficile contribue pleinement. Le paramètre $\gamma$ (typiquement 2) contrôle l'intensité de cette modulation.
+Le facteur de modulation $(1 - \hat{y})^\gamma$ est la clé. Voici pourquoi il fonctionne :
+- **Quand le modèle est confiant et correct** ($\hat{y}$ proche de 1) : $(1 - \hat{y}) \approx 0$, donc $(1 - \hat{y})^\gamma \approx 0$. Le facteur s'effondre et la loss aussi. Exemple concret : si $\hat{y} = 0.95$ et $\gamma = 2$, le facteur vaut $(0.05)^2 = 0.0025$, la loss est divisée par 400 par rapport à la cross-entropy standard.
+- **Quand le modèle se trompe** ($\hat{y}$ proche de 0) : $(1 - \hat{y}) \approx 1$, donc $(1 - \hat{y})^\gamma \approx 1$. La loss reste à pleine puissance, comme une cross-entropy classique.
+- **Le paramètre $\gamma$** (typiquement 2) contrôle l'agressivité de ce filtrage. $\gamma = 0$ donne la cross-entropy standard. Plus $\gamma$ augmente, plus le modèle ignore agressivement les cas faciles pour se concentrer sur les cas difficiles.
 
 Résultat : au lieu de noyer le signal d'apprentissage sous des millions de cas triviaux, le modèle concentre son effort sur les cas difficiles, ceux où il se trompe vraiment. C'est comme si le prof arrêtait de poser des questions auxquelles l'élève sait déjà répondre et se concentrait sur ses points faibles.
 

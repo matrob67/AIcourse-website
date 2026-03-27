@@ -73,6 +73,12 @@ Malheureusement, calculer $p(x)$ exactement est impossible (il faudrait intégre
 
 $$\text{ELBO} = \mathbb{E}_{q}[\log p(x | z)] - D_{KL}(q(z | x) \| p(z))$$
 
+**Pourquoi est-ce une borne inférieure ?** On peut montrer que la log-vraisemblance se décompose exactement en :
+
+$$\log p(x) = \text{ELBO} + D_{KL}(q(z|x) \| p(z|x))$$
+
+Le deuxième terme est la divergence KL entre notre approximation $q(z|x)$ et le *vrai* posterior $p(z|x)$. Or, une divergence KL est toujours $\geq 0$. Donc $\text{ELBO} \leq \log p(x)$ — c'est bien une borne inférieure. On ne peut pas calculer $\log p(x)$ directement car le vrai posterior $p(z|x)$ est intractable (il faudrait connaître $p(x)$, qu'on cherche justement à estimer). Mais l'ELBO, lui, est calculable. En le maximisant, on maximise une approximation de $\log p(x)$, et plus notre approximation $q(z|x)$ est proche du vrai posterior, plus la borne est serrée.
+
 Ou, en version "loss à minimiser" :
 
 $$\mathcal{L} = \underbrace{-\mathbb{E}_{q}[\log p(x | z)]}_{\text{Reconstruction}} + \underbrace{D_{KL}(q(z | x) \| p(z))}_{\text{Régularisation}}$$
@@ -94,6 +100,14 @@ Ce terme force l'espace latent à rester **régulier et structuré**. Sans lui, 
 Pour deux gaussiennes, la KL a une forme analytique simple et rapide à calculer :
 
 $$D_{KL} = -\frac{1}{2} \sum_{j} \left(1 + \log(\sigma_j^2) - \mu_j^2 - \sigma_j^2\right)$$
+
+Intuition pour chaque terme de la somme (pour une dimension $j$) :
+- **$1$** : constante de normalisation qui assure $D_{KL} = 0$ quand $q = p$
+- **$\log(\sigma_j^2)$** : pénalise les variances trop petites — le modèle ne doit pas être trop "sûr de lui" en concentrant toute sa masse sur un seul point
+- **$-\mu_j^2$** : pénalise les moyennes éloignées de 0 — pousse la distribution encodée vers une gaussienne centrée
+- **$-\sigma_j^2$** : pénalise les variances trop grandes — le modèle ne doit pas non plus être trop "incertain" en étalant sa distribution partout
+
+Quand $\mu_j = 0$ et $\sigma_j = 1$, on obtient $-\frac{1}{2}(1 + 0 - 0 - 1) = 0$ : l'encodeur produit exactement le prior $\mathcal{N}(0, 1)$, et il n'y a aucune pénalité.
 
 <Callout type="info" title="La tension fondamentale">
 Les deux termes de la loss sont en **conflit**. Le terme de reconstruction veut des codes précis et informatifs (variance petite, positions éloignées les unes des autres). Le terme KL veut des codes lisses et réguliers (proche de $\mathcal{N}(0,I)$, distributions qui se chevauchent). L'entraînement du VAE est un exercice d'équilibre : assez d'information pour reconstruire, assez de régularité pour générer.

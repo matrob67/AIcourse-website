@@ -37,7 +37,9 @@ $$
 
 avec $\epsilon \sim \mathcal{N}(0, I)$ qui est du bruit gaussien pur (tiré aléatoirement).
 
-L'intuition est celle d'un mélangeur : $\alpha_t$ contrôle la proportion entre signal et bruit à chaque étape. Quand $\alpha_t$ est proche de 1, on garde surtout le signal existant et on ajoute très peu de bruit. Quand $\alpha_t$ est petit, on noie le signal sous le bruit. Les coefficients $\sqrt{\alpha_t}$ et $\sqrt{1 - \alpha_t}$ sont choisis pour que la variance totale reste contrôlée (normalisée) à chaque étape.
+L'intuition est celle d'un mélangeur : $\alpha_t$ contrôle la proportion entre signal et bruit à chaque étape. Quand $\alpha_t$ est proche de 1, on garde surtout le signal existant et on ajoute très peu de bruit. Quand $\alpha_t$ est petit, on noie le signal sous le bruit.
+
+**Pourquoi des racines carrées ?** C'est un processus **variance-preserving** : les coefficients $\sqrt{\alpha_t}$ et $\sqrt{1 - \alpha_t}$ garantissent que la variance totale de $x_t$ reste à 1 à chaque étape. En effet, si $x_{t-1}$ a une variance de 1 et $\epsilon_t$ aussi, alors $\text{Var}(x_t) = (\sqrt{\alpha_t})^2 + (\sqrt{1 - \alpha_t})^2 = \alpha_t + (1 - \alpha_t) = 1$. Sans ces racines carrées -- si on utilisait directement $\alpha_t$ et $(1 - \alpha_t)$ comme coefficients -- la variance de $x_t$ serait $\alpha_t^2 + (1-\alpha_t)^2 \neq 1$. Le signal enflerait ou s'écraserait au fil des étapes, rendant le processus instable. Les racines carrées sont donc la clé pour que chaque étape reste bien normalisée.
 
 ### Le schedule de bruit (le calendrier de bruitage)
 
@@ -49,13 +51,25 @@ La quantité de bruit ajoutée à chaque pas est définie par le **schedule** �
 
 ### Sauter directement au pas t
 
-Propriété mathématique cruciale : grâce aux propriétés de la gaussienne, tu peux calculer **directement** $x_t$ à partir de $x_0$ sans passer par tous les pas intermédiaires :
+Propriété mathématique cruciale : grâce aux propriétés de la gaussienne, tu peux calculer **directement** $x_t$ à partir de $x_0$ sans passer par tous les pas intermédiaires.
+
+Définissons d'abord $\bar{\alpha}_t$ : c'est le **produit cumulé** de tous les $\alpha$ jusqu'au pas $t$ :
+
+$$
+\bar{\alpha}_t = \prod_{s=1}^{t} \alpha_s = \alpha_1 \cdot \alpha_2 \cdot \ldots \cdot \alpha_t
+$$
+
+Intuitivement, $\bar{\alpha}_t$ mesure **combien du signal original survit après $t$ étapes de bruit**. Comme chaque $\alpha_s < 1$, ce produit diminue au fil des pas : au début $\bar{\alpha}_t$ est proche de 1 (le signal domine), à la fin il tend vers 0 (le bruit domine totalement).
+
+Avec cette définition, la formule de saut direct s'écrit :
 
 $$
 x_t = \sqrt{\bar{\alpha}_t} \cdot x_0 + \sqrt{1 - \bar{\alpha}_t} \cdot \epsilon
 $$
 
-avec $\bar{\alpha}_t = \prod_{s=1}^{t} \alpha_s$ (le produit cumulé de tous les $\alpha$) et $\epsilon \sim \mathcal{N}(0, I)$.
+avec $\epsilon \sim \mathcal{N}(0, I)$.
+
+**Pourquoi peut-on sauter directement de $x_0$ à $x_t$ ?** Parce que la somme de gaussiennes indépendantes est elle-même une gaussienne. Chaque étape du forward ajoute du bruit gaussien, et en "déroulant" la récurrence sur $t$ étapes, tous ces bruits individuels se combinent en un seul terme gaussien. On peut donc calculer le résultat de $t$ étapes de bruitage en une seule opération.
 
 Pourquoi c'est **crucial pour l'entraînement** ? Parce que pendant l'entraînement, tu dois bruiter une image à un pas $t$ aléatoire. Sans cette formule, tu devrais appliquer séquentiellement les 500 étapes de bruitage pour obtenir $x_{500}$. Avec elle, un seul calcul suffit. Tu peux échantillonner n'importe quel $t$ uniformément et obtenir $x_t$ instantanément.
 
@@ -166,7 +180,7 @@ $$
 \epsilon_{\text{guided}} = \epsilon_{\text{uncond}} + w \cdot (\epsilon_{\text{cond}} - \epsilon_{\text{uncond}})
 $$
 
-Le terme $(\epsilon_{\text{cond}} - \epsilon_{\text{uncond}})$ capture la "direction" du conditioning. Le poids $w > 1$ amplifie cet effet. Plus $w$ est grand, plus l'image colle au prompt texte, mais au prix de la diversité. C'est exactement comme ça que Stable Diffusion et DALL-E transforment du texte en images.
+**Pourquoi la différence fonctionne ?** Le terme $(\epsilon_{\text{cond}} - \epsilon_{\text{uncond}})$ isole la **direction du conditionnement** : c'est la partie de la prédiction de bruit qui est spécifiquement due au prompt. Le modèle sans conditioning prédit un bruit "générique", le modèle avec conditioning prédit un bruit influencé par le prompt -- leur différence est donc l'effet pur du prompt sur la prédiction. En amplifiant cette différence par $w$, on force le modèle à suivre plus fortement le prompt. Concrètement : $w = 1$ donne le comportement normal (conditionné standard), $w > 1$ exagère les traits demandés par le prompt (images plus fidèles mais moins diverses), et $w = 0$ revient à ignorer complètement le prompt (génération non conditionnée). En pratique, $w$ entre 7 et 15 donne les meilleurs résultats. C'est exactement comme ça que Stable Diffusion et DALL-E transforment du texte en images.
 
 <Callout type="paper" title={"Diffusion latente : le passage à l'échelle"}>
 Stable Diffusion n'opère pas dans l'espace pixel mais dans l'**espace latent** d'un VAE pré-entraîné. L'encodeur du VAE compresse l'image (par exemple 512x512x3) en un petit vecteur latent (64x64x4), soit environ 100 fois moins de données. Le processus de diffusion opère entièrement dans cet espace compact. Le décodeur du VAE reconstruit l'image finale. C'est cette astuce qui rend la diffusion praticable en haute résolution -- sans elle, bruiter et débruiter des images 512x512 pixel par pixel serait prohibitivement coûteux.
