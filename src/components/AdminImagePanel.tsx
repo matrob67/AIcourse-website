@@ -260,7 +260,7 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
       const res = await fetch("/api/admin/update-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ partId, slug, blockIndex: editState.blockIndex, ...editState }),
+        body: JSON.stringify({ ...editState, partId, slug }),
       });
       const data = await res.json();
       if (data.success) { await reloadBlocks(); setEditState(null); }
@@ -398,7 +398,7 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
                               style={{
                                 borderColor: selectedSearchImage?.url === img.url ? "var(--accent)" : "var(--card-border)",
                                 borderWidth: selectedSearchImage?.url === img.url ? 2 : 1,
-                                ringColor: "var(--accent)",
+                                outline: selectedSearchImage?.url === img.url ? "2px solid var(--accent)" : "none",
                                 aspectRatio: "16/9",
                               }}>
                               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -454,7 +454,7 @@ export default function AdminImagePanel({ partId, slug }: { partId: string; slug
                           style={{
                             borderColor: selectedSearchImage?.url === img.url ? "var(--accent)" : "var(--card-border)",
                             borderWidth: selectedSearchImage?.url === img.url ? 2 : 1,
-                            ringColor: "var(--accent)",
+                            outlineColor: "var(--accent)",
                             aspectRatio: "16/9",
                           }}>
                           {/* eslint-disable-next-line @next/next/no-img-element */}
