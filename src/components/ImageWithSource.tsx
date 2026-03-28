@@ -37,13 +37,17 @@ export default function ImageWithSource({ src, alt, source, sourceUrl, caption, 
       />
       <figcaption className="mt-2 text-xs text-muted text-center">
         {caption && <span className="block text-sm mb-0.5">{caption}</span>}
-        Source :{" "}
-        {sourceUrl ? (
-          <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-            {source}
-          </a>
-        ) : (
-          source
+        {source && (
+          <>
+            Source :{" "}
+            {sourceUrl ? (
+              <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+                {source}
+              </a>
+            ) : (
+              source
+            )}
+          </>
         )}
       </figcaption>
     </figure>
