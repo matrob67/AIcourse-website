@@ -6,7 +6,11 @@ import { usePathname } from "next/navigation";
 import { courseParts } from "@/lib/course-data";
 import SearchBar from "@/components/SearchBar";
 
-export default function Sidebar() {
+interface SidebarProps {
+  onNavigate?: () => void;
+}
+
+export default function Sidebar({ onNavigate }: SidebarProps) {
   const pathname = usePathname();
   const [searchOpen, setSearchOpen] = useState(false);
 
@@ -60,7 +64,7 @@ export default function Sidebar() {
     <aside className="w-72 min-w-72 h-screen bg-sidebar-bg border-r border-sidebar-border flex flex-col overflow-hidden">
       {/* Logo */}
       <div className="p-4 border-b border-sidebar-border">
-        <Link href="/" className="flex items-center gap-2 text-lg font-bold">
+        <Link href="/" className="flex items-center gap-2 text-lg font-bold" onClick={onNavigate}>
           <span className="text-2xl">🧠</span>
           <span>AI State of the Art</span>
         </Link>
@@ -78,7 +82,7 @@ export default function Sidebar() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
           </svg>
           <span className="flex-1 text-left">Rechercher…</span>
-          <kbd className="text-xs px-1 py-0.5 rounded" style={{ background: "var(--sidebar-bg)", border: "1px solid var(--sidebar-border)", fontFamily: "var(--font-mono)" }}>
+          <kbd className="text-xs px-1 py-0.5 rounded hidden sm:inline-block" style={{ background: "var(--sidebar-bg)", border: "1px solid var(--sidebar-border)", fontFamily: "var(--font-mono)" }}>
             ⌘K
           </kbd>
         </button>
@@ -137,6 +141,7 @@ export default function Sidebar() {
                             <Link
                               key={lesson.id}
                               href={href}
+                              onClick={onNavigate}
                               className={`block px-3 py-1 text-xs rounded-r transition-colors ${
                                 isActive
                                   ? "bg-accent-light text-accent font-medium border-l-2 border-accent -ml-px"

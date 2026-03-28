@@ -5,7 +5,7 @@ export default function Home() {
   const total = getTotalLessons();
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-12">
+    <div className="max-w-5xl mx-auto px-4 sm:px-8 py-8 sm:py-12">
       {/* Hero */}
       <div className="mb-16">
         <h1 className="text-4xl font-extrabold mb-4">
@@ -16,7 +16,7 @@ export default function Home() {
           l&apos;intelligence artificielle moderne, du niveau 0 jusqu&apos;aux
           techniques les plus avancées.
         </p>
-        <div className="flex gap-3">
+        <div className="flex flex-col sm:flex-row gap-3">
           <Link
             href="/fondamentaux/ml-overview"
             className="px-6 py-3 bg-accent text-white rounded-lg font-medium hover:opacity-90 transition-opacity"
