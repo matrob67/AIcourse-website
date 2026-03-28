@@ -5,137 +5,155 @@ description: "Utilisez un LLM comme évaluateur automatique. 80% de corrélation
 
 ## Le problème fondamental : comment évaluer la qualité d'un LLM ?
 
-Les métriques classiques du NLP (BLEU — Bilingual Évaluation Understudy, et ROUGE — Recall-Oriented Understudy for Gisting Évaluation) mesurent la similarité textuelle avec une réponse de référence. Mais une réponse peut être excellente sans ressembler du tout à la référence. "La capitale de la France est Paris" et "Paris est la ville qui sert de capitale à la France" disent la même chose avec des mots différents. Et inversement, une réponse peut avoir une forte similarité textuelle tout en étant factuellement fausse.
+Imagine que tu corriges des copies d'examen, sauf que chaque élève peut répondre avec des mots complètement différents et avoir quand même raison. C'est exactement le problème de l'évaluation des LLM.
 
-L'évaluation humaine reste le gold standard, mais elle est **lente et coûteuse**. Évaluer 1 000 réponses sur plusieurs critères = des jours de travail, des milliers d'euros en annotation, et une variabilité inter-annotateurs non négligeable.
+Les métriques classiques du NLP (**BLEU** et **ROUGE**) comparent le texte généré à une réponse de référence mot par mot. Mais "La capitale de la France est Paris" et "Paris sert de capitale à la France" disent la même chose avec 0 mot en commun. Et inversement, une réponse peut coller parfaitement à la référence tout en étant factuellement fausse. Ces métriques textuelles sont aveugles au sens.
 
-Le paradigme **LLM-as-Judge** propose une alternative pragmatique : utiliser un LLM puissant (GPT-5.4, Claude Sonnet 4.6) comme évaluateur automatique. Les études montrent une **corrélation de 80-85% avec les jugements humains**, ce qui est suffisant pour la plupart des cas de développement et d'itération rapide.
+L'évaluation humaine reste le **gold standard**, mais elle est brutalement lente et chère. Évaluer 1 000 réponses sur 5 critères, c'est environ 80 heures de travail d'annotation, 3 000 à 5 000 euros, et une variabilité inter-annotateurs de 20 à 30%. Pas viable pour itérer rapidement.
+
+Le paradigme **LLM-as-Judge** propose une alternative pragmatique : utiliser un LLM puissant (GPT-5.4, Claude Sonnet 4.6) comme évaluateur automatique. Les études montrent une **corrélation de 80-85% avec les jugements humains** -- et tu peux évaluer 10 000 réponses en 15 minutes pour quelques dollars. C'est pas parfait, mais c'est un ratio coût/qualité imbattable pour le développement quotidien.
 
 <Callout type="info" title={"L'intuition derrière LLM-as-Judge"}>
-Si un LLM est suffisamment capable pour comprendre la nuance, la pertinence et la qualité d'une réponse, alors il peut servir de proxy pour un évaluateur humain. Vous pouvez évaluer 10 000 réponses en quelques minutes au lieu de plusieurs semaines. C'est pas parfait, mais c'est infiniment mieux que rien ou que des métriques textuelles basiques.
+Si un LLM comprend suffisamment la nuance et la pertinence d'une réponse, il peut servir de proxy pour un évaluateur humain. Pense à ça comme un correcteur automatique : il ne remplace pas le prof, mais il te permet de filtrer 95% des copies avant la correction manuelle. C'est pas parfait, mais c'est infiniment mieux que rien ou que des métriques textuelles aveugles.
 </Callout>
 
 ## Les trois modes d'évaluation
 
+Pourquoi trois modes ? Parce que "évaluer" peut vouloir dire des choses très différentes selon ton contexte. Attribuer une note absolue, comparer deux candidats, ou vérifier la conformité à une référence -- chaque approche a ses forces et ses pièges.
+
 ### Scoring direct : simple mais biaisé
 
-Le LLM-juge reçoit une question et une réponse, et attribue un score sur une échelle (1-5 ou 1-10) selon des critères définis.
+Le LLM-juge reçoit une question et une réponse, puis attribue un score sur une échelle (1-5 ou 1-10) selon des critères définis. C'est le mode le plus intuitif : un appel API, un score, terminé.
 
-**Avantages** : simple à mettre en place, rapide (un seul appel API par évaluation), facile à agréger
+**Avantages** : mise en place en 10 minutes, un seul appel API par évaluation, facile à agréger en moyennes et graphiques.
 
-**Limites** : les scores absolus sont souvent mal calibrés. Les LLM ont une forte tendance à donner des notes élevées (tout est entre 7 et 9/10). C'est le mode le moins fiable.
+**Limites** : c'est aussi le mode le moins fiable. Les LLM ont une tendance massive à donner des notes élevées -- en pratique, 85% des scores tombent entre 7 et 9/10. Tu te retrouves avec une distribution écrasée où tout le monde est "bien", ce qui rend la discrimination quasi impossible.
 
 ### Comparaison par paires (Pairwise) : la méthode la plus fiable
 
-Le LLM-juge reçoit une question et **deux réponses** (A et B) et doit indiquer laquelle est meilleure, avec une justification détaillée. C'est **beaucoup plus fiable** que le scoring direct, parce que comparer est cognitivement plus simple que noter dans l'absolu.
+Le LLM-juge reçoit une question et **deux réponses** (A et B), puis indique laquelle est meilleure avec une justification. Pourquoi c'est mieux ? Pour la même raison que tu trouves plus facile de dire "ce vin est meilleur que celui-là" que de noter un vin sur 100. **Comparer est cognitivement plus simple que noter dans l'absolu.**
 
-**Avantages** : forte corrélation avec les jugements humains, force le juge à être discriminant
+**Avantages** : corrélation de 85%+ avec les jugements humains, force le juge à être discriminant, résultats beaucoup plus stables entre les runs.
 
-**Limites** : pour comparer n modèles entre eux, il faut O(n^2) comparaisons par paires. Plus coûteux en appels API. En pratique, on utilise des tournois (Elo) pour réduire le nombre de comparaisons nécessaires.
+**Limites** : pour comparer $n$ modèles, il faut $O(n^2)$ comparaisons. Avec 10 modèles, ça fait 45 paires. En pratique, on utilise des systèmes de tournoi Elo (comme le Chatbot Arena) pour réduire le nombre de comparaisons nécessaires.
 
-### Évaluation avec référence (Référence-guided)
+### Évaluation avec référence (Reference-guided)
 
-Le LLM-juge reçoit la question, une réponse de référence (la "bonne" réponse) et la réponse à évaluer. Il juge la qualité en comparant avec la référence.
+Le LLM-juge reçoit la question, une **réponse de référence** (le gold standard) et la réponse à évaluer. Il juge en comparant les deux. Pense à un correcteur qui a le corrigé sous les yeux.
 
-**Avantages** : plus précis quand une bonne référence existe (QA factuel, traduction)
+**Avantages** : très précis quand une bonne référence existe -- QA factuel, traduction, résumé de documents structurés.
 
-**Limites** : nécessite de disposer d'une référence de qualité, ce qui n'est pas toujours possible (tâches créatives, conversations ouvertes)
+**Limites** : tu as besoin d'une référence de qualité, ce qui exclut les tâches créatives, les conversations ouvertes, et tout ce qui admet des réponses valides très différentes.
 
 <Callout type="paper" title="MT-Bench a validé le concept">
-MT-Bench, le benchmark conversationnel de LMSYS, a popularisé le LLM-as-Judge en montrant que GPT-4 (aujourd'hui remplacé par GPT-5.4) comme juge classait les modèles de manière très similaire aux classements humains du Chatbot Arena. Les corrélations observées ont convaincu la communauté que cette approche est viable pour le développement quotidien.
+MT-Bench, le benchmark conversationnel de LMSYS, a popularisé le LLM-as-Judge en montrant que GPT-4 comme juge classait les modèles de manière très similaire aux classements humains du Chatbot Arena. Cette corrélation élevée a convaincu la communauté que l'approche est viable pour le développement quotidien.
 </Callout>
 
 ## Choisir les bons critères d'évaluation
 
-Le choix des critères est déterminant. Des critères vagues donnent des évaluations vagues. Voici les critères les plus courants :
+Le choix des critères, c'est 80% de la qualité de ton évaluation. Un prompt qui dit "cette réponse est-elle bonne ?" donnera des résultats incohérents. Un prompt avec des critères explicites et mesurables transforme ton LLM-juge en évaluateur rigoureux.
 
 ### Critères généraux (applicables à la plupart des cas)
-- **Pertinence** : la réponse répond-elle effectivement à la question posée ?
+- **Pertinence** : la réponse répond-elle effectivement à la question posée, sans partir dans une tangente ?
 - **Exactitude factuelle** : les informations sont-elles correctes et vérifiables ?
 - **Complétude** : tous les aspects importants de la question sont-ils couverts ?
-- **Clarté** : la réponse est-elle bien structurée et compréhensible ?
-- **Concision** : la longueur est-elle appropriée, sans verbiage inutile ?
+- **Clarté** : la réponse est-elle bien structurée et compréhensible par la cible ?
+- **Concision** : la longueur est-elle appropriée, sans remplissage inutile ?
 
 ### Critères spécifiques (selon le contexte)
-- **Fidélité** (systèmes RAG) : la réponse est-elle fidèle aux documents sources, sans ajout d'information ?
+- **Fidélité** (systèmes RAG) : la réponse se base-t-elle uniquement sur les documents sources, sans halluciner d'information supplémentaire ?
 - **Sécurité** : la réponse évite-t-elle le contenu dangereux, offensant ou trompeur ?
-- **Suivi d'instructions** : les contraintes spécifiques du prompt sont-elles respectées (format, longueur, style) ?
+- **Suivi d'instructions** : les contraintes spécifiques du prompt sont-elles respectées (format JSON, longueur max, style) ?
 - **Tonalité** : le ton est-il adapté au contexte (formel pour le juridique, accessible pour le grand public) ?
+
+Règle d'or : **n'évalue jamais plus de 3-4 critères à la fois**. Au-delà, le LLM-juge perd en précision sur chacun. Mieux vaut faire plusieurs passes ciblées qu'une seule évaluation fourre-tout.
 
 ## Les biais du LLM-as-Judge : à connaître impérativement
 
+Ces biais ne sont pas théoriques -- ils faussent activement tes résultats si tu ne les gères pas. Chacun peut faire basculer une évaluation du mauvais côté. Voici comment ils se manifestent concrètement et comment les neutraliser.
+
 ### Biais de position
 
-Le LLM-juge a tendance à favoriser la réponse présentée en **première position** (ou parfois la dernière, selon le modèle). Ce biais est systématique et mesurable.
+Le LLM-juge a tendance à favoriser la réponse présentée en **première position**. Dans les expériences de MT-Bench, ce biais atteint 10-15% : une réponse identique est jugée meilleure simplement parce qu'elle apparaît en premier.
 
-**Solution** : évaluez chaque paire deux fois en inversant l'ordre (A puis B, puis B puis A) et ne gardez que les évaluations concordantes. Celles qui changent en inversant l'ordre sont des évaluations peu fiables.
+Exemple concret : tu compares deux résumés d'article. Le résumé A est en position 1, le résumé B en position 2. Le juge dit "A est meilleur". Tu inverses : B en position 1, A en position 2. Cette fois, le juge dit "B est meilleur". Le juge n'a pas vraiment d'opinion -- il suit sa position préférée.
+
+**Comment le neutraliser** : évalue chaque paire **deux fois** en inversant l'ordre (AB puis BA). Si le juge donne le même gagnant dans les deux cas, le résultat est fiable. Si le verdict change, marque cette paire comme "indécise" et écarte-la de tes statistiques. En pratique, 15 à 25% des paires sont indécises -- c'est normal, ça veut dire que les deux réponses sont de qualité comparable.
 
 ### Biais de verbosité
 
-Les LLM-juges préfèrent systématiquement **les réponses plus longues**, même quand elles contiennent du remplissage. Une réponse de 500 mots sera mieux notée qu'une réponse de 100 mots qui dit la même chose de manière plus concise.
+Les LLM-juges adorent les réponses longues. Une réponse de 400 mots qui dit la même chose qu'une réponse de 80 mots sera systématiquement mieux notée, même si les 320 mots supplémentaires sont du remplissage.
 
-**Solution** : incluez explicitement la concision comme critère d'évaluation, et donnez des exemples de réponses courtes mais excellentes dans votre prompt d'évaluation.
+Exemple concret : "Quelle est la capitale de la France ?" Réponse A : "Paris." Réponse B : "La capitale de la France est Paris. Paris est une ville située dans le nord de la France, traversée par la Seine, et qui abrite de nombreux monuments historiques comme la Tour Eiffel..." Le juge donnera un score supérieur à B, alors que A est parfaitement correcte et plus concise.
+
+**Comment le neutraliser** : ajoute dans ton prompt d'évaluation une instruction explicite du type *"La concision est une qualité. Une réponse courte mais complète vaut mieux qu'une réponse longue avec du remplissage."* Encore mieux : inclus un **exemple ancre** -- une réponse courte que tu notes 5/5 avec la justification "réponse complète et parfaitement concise". Ça recalibre le juge.
 
 ### Biais d'auto-favoritisme
 
-Un LLM a tendance à mieux noter les réponses qui ressemblent à ce qu'il aurait généré lui-même. GPT-5.4 comme juge favorise légèrement les réponses de GPT-5.4.
+Un LLM note mieux les réponses qui ressemblent à son propre style. GPT-5.4 comme juge donne en moyenne 0.3 à 0.5 points de plus aux réponses de GPT-5.4 qu'aux réponses de Claude Sonnet 4.6, et vice-versa. Ça paraît subtil, mais sur un classement de 10 modèles, ça suffit à faire remonter le modèle-juge de 2-3 places.
 
-**Solution** : utilisez un juge différent du modèle évalué quand c'est possible. Ou utilisez un panel de plusieurs juges.
+Exemple concret : tu évalues les réponses de 5 modèles différents avec Claude comme juge. Les réponses de Claude arrivent mystérieusement en tête, avec un style d'écriture que le juge "préfère". Tu refais l'évaluation avec GPT-5.4 comme juge -- et surprise, c'est GPT-5.4 qui arrive en tête.
+
+**Comment le neutraliser** : utilise un **panel de 2-3 juges différents** (GPT-5.4 + Claude Sonnet 4.6 + Gemini 3.1 Pro) et fais un vote majoritaire. Si les trois sont d'accord, le résultat est solide. Si deux sur trois divergent sur un modèle spécifique, c'est probablement du biais d'auto-favoritisme en action. Alternative moins coûteuse : utilise un juge qui **n'est pas** dans la liste des modèles évalués.
 
 ### Biais de complaisance (le plus pernicieux)
 
-Les LLM-juges donnent des notes élevées par défaut. Les scores se concentrent entre 7 et 9/10, rendant la discrimination entre modèles presque impossible en scoring direct.
+Les LLM-juges sont des correcteurs trop gentils. En scoring direct, 85% des notes tombent entre 7 et 9 sur 10. Le résultat : une réponse correcte mais banale obtient 7/10, une réponse excellente obtient 8/10. L'écart est tellement faible qu'il est noyé dans le bruit statistique. Tu ne peux plus distinguer le bon de l'excellent.
 
-**Solution** : privilégiez le mode pairwise, fournissez des exemples explicites de mauvaises réponses dans votre prompt, et exigez une justification détaillée avant le score.
+Exemple concret : tu évalues 500 réponses de ton chatbot. Score moyen : 8.2/10. Tu fais un changement de prompt majeur, tu réévalues. Score moyen : 8.4/10. Amélioration réelle ou bruit ? Impossible à dire avec cette compression des scores.
+
+**Comment le neutraliser** : trois techniques complémentaires. D'abord, **privilégie le mode pairwise** -- le biais de complaisance n'existe pas quand tu forces un choix entre A et B. Ensuite, fournis dans ton prompt des **exemples de mauvaises réponses avec leurs scores** : "Voici une réponse hors sujet -- elle mérite 2/10" et "Voici une réponse correcte mais incomplète -- elle mérite 5/10". Ça étire la distribution. Enfin, **exige la justification avant le score** (pas après) : le juge doit d'abord écrire son analyse, puis en déduire le score. Ça l'empêche de donner un 8 par défaut et de rationaliser après coup.
 
 ### Biais de format
 
-Les réponses bien formatées (listes à puces, titres, blocs de code) reçoivent des scores plus élevés, indépendamment de la qualité du contenu.
+Une réponse avec des listes à puces, des titres et des blocs de code reçoit un bonus de 0.5 à 1 point par rapport à une réponse en texte brut de même qualité. Le LLM-juge confond "bien présenté" et "meilleur contenu".
 
-**Solution** : incluez dans votre prompt d'évaluation un exemple de réponse bien formatée mais factuellement incorrecte, pour calibrer le juge.
+Exemple concret : deux réponses à "Comment implémenter un tri rapide ?". Réponse A : un paragraphe de texte qui explique clairement l'algorithme. Réponse B : la même explication, mais avec des titres `###`, des bullet points, et un bloc `python`. Le juge donne 7/10 à A et 9/10 à B, alors que le contenu est identique.
+
+**Comment le neutraliser** : inclus dans ton prompt d'évaluation un **contre-exemple calibrant** -- une réponse joliment formatée mais factuellement fausse, notée 2/10, avec la justification "le format ne compense pas les erreurs de contenu". Ça apprend au juge à dissocier forme et fond.
 
 <Callout type="warning" title={"L'inflation des scores, le piège principal"}>
-Le biais le plus dangereux en pratique : tout est noté 7+ par défaut, ce qui rend impossible de distinguer les bonnes réponses des excellentes. Contre-mesures efficaces : (1) mode pairwise plutôt que scoring direct, (2) exemples de réponses médiocres avec les scores correspondants, (3) demander au juge de raisonner étape par étape avant de noter.
+En pratique, le biais de complaisance est celui qui cause le plus de dégâts, parce qu'il rend tes évaluations inutilisables sans que tu t'en rendes compte. Tes scores ont l'air raisonnables (qui se méfie d'un 8/10 ?), mais ils ne discriminent plus rien. Contre-mesures : (1) mode pairwise plutôt que scoring direct, (2) exemples-ancres de mauvaises réponses avec leurs scores, (3) justification obligatoire avant le score.
 </Callout>
 
 ## Techniques avancées pour améliorer la fiabilité
 
 ### Chain-of-Thought évaluation
 
-Demandez au juge de **raisonner étape par étape** avant de donner son score :
-1. Analyser la question et ce qu'une bonne réponse doit contenir
+Demande au juge de **raisonner étape par étape** avant de donner son score. Le protocole en 4 étapes :
+1. Analyser la question et lister ce qu'une bonne réponse doit contenir
 2. Examiner la réponse sur chaque critère individuellement
-3. Justifier chaque évaluation avec des exemples concrets tirés de la réponse
-4. Donner le score final uniquement après cette analyse
+3. Citer des passages concrets de la réponse pour justifier chaque évaluation
+4. Donner le score final **uniquement après** cette analyse
 
-Cette approche améliore significativement la qualité et la cohérence des évaluations.
+Pourquoi ça marche ? Parce que ça empêche le juge de donner un score "au feeling" et de rationaliser ensuite. L'analyse préalable force la cohérence entre le raisonnement et la note.
 
 ### Multi-judge (panel de juges)
 
-Utilisez **plusieurs LLM différents** comme juges (GPT-5.4, Claude Sonnet 4.6, Gemini 3.1 Pro) et agrégez les résultats par vote majoritaire ou moyenne. Cela réduit les biais spécifiques à chaque modèle et augmente la robustesse.
+Utilise **plusieurs LLM différents** comme juges (GPT-5.4, Claude Sonnet 4.6, Gemini 3.1 Pro) et agrège par vote majoritaire. Si 2 juges sur 3 préfèrent la réponse A, c'est A qui gagne. Ça neutralise les biais propres à chaque modèle. Le coût est multiplié par 3, mais la fiabilité augmente suffisamment pour que ce soit rentable sur les évaluations qui comptent.
 
 ### Rubric-based évaluation (grille détaillée)
 
-Fournissez une **grille d'évaluation détaillée** avec des descriptions précises de ce que vaut chaque score. Par exemple : "5 = réponse parfaite, complète et concise", "3 = réponse correcte mais incomplète ou verbeuse", "1 = réponse incorrecte ou hors sujet". Cela réduit considérablement la subjectivité.
+Fournis une **grille d'évaluation détaillée** où chaque niveau de score est décrit précisément. Par exemple : "5 = répond à tous les aspects de la question, factuellement correct, concis" / "3 = correct mais omet un aspect important ou contient du remplissage" / "1 = hors sujet ou factuellement faux". Sans grille, deux runs du même juge sur les mêmes données peuvent donner des scores différents. Avec grille, la reproductibilité monte à 90%+.
 
 <Callout type="tip" title={"Le prompt d'évaluation fait toute la différence"}>
-La qualité du LLM-as-Judge dépend ÉNORMÉMENT du prompt d'évaluation. Un prompt vague ("cette réponse est-elle bonne ?") produit des résultats incohérents. Un prompt détaillé avec des critères explicites, des exemples pour chaque niveau de score, et une exigence de justification avant le score produit des évaluations **bien plus fiables et reproductibles**.
+La qualité du LLM-as-Judge dépend ÉNORMÉMENT du prompt d'évaluation. Un prompt vague ("cette réponse est-elle bonne ?") donne des résultats incohérents. Un prompt détaillé avec des critères explicites, des exemples-ancres pour chaque niveau de score, et une exigence de justification **avant** le score produit des évaluations bien plus fiables et reproductibles. Investis 2 heures sur ton prompt d'évaluation -- c'est le meilleur ROI de tout ton pipeline d'éval.
 </Callout>
 
 ## Frameworks et outils
 
-- **RAGAS** : framework d'évaluation spécialisé pour les systèmes RAG (faithfulness, relevance, context recall)
-- **DeepEval** : framework open source avec des métriques LLM-as-Judge prédéfinies et personnalisables
-- **Promptfoo** : outil d'évaluation de prompts avec support LLM-as-Judge et comparaisons automatiques
-- **LangSmith Evaluators** : évaluateurs intégrés à la plateforme LangSmith, avec interface visuelle
+- **RAGAS** : framework spécialisé pour les systèmes RAG -- évalue la fidélité aux sources, la pertinence et le rappel contextuel
+- **DeepEval** : framework open source avec des métriques LLM-as-Judge prédéfinies et personnalisables, bien intégré aux pipelines CI/CD
+- **Promptfoo** : outil d'évaluation de prompts avec support LLM-as-Judge, comparaisons automatiques, et interface visuelle pour analyser les résultats
+- **LangSmith Evaluators** : évaluateurs intégrés à la plateforme LangSmith, avec traçabilité complète de chaque évaluation
 
 ## Bonnes pratiques pour un LLM-as-Judge fiable
 
-- **Calibrer sur un échantillon humain** : comparez les jugements du LLM-juge avec des annotations humaines sur 100-200 exemples. Si la corrélation est faible, ajustez votre prompt d'évaluation.
-- **Documenter les critères** : des critères explicites, partagés avec l'équipe, et versionnés. Tout le monde doit évaluer la même chose.
-- **Atténuer activement les biais** : mode pairwise, panel de plusieurs juges, inversion de l'ordre des réponses
-- **Exiger la justification avant le score** : le juge doit d'abord expliquer son raisonnement, puis donner le score. Ça force la cohérence.
-- **Utiliser un juge au moins aussi capable** : le modèle juge doit être au moins du niveau des modèles évalués. Un petit modèle ne peut pas juger un gros modèle de manière fiable.
-- **Combiner avec des évaluations humaines** : pour les décisions critiques (mise en production, comparaison finale), l'humain complète le LLM-juge sur un échantillon stratégique
+- **Calibrer sur un échantillon humain** : compare les jugements du LLM-juge avec des annotations humaines sur 100-200 exemples. Si la corrélation est en dessous de 75%, retravaille ton prompt d'évaluation avant d'aller plus loin.
+- **Documenter les critères** : des critères explicites, partagés avec l'équipe, et versionnés dans ton repo. Tout le monde doit évaluer la même chose avec les mêmes standards.
+- **Atténuer activement les biais** : mode pairwise, panel de plusieurs juges, inversion systématique de l'ordre des réponses.
+- **Exiger la justification avant le score** : le juge doit d'abord écrire son analyse, puis en déduire le score. Pas l'inverse. Ça force la cohérence.
+- **Utiliser un juge au moins aussi capable** : un modèle 8B paramètres ne peut pas évaluer les réponses d'un modèle frontier. Le juge doit être au même niveau ou au-dessus.
+- **Combiner avec des évaluations humaines** : pour les décisions critiques (mise en production, comparaison finale), l'humain complète le LLM-juge sur un échantillon stratégique de 50-100 exemples.
 
-Le LLM-as-Judge n'est pas un remplacement parfait de l'évaluation humaine, mais c'est un outil extraordinairement utile pour itérer rapidement et à moindre coût pendant le développement.
+Le LLM-as-Judge n'est pas un remplacement parfait de l'évaluation humaine, mais c'est un outil extraordinairement puissant pour itérer rapidement et à moindre coût pendant le développement. Maîtrise ses biais, et tu as un pipeline d'évaluation qui tourne 100x plus vite qu'une équipe d'annotateurs.
