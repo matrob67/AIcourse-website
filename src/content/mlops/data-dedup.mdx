@@ -5,14 +5,14 @@ description: "Détectez et supprimez les doublons de vos données d'entraînemen
 
 ## Le problème : vos données sont truffées de doublons
 
-Common Crawl, la source de données web la plus utilisée pour entraîner les LLM, contient entre 30 et 50% de doublons ou quasi-doublons. Pages miroirs, contenu syndiqué copié sur des dizaines de sites, templates e-commerce quasi-identiques avec juste le nom du produit qui change... Si vous entraînez un modèle sur ces données brutes, vous gaspillez massivement du compute sur de l'information redondante.
+Common Crawl, la source de données web la plus utilisée pour entraîner les LLM, contient entre 30 et 50% de doublons ou quasi-doublons. Pages miroirs, contenu syndiqué copié sur des dizaines de sites, templates e-commerce quasi-identiques avec juste le nom du produit qui change... Si tu entraînes un modèle sur ces données brutes, tu gaspilles massivement du compute sur de l'information redondante.
 
 Et les conséquences vont bien au-delà du gaspillage :
 
 - **Mémorisation** : le modèle apprend par cœur les passages répétés au lieu de généraliser. Il peut recracher verbatim des paragraphes entiers de ses données d'entraînement.
-- **Biais amplifiés** : les sources surreprésentées dominent le modèle. Si 30% de vos données viennent de Wikipédia parce que chaque page est dupliquée 5 fois, votre modèle aura un biais encyclopédique.
-- **Gaspillage de compute** : des tokens dupliqués n'apportent aucune information nouvelle. Vous payez le même coût GPU pour un apprentissage nul.
-- **Évaluation faussée** : si des exemples de votre test set apparaissent dans le train set (via des doublons), vos métriques mentent. Vous croyez que votre modèle généralise, alors qu'il récite.
+- **Biais amplifiés** : les sources surreprésentées dominent le modèle. Si 30% de tes données viennent de Wikipédia parce que chaque page est dupliquée 5 fois, ton modèle aura un biais encyclopédique.
+- **Gaspillage de compute** : des tokens dupliqués n'apportent aucune information nouvelle. Tu paies le même coût GPU pour un apprentissage nul.
+- **Évaluation faussée** : si des exemples de ton test set apparaissent dans le train set (via des doublons), tes métriques mentent. Tu crois que ton modèle généralise, alors qu'il récite.
 
 <Callout type="info" title="Impact mesuré en pratique">
 Les études sur les grands modèles de langage montrent systématiquement : dédupliquer les données d'entraînement améliore la perplexité de 5-10% à volume de tokens constant, et réduit significativement la mémorisation verbatim. C'est l'une des interventions les plus rentables sur la qualité d'un dataset.
@@ -65,7 +65,7 @@ Supprimez les documents provenant de la même URL après normalisation : retrait
 
 ### Le problème des quasi-doublons
 
-Un document identique à 95% n'est pas identique à 100%, mais c'est quand même un doublon pour vos besoins d'entraînement. Il vous faut une **mesure de similarité approximative** qui passe à l'échelle.
+Un document identique à 95% n'est pas identique à 100%, mais c'est quand même un doublon pour tes besoins d'entraînement. Il te faut une **mesure de similarité approximative** qui passe à l'échelle.
 
 ### Similarité de Jaccard : l'idée fondatrice
 
@@ -73,7 +73,7 @@ Pour deux ensembles A et B :
 
 $$J(A, B) = \frac{|A \cap B|}{|A \cup B|}$$
 
-Représentez chaque document comme un ensemble de **n-grams** (sous-séquences de n mots consécutifs, typiquement n=5). La similarité de Jaccard entre deux ensembles de n-grams mesure le recouvrement textuel entre les documents.
+Représente chaque document comme un ensemble de **n-grams** (sous-séquences de n mots consécutifs, typiquement n=5). La similarité de Jaccard entre deux ensembles de n-grams mesure le recouvrement textuel entre les documents.
 
 **Le problème** : comparer toutes les paires de documents = O(N^2). Pour un milliard de documents, c'est environ 10^18 comparaisons. Totalement impraticable.
 
@@ -81,7 +81,7 @@ Représentez chaque document comme un ensemble de **n-grams** (sous-séquences d
 
 L'idée : au lieu de stocker tous les n-grams d'un document (potentiellement des milliers), créez une **signature compacte** de taille fixe.
 
-Choisissez k fonctions de hachage aléatoires. Pour chaque document, appliquez les k fonctions à tous ses n-grams et gardez uniquement le minimum pour chaque fonction (d'où le nom "MinHash"). La signature d'un document = ces k valeurs minimales.
+Choisis k fonctions de hachage aléatoires. Pour chaque document, appliquez les k fonctions à tous ses n-grams et gardez uniquement le minimum pour chaque fonction (d'où le nom "MinHash"). La signature d'un document = ces k valeurs minimales.
 
 **La propriété mathématique fondamentale** : $\Pr[h_{min}(A) = h_{min}(B)] = J(A, B)$
 
@@ -93,9 +93,9 @@ Avec k fonctions de hachage, vous estimez la similarité de Jaccard avec une var
 
 ### LSH : éviter de comparer toutes les paires
 
-Vous avez maintenant des signatures compactes, mais comparer toutes les paires reste O(N^2). C'est là qu'intervient le **LSH** (Locality-Sensitive Hashing).
+Tu as maintenant des signatures compactes, mais comparer toutes les paires reste O(N^2). C'est là qu'intervient le **LSH** (Locality-Sensitive Hashing, "hachage sensible à la localité").
 
-Divisez les k valeurs de la signature en **b bandes** de **r lignes** (k = b x r). Pour chaque bande, hachez les r valeurs ensemble dans une table de hachage. Deux documents sont **candidats** (potentiels doublons) s'ils partagent au moins une bande identique.
+Divise les k valeurs de la signature en **b bandes** de **r lignes** (k = b x r). Pour chaque bande, hachez les r valeurs ensemble dans une table de hachage. Deux documents sont **candidats** (potentiels doublons) s'ils partagent au moins une bande identique.
 
 Ensuite, comparez en détail uniquement les paires candidates. Le nombre de candidats est drastiquement inférieur au nombre total de paires.
 

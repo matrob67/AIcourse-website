@@ -5,16 +5,16 @@ description: "Chaque variante améliore BERT d'une façon différente: recette d
 
 ## Après BERT: la ruée des variantes
 
-Après octobre 2018, c'est la fiesta. Tout le monde veut sa version de BERT. Mais quatre variantes vraiment marquantes nous ont appris des leçons différentes sur comment faire des modèles de langage.
+Après octobre 2018, c'est la fiesta. Tout le monde veut sa version de BERT. Mais quatre variantes vraiment marquantes nous ont appris des leçons différentes sur comment faire de meilleurs modèles de langage.
 
 
 ## RoBERTa: la recette secrète (ou: BERT était mal entraîné)
 
 ### La découverte humiliante
 
-**RoBERTa** (Facebook, 2019) fait quelque chose de bizarre: elle ne **change rien** à l'architecture de BERT. Zéro modification. Même nombre de couches, même dimensions, tout identique.
+**RoBERTa** (Robustly Optimized BERT Pretraining Approach, Facebook, 2019) fait quelque chose de bizarre : il ne **change rien** à l'architecture de BERT. Zéro modification. Même nombre de couches, mêmes dimensions, tout identique.
 
-Et pourtant: **elle casse les records de BERT**.
+Et pourtant : **il casse les records de BERT**.
 
 Pourquoi? Parce que BERT était **sous-optimisé**. Les choix d'entraînement étaient suboptimaux. Avec une meilleure recette, même architecture = bien mieux.
 
@@ -39,9 +39,9 @@ RoBERTa utilise des batches 8 fois plus gros (2560 au lieu de 256) pour mieux ex
 
 ### La leçon
 
-C'est humble : les meilleures améliorations ne viennent pas de nouvelles idées. Elles viennent de **faire les basics mieux**. Attention aux papiers qui débutent par "on change une petite chose et ça marche !" — souvent c'est juste un meilleur entraînement de la baseline.
+C'est humble : les meilleures améliorations ne viennent pas de nouvelles idées. Elles viennent de **faire les bases mieux**. Attention aux papiers qui débutent par "on change une petite chose et ça marche !" -- souvent c'est juste un meilleur entraînement de la baseline.
 
-**Résultat**: RoBERTa atteint ~88% sur GLUE (vs 81% pour BERT). Un gap énorme. Reste un des meilleurs encoders à ce jour.
+**Résultat** : RoBERTa atteint ~88 % sur GLUE (vs 81 % pour BERT). Un écart énorme. Il reste un des meilleurs encodeurs à ce jour.
 
 
 
@@ -53,18 +53,18 @@ RoBERTa teste **chaque** changement séparément: data, masking, batch size, etc
 
 ### Le problème: BERT est énorme
 
-BERT-large = 340 millions de paramètres. C'est 400 MB à charger en mémoire. Ça ne tient sur:
-- Pas sur un téléphone (généralement 2-4 GB RAM libre)
-- Difficilement sur une petite GPU (8GB VRAM)
-- Edge devices: impossible
+BERT-large = 340 millions de paramètres. C'est 400 Mo à charger en mémoire. Ça ne tient pas :
+- Sur un téléphone (généralement 2-4 Go de RAM libre)
+- Difficilement sur un petit GPU (8 Go de VRAM)
+- Sur les appareils embarqués (edge devices) : impossible
 
 **ALBERT** (A Lite BERT, Google 2020) dit: "On peut faire mieux. Drastiquement."
 
 ### Technique 1: l'embedding factorisé (le gaspillage invisible)
 
-Dans BERT, la **table d'embeddings** (transformer tokens en vecteurs) a les mêmes dimensions que les couches cachées: 30 000 mots × 768 dimensions = 23 millions de paramètres!
+Dans BERT, la **table d'embeddings** (qui transforme les tokens en vecteurs) a les mêmes dimensions que les couches cachées : 30 000 mots x 768 dimensions = 23 millions de paramètres !
 
-Mais l'embedding ne voit aucun contexte. C'est juste un lookup. Pourquoi le faire 768-dimensionnel? Ça ne fait rien.
+Mais l'embedding ne voit aucun contexte. C'est juste une table de correspondance (lookup). Pourquoi utiliser 768 dimensions ? C'est du gaspillage pur.
 
 ALBERT découple astucieusement:
 - Embedding petit (128 dimensions)
@@ -89,11 +89,11 @@ Trade-off: l'inférence reste lente (toujours 12 couches à calculer), mais le s
 
 ### SOP: apprendre quand NSP échoue
 
-ALBERT remplace l'objectif NSP (qui, rappel, ne marche pas bien) par **SOP** (Sentence Order Prediction) :
+ALBERT remplace l'objectif NSP (qui, pour rappel, ne marche pas bien) par **SOP** (Sentence Order Prediction, prédiction de l'ordre des phrases) :
 
 Au lieu de demander "Est-ce que ces deux phrases sont consécutives ?", demande : "Est-ce que ces deux phrases sont dans le bon ordre ?"
 
-C'est plus dur (pas juste "consécutif", mais "correct order"). Résultat : signal plus fort, performance meilleure.
+C'est plus dur (pas juste "est-ce consécutif ?", mais "est-ce dans le bon ordre ?"). Résultat : signal d'apprentissage plus fort, meilleure performance.
 
 <Callout type="tip" title="Paramètres vs calcul">
 ALBERT réduit drastiquement les paramètres (stockage/mémoire) mais garde le calcul similaire (inférence). Parfois tu as besoin du premier, pas du deuxième. Important de distinguer.
@@ -147,20 +147,20 @@ Même au-delà de BERT, il y a de la marge. Des améliorations fines de l'attent
 
 ### Le problème réaliste
 
-BERT-base = 110 millions de paramètres = 400 MB de fichier. C'est lourd pour:
-- Applications mobiles (3G, batterie)
-- Edge devices (routeurs, montres, cars)
-- Serveurs sous charge (besoin de servir 1000 requêtes/sec, chaque BERT = latence)
+BERT-base = 110 millions de paramètres = 400 Mo de fichier. C'est lourd pour :
+- Les applications mobiles (réseau 3G, batterie limitée)
+- Les appareils embarqués (routeurs, montres, voitures)
+- Les serveurs sous charge (besoin de servir 1 000 requêtes/sec, chaque BERT ajoute de la latence)
 
-Quand tu as des millions d'utilisateurs, 400 MB × 1 million = 400 TB de mémoire. Coûteux.
+Quand tu as des millions d'utilisateurs, 400 Mo x 1 million d'instances = 400 To de mémoire. Extrêmement coûteux.
 
 ### La solution: distillation (apprendre du meilleur)
 
-**DistilBERT** (Hugging Face 2019) utilise une technique appelée **distillation**.
+**DistilBERT** (Hugging Face, 2019) utilise une technique appelée **distillation de connaissances** (knowledge distillation).
 
 Idée: prends un grand modèle (professeur = BERT), entraîne un petit modèle (élève) à l'imiter.
 
-Le trick: l'élève ne copie pas juste les **réponses dures**. Exemple classique: classification binaire (spam/not spam).
+L'astuce : l'élève ne copie pas juste les **réponses dures** (la classe prédite). Il apprend les **probabilités complètes** du professeur. Exemple classique avec une classification binaire (spam / non-spam) :
 
 | Source | Prédiction |
 |---|---|
@@ -168,9 +168,9 @@ Le trick: l'élève ne copie pas juste les **réponses dures**. Exemple classiqu
 | Réponse dure (argmax) | SPAM |
 | DistilBERT (élève) apprend | "BERT n'est pas 100% certain. Il dit 78%." |
 
-Ces **probabilités molles** (soft probabilities) contiennent de l'information. BERT hésite entre "chat" et "chien"? C'est normal (synonymes), et DistilBERT apprend cette hésitation. Ça crée un modèle plus nuancé, pas juste "hardcoded answers".
+Ces **probabilités molles** (soft probabilities) contiennent de l'information précieuse. BERT hésite entre "chat" et "chien" ? C'est normal (concepts proches), et DistilBERT apprend cette hésitation. Ça crée un modèle plus nuancé, pas juste des réponses figées.
 
-**En termes techniques** : au lieu de l'objectif standard (classification dure), DistilBERT minimise la divergence KL entre les distributions de BERT et DistilBERT.
+**En termes techniques** : au lieu de l'objectif standard (classification dure), DistilBERT minimise la divergence KL (Kullback-Leibler, une mesure de distance entre distributions de probabilité) entre les distributions de BERT et celles de DistilBERT.
 
 ### Les résultats pratiques
 
@@ -221,5 +221,5 @@ Ces quatre leçons forment le **toolkit pour optimiser les modèles modernes**. 
 - On regarde DeBERTa (peut-on raffiner l'architecture?)
 - On regarde DistilBERT (peut-on distiller?)
 
-Les LLM décoder-only (GPT, Claude) dominent maintenant pour la génération. Mais pour la **compréhension ciblée** (classification, extraction, similarité), les encoders BERT restent les champions. Et ces optimisations continuent de s'appliquer.
+Les LLM décoder-only (GPT, Claude) dominent maintenant pour la génération. Mais pour la **compréhension ciblée** (classification, extraction, similarité), les encodeurs BERT restent les champions. Et ces optimisations continuent de s'appliquer.
 

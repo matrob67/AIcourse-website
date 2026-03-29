@@ -35,12 +35,12 @@ Dans un Transformer, le TP s'applique aux grosses multiplications matricielles (
 
 L'attention multi-tête se prête naturellement au TP car elle est composée de H têtes **indépendantes**. La distribution est triviale :
 
-- GPU 0 calcule les têtes 0 a H/2-1
-- GPU 1 calcule les têtes H/2 a H-1
+- GPU 0 calcule les têtes 0 à H/2-1
+- GPU 1 calcule les têtes H/2 à H-1
 
 Chaque GPU traite ses têtes de manière totalement indépendante (zéro communication pendant le calcul des scores d'attention). C'est seulement après, lors de la projection de sortie, qu'un **all-reduce** combine les résultats.
 
-C'est l'endroit ou le TP est le plus naturel et le plus efficace dans un Transformer.
+C'est l'endroit où le TP est le plus naturel et le plus efficace dans un Transformer.
 
 ## TP dans la couche MLP
 
@@ -62,7 +62,7 @@ L'architecture proposée par Megatron-LM place stratégiquement les all-reduce p
 
 À chaque all-reduce, on communique un tenseur de taille `B * L * d` (batch x séquence x dimension cachée). Pour P GPU, le volume total est approximativement `2 * (P-1)/P * B * L * d`.
 
-Le point critique ici : contrairement a DDP ou les communications peuvent se chevaucher avec le calcul, en TP les communications sont **sur le chemin critique**. Le GPU calcule, puis **attend** que l'all-reduce finisse avant de passer à la couche suivante. C'est pour ça que la bande passante inter-GPU est si importante.
+Le point critique ici : contrairement à DDP où les communications peuvent se chevaucher avec le calcul, en TP les communications sont **sur le chemin critique**. Le GPU calcule, puis **attend** que l'all-reduce finisse avant de passer à la couche suivante. C'est pour ça que la bande passante inter-GPU est si importante.
 
 <Callout type="warning" title="TP demande NVLink">
 Le TP ne doit être utilisé qu'entre GPU du même nœud connectés par NVLink (900 GB/s sur H100). Entre nœuds via InfiniBand (100-400 Gb/s), la latence et la bande passante limitée créent un goulot d'étranglement qui annule les bénéfices du parallélisme. Règle d'or : TP intra-nœud uniquement.

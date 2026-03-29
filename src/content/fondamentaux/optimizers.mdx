@@ -5,9 +5,9 @@ description: "De SGD à Adam : les optimizers qui s'adaptent à chaque poids. Co
 
 ## Introduction : Pourquoi un optimiseur universel ne suffit pas
 
-Avec SGD classique, **tous** les poids du réseau utilisent le même learning rate. Mais quand on y réfléchit, ça n'a aucun sens.
+Avec le SGD (Stochastic Gradient Descent, descente de gradient stochastique) classique, **tous** les poids du réseau utilisent le même learning rate. Mais quand on y réfléchit, ça n'a aucun sens.
 
-Dans un réseau de neurones, certains poids sont sollicités en permanence et reçoivent des gradients importants à chaque étape d'entraînement. D'autres, au contraire, reçoivent des gradients minuscules parce qu'ils sont associés à des features rares ou très spécifiques. Pense à un embedding de mots : le mot "le" apparaît dans presque chaque phrase (gradients fréquents et gros), tandis que le mot "stethoscope" apparaît rarement (gradients rares et petits).
+Dans un réseau de neurones, certains poids sont sollicités en permanence et reçoivent des gradients importants à chaque étape d'entraînement. D'autres, au contraire, reçoivent des gradients minuscules parce qu'ils sont associés à des features rares ou très spécifiques. Pense à un embedding de mots : le mot "le" apparaît dans presque chaque phrase (gradients fréquents et gros), tandis que le mot "stéthoscope" apparaît rarement (gradients rares et petits).
 
 Appliquer le même learning rate à ces deux types de poids est une aberration. Un learning rate assez grand pour faire bouger les poids rares va faire exploser les poids fréquents. Un learning rate assez petit pour stabiliser les poids fréquents va laisser les poids rares quasiment immobiles.
 
@@ -109,7 +109,7 @@ Pour l'entraînement sur **milliers de GPUs** (entraînement industriel), on uti
 
 Problème : avec Adam, augmenter la taille du batch au-delà d'un seuil **dégrade la qualité finale du modèle**, même en ajustant le learning rate. C'est contre-intuitif mais bien documenté.
 
-**LAMB** (Layer-wise Adaptive Moments Optimizer) normalise chaque couche indépendamment :
+**LAMB** (Layer-wise Adaptive Moments optimizer for Batch training) normalise chaque couche indépendamment :
 
 $$
 \theta_t = \theta_{t-1} - \eta \cdot \frac{\|\theta_{t-1}\|}{\|u_t\|} \cdot u_t
@@ -117,7 +117,7 @@ $$
 
 Chaque couche maintient une "échelle" appropriée même avec un batch énorme.
 
-Résultat : BERT entraîné en **76 minutes** au lieu de 3 jours sur plusieurs milliers de TPUs.
+Résultat : BERT (Bidirectional Encoder Representations from Transformers) entraîné en **76 minutes** au lieu de 3 jours sur plusieurs milliers de TPU (Tensor Processing Units, les processeurs spécialisés de Google).
 
 <Callout type="warning" title={"LAMB n'est pas pour toi"}>
 LAMB est conçu pour l'entraînement distribué massif. Si tu entraînes sur 1-4 GPU avec des batchs de 32-512, tu n'en as pas besoin. AdamW est meilleur pour toi.
@@ -125,7 +125,7 @@ LAMB est conçu pour l'entraînement distribué massif. Si tu entraînes sur 1-4
 
 ## Tableau comparatif rapide
 
-| Optimiser | Quand l'utiliser | Avantage | Piège |
+| Optimiseur | Quand l'utiliser | Avantage | Piège |
 |---|---|---|---|
 | SGD + Momentum | Vision classique (ResNet) | Généralise parfois mieux | Sensible au learning rate |
 | Adam | Prototypage rapide | Converge vite, peu de réglage | Weight decay cassé |
@@ -151,16 +151,16 @@ Pourquoi le decay ? À la fin de l'entraînement, le modèle est proche d'un bon
 
 ### Mémoire
 
-Adam stocke deux états supplémentaires (m et v) pour chaque poids. Pour un modèle de 7 milliards de poids, c'est :
+Adam stocke deux états supplémentaires (m et v) pour chaque poids. Pour un modèle de 7 milliards de paramètres (7B), c'est :
 
 | Composant | Calcul | Mémoire |
 |-----------|--------|---------|
-| Poids | $7B \times 4$ bytes | 28 Go |
-| $m$ (momentum) | $7B \times 4$ bytes | 28 Go |
-| $v$ (variance) | $7B \times 4$ bytes | 28 Go |
+| Poids | $7 \times 10^9 \times 4$ octets | 28 Go |
+| $m$ (momentum) | $7 \times 10^9 \times 4$ octets | 28 Go |
+| $v$ (variance) | $7 \times 10^9 \times 4$ octets | 28 Go |
 | **Total** | | **84 Go** (au lieu de 28 Go) |
 
-C'est **3x plus de RAM** que de simplement stocker les poids. Pour les très gros modèles, c'est un vrai problème : l'optimiseur consomme plus de mémoire que le modèle lui-même. Des variantes comme **Adafactor** (utilisé par Google pour T5) réduisent cette empreinte en ne stockant que des approximations des statistiques m et v au lieu des états complets. Mais en termes de performance d'entraînement, AdamW reste le standard de référence.
+C'est **3 fois plus de mémoire** que de simplement stocker les poids. Pour les très gros modèles, c'est un vrai problème : l'optimiseur consomme plus de mémoire que le modèle lui-même. Des variantes comme **Adafactor** (utilisé par Google pour T5) réduisent cette empreinte en ne stockant que des approximations des statistiques m et v au lieu des états complets. Mais en termes de performance d'entraînement, AdamW reste le standard de référence.
 
 ## Résumé pratique
 

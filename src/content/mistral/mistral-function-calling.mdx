@@ -7,28 +7,28 @@ description: "Appels de fonctions avec l'API Mistral : définition d'outils en J
 
 ## Function Calling : donner des mains à votre IA
 
-Un LLM seul ne peut que générer du texte. Il ne connaît pas la meteo actuelle. Il ne peut pas interroger votre base de données. Il ne peut pas envoyer un email ni créer un ticket Jira.
+Un LLM (Large Language Model) seul ne peut que générer du texte. Il ne connaît pas la météo actuelle. Il ne peut pas interroger votre base de données. Il ne peut pas envoyer un email ni créer un ticket Jira.
 
-Le **Function Calling** change ça : vous definissez des outils (fonctions), et le modèle peut les **appeler** quand c'est pertinent. Soudainement, l'IA a des mains. Elle peut interagir avec le monde réel, récupérer des informations fraîches, et déclencher des actions concrètes.
+Le **Function Calling** change ça : vous définissez des outils (fonctions), et le modèle peut les **appeler** quand c'est pertinent. Soudainement, l'IA a des mains. Elle peut interagir avec le monde réel, récupérer des informations fraîches, et déclencher des actions concrètes.
 
 ### Le flux complet, étape par étape
 
 Comprendre le flux est essentiel, car il y a une subtilité importante :
 
-1. **Vous definissez des outils** : vous decrivez des fonctions avec leur nom, description et paramètres (en JSON Schema)
-2. **L'utilisateur pose une question** qui nécessité un outil ("Quel temps fait-il a Paris ?")
-3. **Le modèle identifié le bon outil** et génère les arguments sous forme de JSON
-4. **Votre application execute la fonction** (appel à une API meteo, requete SQL, etc.)
+1. **Vous définissez des outils** : vous décrivez des fonctions avec leur nom, description et paramètres (en JSON Schema)
+2. **L'utilisateur pose une question** qui nécessite un outil ("Quel temps fait-il à Paris ?")
+3. **Le modèle identifie le bon outil** et génère les arguments sous forme de JSON
+4. **Votre application exécute la fonction** (appel à une API météo, requête SQL, etc.)
 5. **Vous renvoyez le résultat** au modèle
-6. **Le modèle formule la réponse finale** en integrant le résultat de la fonction
+6. **Le modèle formule la réponse finale** en intégrant le résultat de la fonction
 
 <Callout type="info" title="Point crucial : qui execute quoi ?">
-Le modèle ne "execute" jamais la fonction lui-même. Il génère du JSON descriptif : "appelle la fonction X avec les arguments Y". C'est **votre application** qui execute. Le modèle est le cerveau qui décidé quoi faire. Votre application est les mains qui agissent. Cette séparation est fondamentale pour la sécurité.
+Le modèle n'exécute jamais la fonction lui-même. Il génère du JSON descriptif : "appelle la fonction X avec les arguments Y". C'est **votre application** qui exécute. Le modèle est le cerveau qui décide quoi faire. Votre application est les mains qui agissent. Cette séparation est fondamentale pour la sécurité.
 </Callout>
 
 ### Définition des outils en JSON Schema
 
-Les outils sont définis dans la requete API, au format JSON Schema :
+Les outils sont définis dans la requête API, au format JSON Schema :
 
 ```json
 {
@@ -57,76 +57,76 @@ Les outils sont définis dans la requete API, au format JSON Schema :
 
 **Bonnes pratiques pour la définition d'outils** :
 - **Descriptions claires et détaillées** : c'est le principal levier de qualité. Le modèle choisit l'outil en se basant sur la description. Une description vague = un mauvais routage.
-- **Paramètres bien documentes** : decrivez le format attendu, les contraintes, les valeurs par defaut
+- **Paramètres bien documentés** : décrivez le format attendu, les contraintes, les valeurs par défaut
 - **Enum pour les valeurs fixes** : utilisez `enum` quand les valeurs possibles sont connues à l'avance
-- **Limitez le nombre d'outils** : au-dela de 20 outils, le modèle commence à se tromper plus souvent dans son choix. Si vous en avez plus, regroupez-les logiquement.
+- **Limitez le nombre d'outils** : au-delà de 20 outils, le modèle commence à se tromper plus souvent dans son choix. Si vous en avez plus, regroupez-les logiquement.
 
-### Appels paralleles : plusieurs outils en un seul tour
+### Appels parallèles : plusieurs outils en un seul tour
 
 Mistral supporte l'appel de **plusieurs outils simultanément** dans une seule réponse.
 
-Exemple concret : l'utilisateur demande "Compare la meteo de Paris et Londres".
+Exemple concret : l'utilisateur demande "Compare la météo de Paris et Londres".
 1. Le modèle génère **deux** appels `get_weather` en même temps (un pour Paris, un pour Londres)
-2. Votre application execute les deux en parallele
+2. Votre application exécute les deux en parallèle
 3. Vous renvoyez les deux résultats
 4. Le modèle compare et formule sa réponse
 
-**L'avantage** : au lieu de deux allers-retours séquentiels (question → outil 1 → réponse → outil 2 → réponse finale), tout se fait en un seul aller-retour. La latence est divisee par deux ou plus.
+**L'avantage** : au lieu de deux allers-retours séquentiels (question, outil 1, réponse, outil 2, réponse finale), tout se fait en un seul aller-retour. La latence est divisée par deux ou plus.
 
-<Callout type="tip" title="Parallelisation = gain de latence massif">
-Sans appels paralleles, chaque outil nécessité un aller-retour complet avec le modèle. Avec les appels paralleles, plusieurs outils sont invoques en un seul echange. Pour les cas où le modèle a besoin de 3 ou 4 outils simultanément, le gain de latence est considerable.
+<Callout type="tip" title="Parallélisation = gain de latence massif">
+Sans appels parallèles, chaque outil nécessite un aller-retour complet avec le modèle. Avec les appels parallèles, plusieurs outils sont invoqués en un seul échange. Pour les cas où le modèle a besoin de 3 ou 4 outils simultanément, le gain de latence est considérable.
 </Callout>
 
 ### Les quatre patterns d'intégration
 
 **Outil unique** : un seul outil défini, le modèle l'utilise quand c'est pertinent.
-Exemple : un chatbot de support client qui consulte une base de connaissances. Simple, efficace, facile a debugger.
+Exemple : un chatbot de support client qui consulte une base de connaissances. Simple, efficace, facile à debugger.
 
 **Multi-outils** : plusieurs outils disponibles, le modèle choisit le bon selon la question.
-Exemple : un assistant qui gere l'agenda (consulter, créer, modifier), les emails (lire, envoyer), les tâches (créer, completer), et la recherche documentaire.
+Exemple : un assistant qui gère l'agenda (consulter, créer, modifier), les emails (lire, envoyer), les tâches (créer, compléter), et la recherche documentaire.
 
-**Outils chaînes** : le résultat d'un outil sert d'entree pour un autre.
-Exemple : chercher un client par nom → récupérer ses commandes → générer un rapport de synthese. Le modèle orchestre la sequence.
+**Outils chaînés** : le résultat d'un outil sert d'entrée pour un autre.
+Exemple : chercher un client par nom, récupérer ses commandes, générer un rapport de synthèse. Le modèle orchestre la séquence.
 
-**Agentique** : le modèle planifie une stratégie, execute une sequence d'outils, et adapte son plan en fonction des résultats intermédiaires. C'est le niveau le plus avancé, où le modèle a une véritable autonomie de décision (voir API Agents).
+**Agentique** : le modèle planifie une stratégie, exécute une séquence d'outils, et adapte son plan en fonction des résultats intermédiaires. C'est le niveau le plus avancé, où le modèle a une véritable autonomie de décision (voir API Agents).
 
 ### Gestion des erreurs : les trois cas problématiques
 
-**Mauvais outil choisi** : le modèle selectionne un outil inapproprie pour la question.
-Solution : ameliorez les descriptions des outils, ajoutez des exemples dans le system prompt, et assurez-vous que les outils ont des noms et descriptions clairement distincts.
+**Mauvais outil choisi** : le modèle sélectionne un outil inapproprié pour la question.
+Solution : améliorez les descriptions des outils, ajoutez des exemples dans le system prompt, et assurez-vous que les outils ont des noms et descriptions clairement distincts.
 
-**Paramètres invalides** : le modèle génère des arguments incorrects ou malformes.
-Solution : validez systématiquement les paramètres côté serveur avant d'executer. Si les arguments sont invalides, renvoyez un message d'erreur explicatif au modèle pour qu'il corrige.
+**Paramètres invalides** : le modèle génère des arguments incorrects ou malformés.
+Solution : validez systématiquement les paramètres côté serveur avant d'exécuter. Si les arguments sont invalides, renvoyez un message d'erreur explicatif au modèle pour qu'il corrige.
 
-**Echec de la fonction externe** : l'API que vous appelez est indisponible, la donnée n'existe pas, le service est en maintenance.
-Solution : renvoyez l'erreur formatee au modèle. Il peut alors informer l'utilisateur du problème ou proposer une approche alternative.
+**Échec de la fonction externe** : l'API que vous appelez est indisponible, la donnée n'existe pas, le service est en maintenance.
+Solution : renvoyez l'erreur formatée au modèle. Il peut alors informer l'utilisateur du problème ou proposer une approche alternative.
 
 <Callout type="warning" title="Sécurité : validez TOUJOURS les arguments">
-Un utilisateur malveillant peut tenter de manipuler le modèle via du prompt injection pour appeler une fonction non autorisee ou avec des arguments dangereux. Règles de base : validez les arguments côté serveur, implementez des contrôles d'autorisation, et ne permettez jamais d'actions destructives (suppression, envoi) sans confirmation humaine explicite.
+Un utilisateur malveillant peut tenter de manipuler le modèle via du prompt injection pour appeler une fonction non autorisée ou avec des arguments dangereux. Règles de base : validez les arguments côté serveur, implémentez des contrôles d'autorisation, et ne permettez jamais d'actions destructives (suppression, envoi) sans confirmation humaine explicite.
 </Callout>
 
 ### Comparaison avec les concurrents
 
-| Fonctionnalite | Mistral | OpenAI | Anthropic | Google |
+| Fonctionnalité | Mistral | OpenAI | Anthropic | Google |
 |---|---|---|---|---|
 | Function calling | Oui | Oui | Oui | Oui |
-| Appels paralleles | Oui | Oui | Oui | Oui |
+| Appels parallèles | Oui | Oui | Oui | Oui |
 | JSON Schema | Oui | Oui | Oui | Oui |
 | Forcer l'usage d'un outil | Oui | Oui | Oui | Oui |
 | Streaming des appels | Oui | Oui | Oui | Oui |
 
 Le function calling est devenu un standard de l'industrie. Mistral est totalement compatible, ce qui rend la migration depuis d'autres fournisseurs triviale.
 
-### Cas d'usage reels
+### Cas d'usage réels
 
-**E-commerce** : l'utilisateur demande une recommandation → le modèle cherche dans le catalogue → vérifié le stock → calcule les frais de livraison → propose la commande.
+**E-commerce** : l'utilisateur demande une recommandation, le modèle cherche dans le catalogue, vérifie le stock, calcule les frais de livraison, puis propose la commande.
 
-**RH** : un employe demande ses jours de conges restants → le modèle interroge le SIRH → vérifié les politiques de l'entreprise → propose les dates possibles → crée la demande.
+**RH** : un employé demande ses jours de congés restants, le modèle interroge le SIRH (Système d'Information des Ressources Humaines), vérifie les politiques de l'entreprise, propose les dates possibles, et crée la demande.
 
-**Data analytics** : un manager pose une question business → le modèle interroge la base de données → effectue les calculs → génère un graphique → exporte un rapport PDF.
+**Data analytics** : un manager pose une question business, le modèle interroge la base de données, effectue les calculs, génère un graphique, et exporte un rapport PDF.
 
-**Finance** : un analyste veut une synthese de marche → le modèle récupère les cours de bourse → calcule les indicateurs techniques → génère l'analyse avec les tendances.
+**Finance** : un analyste veut une synthèse de marché, le modèle récupère les cours de bourse, calcule les indicateurs techniques, et génère l'analyse avec les tendances.
 
 ---
 
-**Le Function Calling** transforme le modèle d'un générateur de texte passif en un agent capable d'interagir avec le monde reel. C'est la brique fondamentale de toute application IA utile en entreprise.
+**Le Function Calling** transforme le modèle d'un générateur de texte passif en un agent capable d'interagir avec le monde réel. C'est la brique fondamentale de toute application IA utile en entreprise.

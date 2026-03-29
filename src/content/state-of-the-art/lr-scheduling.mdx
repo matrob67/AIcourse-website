@@ -5,9 +5,9 @@ description: "Guide complet sur les stratégies de scheduling du learning rate p
 
 ## Le problème : quel learning rate à chaque étape ?
 
-Le learning rate (LR), c'est la taille du pas que fait ton modèle à chaque mise à jour des poids. Trop grand, il saute par-dessus les bonnes solutions. Trop petit, il avance à la vitesse d'un escargot.
+Le learning rate (LR), c'est la taille du pas que fait le modèle à chaque mise à jour des poids. Trop grand, il saute par-dessus les bonnes solutions. Trop petit, il avance à la vitesse d'un escargot.
 
-Mais le truc, c'est que **le bon LR change au cours de l'entraînement**. Imagine que tu descends une montagne dans le brouillard. Au début, tu ne connais pas le terrain : tu fais des petits pas prudents. Une fois que tu as une idée du relief, tu accélères. Et quand tu approches du fond de la vallée, tu ralentis pour ne pas la dépasser et remonter de l'autre côté.
+Mais le truc, c'est que **le bon LR change au cours de l'entraînement**. Imaginez que vous descendez une montagne dans le brouillard. Au début, vous ne connaissez pas le terrain : vous faites des petits pas prudents. Une fois que vous avez une idée du relief, vous accélérez. Et quand vous approchez du fond de la vallée, vous ralentissez pour ne pas la dépasser et remonter de l'autre côté.
 
 C'est exactement ce que fait le scheduling du learning rate : il adapte la taille du pas selon où on en est dans l'entraînement.
 
@@ -27,7 +27,7 @@ Exemple concret : avec lr_max=3e-4 et warmup de 1000 itérations :
 ### Pourquoi c'est nécessaire
 
 <Callout type="info" title={"Calibration de l'optimiseur"}>
-Adam maintient des statistiques internes (momentum et variance) des gradients pour décider de la direction et de l'amplitude des mises à jour. Au tout début, ces statistiques sont basées sur un seul batch --- elles sont donc très imprécises. C'est comme essayer d'estimer la météo d'un pays entier en regardant par ta fenêtre. Le warmup donne le temps à Adam de collecter suffisamment de données pour que ses estimations deviennent fiables, tout en gardant les mises à jour petites et sûres pendant cette période d'incertitude.
+Adam maintient des statistiques internes (momentum et variance) des gradients pour décider de la direction et de l'amplitude des mises à jour. Au tout début, ces statistiques sont basées sur un seul batch --- elles sont donc très imprécises. C'est comme essayer d'estimer la météo d'un pays entier en regardant par la fenêtre. Le warmup donne le temps à Adam de collecter suffisamment de données pour que ses estimations deviennent fiables, tout en gardant les mises à jour petites et sûres pendant cette période d'incertitude.
 </Callout>
 
 ### Durée typique
@@ -39,7 +39,7 @@ Adam maintient des statistiques internes (momentum et variance) des gradients po
 | > 10B | 2000-5000 itérations |
 | Batch énorme | Warmup plus long |
 
-Règle empirique : warmup ≈ 0.5% à 2% du nombre total d'itérations. Plus ton batch size est grand, plus le warmup doit être long, car chaque mise à jour à un impact plus important sur les poids.
+Règle empirique : warmup ≈ 0.5% à 2% du nombre total d'itérations. Plus le batch size est grand, plus le warmup doit être long, car chaque mise à jour a un impact plus important sur les poids.
 
 
 
@@ -57,10 +57,10 @@ Visuellement, c'est une courbe en cloche inversée : elle diminue lentement au d
 - **Milieu rapide** : la loss diminue moins vite, signe qu'on approche d'un minimum --- on réduit le LR pour affiner
 - **Fin douce** : on converge tout doucement vers un minimum local plus plat, ce qui favorise la généralisation (un minimum plat est plus robuste qu'un minimum étroit)
 
-L'analogie du sculpteur fonctionne bien ici : au début, tu dégrossis rapidement le bloc de marbre. Au milieu, tu sculptes les formes principales. Et à la fin, tu polis les détails avec des gestes minuscules.
+L'analogie du sculpteur fonctionne bien ici : au début, on dégrossit rapidement le bloc de marbre. Au milieu, on sculpte les formes principales. Et à la fin, on polit les détails avec des gestes minuscules.
 
 <Callout type="tip" title="Le standard de facto">
-Warmup + cosinus est utilisé par **LLaMA, GPT-3, Chinchilla, Mistral**, et la quasi-totalité des grands LLM. C'est la baseline d'or --- si tu ne sais pas quoi choisir, c'est celui-là.
+Warmup + cosinus est utilisé par **LLaMA, GPT-3, Chinchilla, Mistral**, et la quasi-totalité des grands LLM. C'est la baseline d'or --- si vous ne savez pas quoi choisir, c'est celui-là.
 </Callout>
 
 ## WSD : Warmup-Stable-Decay
@@ -73,12 +73,12 @@ Une alternative de plus en plus populaire qui divise l'entraînement en trois ph
 
 ### Avantage majeur : la flexibilité
 
-Avec le cosinus, tu dois déclarer le nombre total d'itérations T_total **avant** de commencer. Toute la courbe est calculée en fonction de cette durée. Si tu veux étendre l'entraînement parce que la loss continue de descendre ? Mauvaise nouvelle : tout le schedule doit être recalculé.
+Avec le cosinus, il faut déclarer le nombre total d'itérations T_total **avant** de commencer. Toute la courbe est calculée en fonction de cette durée. Si on veut étendre l'entraînement parce que la loss continue de descendre ? Mauvaise nouvelle : tout le schedule doit être recalculé.
 
-Avec WSD, la phase stable à une durée arbitraire. Tu peux entraîner 100K, 500K, ou 2 millions d'itérations dans cette phase --- quand tu es satisfait, tu déclenches simplement le decay. C'est comme un robinet que tu peux fermer quand tu veux, au lieu d'un minuteur qu'il faut programmer à l'avance.
+Avec WSD, la phase stable a une durée arbitraire. On peut entraîner 100K, 500K, ou 2 millions d'itérations dans cette phase --- quand on est satisfait, on déclenche simplement le decay. C'est comme un robinet qu'on peut fermer quand on veut, au lieu d'un minuteur qu'il faut programmer à l'avance.
 
 <Callout type="paper" title="WSD pour la continuation">
-Scénario classique : tu termines un entraînement avec cosinus, et tu réalises que le modèle pourrait encore s'améliorer. Problème : le LR est déjà au minimum. Remonter le LR risque de déstabiliser le modèle. Avec WSD, tu es dans la phase stable (LR constant), donc tu peux simplement continuer et lancer un nouveau decay quand tu veux. C'est beaucoup plus pragmatique.
+Scénario classique : on termine un entraînement avec cosinus, et on réalise que le modèle pourrait encore s'améliorer. Problème : le LR est déjà au minimum. Remonter le LR risque de déstabiliser le modèle. Avec WSD, on est dans la phase stable (LR constant), donc on peut simplement continuer et lancer un nouveau decay quand on veut. C'est beaucoup plus pragmatique.
 </Callout>
 
 ### Comparaison
@@ -121,7 +121,7 @@ Le LR oscille en cosinus avec des redémarrages périodiques : quand il atteint 
 
 ### Scaling avec le batch size
 
-Quand tu augmentes le batch size, chaque gradient est estimé sur plus d'exemples et donc plus stable. On peut se permettre un pas plus grand. C'est la **linear scaling rule** :
+Quand on augmente le batch size, chaque gradient est estimé sur plus d'exemples et donc plus stable. On peut se permettre un pas plus grand. C'est la **linear scaling rule** :
 
 $$lr_{\text{new}} = lr_{\text{base}} \times \frac{\text{new\_batch}}{\text{base\_batch}}$$
 
@@ -129,7 +129,7 @@ Exemple : batch x8 => LR x8, mais avec un warmup plus long pour laisser le temps
 
 <Callout type="warning" title={"Le LR est l'hyperparamètre le plus sensible"}>
 2x trop haut = divergence catastrophique (la loss explose et ne revient jamais).
-2x trop bas = entraînement 2x plus lent (tu gaspilles du GPU pour rien).
+2x trop bas = entraînement 2x plus lent (on gaspille du GPU pour rien).
 
 C'est pour ça que des grid searches de LR sur des petits modèles proxy (1-3B) avant de lancer des runs coûteux sur des gros modèles sont absolument essentiels. Un run de 70B qui diverge après 3 jours, c'est des dizaines de milliers de dollars perdus.
 </Callout>
@@ -138,7 +138,7 @@ C'est pour ça que des grid searches de LR sur des petits modèles proxy (1-3B) 
 
 ### Batch size ramp-up avec LR adjustment
 
-Commence avec un petit batch (2M tokens) et un LR élevé, puis augmente le batch progressivement (2M -> 4M -> 8M) en ajustant le LR en conséquence. L'avantage : au début, tu fais beaucoup de mises à jour avec peu de données par pas (apprentissage rapide mais bruyant), puis tu passes à des updates plus stables et efficaces en calcul avec de gros batchs.
+On commence avec un petit batch (2M tokens) et un LR élevé, puis on augmente le batch progressivement (2M -> 4M -> 8M) en ajustant le LR en conséquence. L'avantage : au début, on fait beaucoup de mises à jour avec peu de données par pas (apprentissage rapide mais bruyant), puis tu passes à des updates plus stables et efficaces en calcul avec de gros batchs.
 
 ### Fine-tuning : LR beaucoup plus bas
 
@@ -146,7 +146,7 @@ Le fine-tuning utilise des LR **10-100x plus bas** que le pré-entraînement. Ex
 
 ### Continuation : WSD > cosinus
 
-Si tu reprends un entraînement, WSD rend la continuation triviale : il suffit de reprendre dans la phase stable. Avec cosinus, il faut bricoler un nouveau schedule, souvent en "rechauffant" le LR, ce qui peut introduire de l'instabilité.
+Si on reprend un entraînement, WSD rend la continuation triviale : il suffit de reprendre dans la phase stable. Avec cosinus, il faut bricoler un nouveau schedule, souvent en "rechauffant" le LR, ce qui peut introduire de l'instabilité.
 
 ## Résumé
 

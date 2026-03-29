@@ -5,9 +5,9 @@ description: "Précision mixte : utilisez 16 bits pour l'entraînement au lieu d
 
 ## Le pitch simple
 
-Entraîner en FP32 (32 bits par nombre flottant), c'est du passé. **La précision mixte** utilise des nombres sur 16 bits (FP16 ou BF16) pour la majorité des calculs, et réservé le FP32 uniquement là où c'est critique.
+Entraîner en FP32 (32 bits par nombre flottant), c'est du passé. **La précision mixte** utilise des nombres sur 16 bits (FP16 ou BF16) pour la majorité des calculs, et réserve le FP32 uniquement là où c'est critique.
 
-Le résultat : 2 à 16x de speedup selon le GPU, 2x de réduction mémoire. Ce n'est pas une optimisation exotique : **c'est le standard** de tout entraînement moderne de LLM. Ne pas l'utiliser, c'est gaspiller la moitié de ton matériel.
+Le résultat : 2 à 16x de speedup selon le GPU, 2x de réduction mémoire. Ce n'est pas une optimisation exotique : **c'est le standard** de tout entraînement moderne de LLM. Ne pas l'utiliser, c'est gaspiller la moitié de votre matériel.
 
 <ArxivLink id="1710.03740" title="Mixed Precision Training" />
 
@@ -22,7 +22,7 @@ C'est le format "par défaut" en informatique, mais il est surdimensionné pour 
 1 bit de signe, 5 bits d'exposant, 10 bits de mantisse.
 Plage : +-65504 seulement. Précision : environ 3 décimales.
 
-**Le problème** : la plage est très réduite. Un gradient de 0.00001 multiplié par un learning rate de 0.001 donne 0.00000001, ce qui est en dessous de la plus petite valeur représentable en FP16. Ce nombre s'arrondit a zéro et la couche ne s'entraîne plus (gradient underflow).
+**Le problème** : la plage est très réduite. Un gradient de 0.00001 multiplié par un learning rate de 0.001 donne 0.00000001, ce qui est en dessous de la plus petite valeur représentable en FP16. Ce nombre s'arrondit à zéro et la couche ne s'entraîne plus (gradient underflow).
 
 ### BF16 (Brain Float 16, inventé par Google)
 1 bit de signe, **8 bits d'exposant** (autant que FP32 !), 7 bits de mantisse.
@@ -36,8 +36,8 @@ FP16 offre plus de précision (10 bits de mantisse contre 7 pour BF16) mais une 
 
 Le principe fondamental : garder **trois copies des poids** avec des rôles différents.
 
-1. **Copie maître en FP32** : utilisée pour les mises à jour de l'optimiseur (ou la précision compte vraiment)
-2. **Copie de travail en FP16/BF16** : utilisée pour le forward et le backward (ou la vitesse compte)
+1. **Copie maître en FP32** : utilisée pour les mises à jour de l'optimiseur (où la précision compte vraiment)
+2. **Copie de travail en FP16/BF16** : utilisée pour le forward et le backward (où la vitesse compte)
 3. **Gradients en FP16/BF16** : calculés lors du backward
 
 Le cycle à chaque itération :
@@ -46,11 +46,11 @@ Le cycle à chaque itération :
 3. **Update** : caster les gradients en FP32, mettre à jour la copie maître (FP32 += gradient * lr)
 4. **Cast** : recréer la copie de travail FP16/BF16 depuis la copie maître mise à jour
 
-Pourquoi cette copie maître FP32 est-elle indispensable ? Parce que l'optimiseur ajoute de **tout petits nombres** (gradient x learning_rate, souvent de l'ordre de 10^-7) a de **grands nombres** (les poids, souvent de l'ordre de 10^-1 à 10^1). En FP16, cette addition s'arrondit simplement a zéro : le poids ne change pas. En FP32, la mise à jour est préservée. Sans copie maître, l'entraînement stagne.
+Pourquoi cette copie maître FP32 est-elle indispensable ? Parce que l'optimiseur ajoute de **tout petits nombres** (gradient x learning_rate, souvent de l'ordre de 10^-7) à de **grands nombres** (les poids, souvent de l'ordre de 10^-1 à 10^1). En FP16, cette addition s'arrondit simplement à zéro : le poids ne change pas. En FP32, la mise à jour est préservée. Sans copie maître, l'entraînement stagne.
 
 ## Loss Scaling : le hack pour FP16
 
-En FP16, les gradients très petits (inférieurs a environ 6x10^-8) sont arrondis a zéro. Les couches profondes d'un réseau ont naturellement des gradients petits (à cause de la multiplication en chaîne du backward). Ces couches ne s'entraîneraient tout simplement pas.
+En FP16, les gradients très petits (inférieurs à environ 6x10^-8) sont arrondis à zéro. Les couches profondes d'un réseau ont naturellement des gradients petits (à cause de la multiplication en chaîne du backward). Ces couches ne s'entraîneraient tout simplement pas.
 
 La solution est élégante : **multiplier la loss par un grand facteur avant le backward** :
 
@@ -86,7 +86,7 @@ Ces speedups ne sont pas théoriques : ils sont directement exploitables avec la
 
 - Activations : 2x (FP16 au lieu de FP32)
 - Gradients : 2x
-- Poids : environ 1.5x au total (copie FP16 + copie FP32, contre 1 seule copie FP32 sans mixed précision)
+- Poids : environ 1.5x au total (copie FP16 + copie FP32, contre 1 seule copie FP32 sans mixed precision)
 
 ### Bande passante mémoire
 
@@ -107,7 +107,7 @@ Le framework (PyTorch AMP, JAX) gère automatiquement le choix : chaque opérati
 NaN ou Inf dans les gradients. Loss qui diverge soudainement après des milliers d'itérations stables. Convergence vers un résultat sous-optimal. Diagnostic : vérifier que le loss scaling est actif (pour FP16), que les opérations critiques sont bien en FP32, et que les gradients ne contiennent pas de valeurs extrêmes.
 </Callout>
 
-## En pratique : AMP (Automatic Mixed Précision)
+## En pratique : AMP (Automatic Mixed Precision)
 
 PyTorch, JAX et TensorFlow offrent l'AMP qui gère tout automatiquement. Quelques lignes de code suffisent :
 
@@ -124,7 +124,7 @@ Le `autocast` choisit la précision de chaque opération selon la whitelist/blac
 
 ## Adoption universelle
 
-L'entraînement en précision mixte **n'est plus optionnel** depuis plusieurs années. Tous les LLM modernes l'utilisent sans exception. Sans mixed précision, entraîner un modèle 7B serait 4 à 8x plus lent et nécessiterait 2x plus de mémoire GPU. Economiquement, ça rendrait la plupart des projets non viables.
+L'entraînement en précision mixte **n'est plus optionnel** depuis plusieurs années. Tous les LLM modernes l'utilisent sans exception. Sans mixed précision, entraîner un modèle 7B serait 4 à 8x plus lent et nécessiterait 2x plus de mémoire GPU. Économiquement, ça rendrait la plupart des projets non viables.
 
 <Callout type="info" title={"L'évolution continue"}>
 FP32 pur est un fossile. La précision mixte FP16/BF16 est le standard d'hygiène de base. FP8 est la frontière actuelle (Hopper, Blackwell). L'évolution va inexorablement vers moins de bits par nombre, compensée par des techniques de plus en plus sophistiquées pour préserver la stabilité de l'entraînement.

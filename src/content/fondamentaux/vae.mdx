@@ -7,7 +7,7 @@ description: "Les autoencoders variationnels, le reparameterization trick, la fo
 
 Un autoencoder classique fait deux choses : il **compresse** une entrée (par exemple une image) en un vecteur compact z (l'espace latent), puis il **reconstruit** l'entrée à partir de z. Le problème ? L'espace latent qui en résulte est chaotique. Deux points z proches dans cet espace ne correspondent pas nécessairement à des images similaires. Et si tu échantillonnes un z au hasard, tu obtiens du bruit, pas une image cohérente. L'autoencoder classique est un compresseur, pas un générateur.
 
-Le **VAE** (Variational Autoencoder), proposé par Kingma et Welling en 2013, résout ce problème en ajoutant une **structure probabiliste** à l'espace latent. Au lieu de produire un unique point z, l'encodeur produit les paramètres d'une **distribution** sur z. C'est cette nuance qui transforme un simple compresseur en un véritable modèle génératif.
+Le **VAE** (Variational Autoencoder, ou autoencodeur variationnel), proposé par Kingma et Welling en 2013, résout ce problème en ajoutant une **structure probabiliste** à l'espace latent. Au lieu de produire un unique point z, l'encodeur produit les paramètres d'une **distribution** sur z. C'est cette nuance qui transforme un simple compresseur en un véritable modèle génératif.
 
 <ArxivLink id="1312.6114" title="Auto-Encoding Variational Bayes" />
 
@@ -60,7 +60,7 @@ L'aléa est "externalisé" dans $\epsilon$, qui est un bruit pur indépendant de
 L'analogie : au lieu de dire "tire un nombre aléatoire entre 3 et 7" (opération opaque), on dit "prends 5 (la moyenne) et ajoute le bruit fois 2 (l'écart-type)". Le résultat est le même statistiquement, mais la deuxième formulation permet de calculer comment le résultat change si on modifie la moyenne ou l'écart-type.
 
 <Callout type="tip" title="Mathématiquement équivalent, numériquement différentiable">
-Le reparameterization trick ne change rien à la distribution de z -- c'est exactement la même gaussienne $\mathcal{N}(\mu, \sigma^2)$. Mais il rend le calcul **différentiable**, ce qui permet d'entraîner le VAE avec la descente de gradient standard (SGD, Adam, etc.). Sans cette astuce, il faudrait recourir à des estimateurs de gradient par Monte Carlo (comme REINFORCE), qui sont beaucoup plus bruités et lents à converger.
+Le reparameterization trick ne change rien à la distribution de z -- c'est exactement la même gaussienne $\mathcal{N}(\mu, \sigma^2)$. Mais il rend le calcul **différentiable**, ce qui permet d'entraîner le VAE avec la descente de gradient standard (SGD, Adam, etc.). Sans cette astuce, il faudrait recourir à des estimateurs de gradient par Monte Carlo (comme l'algorithme REINFORCE, utilisé en apprentissage par renforcement), qui sont beaucoup plus bruités et lents à converger.
 </Callout>
 
 ## La perte ELBO : le cœur du VAE
@@ -87,13 +87,13 @@ $$\mathcal{L} = \underbrace{-\mathbb{E}_{q}[\log p(x | z)]}_{\text{Reconstructio
 
 **Terme 1 : Reconstruction** ($-\mathbb{E}_q[\log p(x | z)]$)
 
-Ce terme mesure la qualité de la reconstruction. Concrètement, on échantillonne un z depuis $q(z|x)$, on le passe dans le décodeur, et on mesure à quel point la sortie ressemble à l'entrée. En pratique, c'est une MSE (Mean Squared Error) pour des images en niveaux de gris ou une BCE (Binary Cross-Entropy) pour des images binaires.
+Ce terme mesure la qualité de la reconstruction. Concrètement, on échantillonne un z depuis $q(z|x)$, on le passe dans le décodeur, et on mesure à quel point la sortie ressemble à l'entrée. En pratique, c'est une MSE (Mean Squared Error, erreur quadratique moyenne) pour des images en niveaux de gris ou une BCE (Binary Cross-Entropy, entropie croisée binaire) pour des images binaires.
 
 Ce terme pousse l'encodeur à mettre **assez d'information** dans z pour que le décodeur puisse reconstruire fidèlement. Si z ne contient pas assez d'info, la reconstruction est floue.
 
 **Terme 2 : Régularisation KL** ($D_{KL}(q(z | x) \| p(z))$)
 
-C'est la divergence de Kullback-Leibler entre la distribution apprise $q(z|x)$ et le prior $p(z) = \mathcal{N}(0, I)$ (la gaussienne standard qu'on a choisie comme hypothèse de départ). Elle mesure à quel point la distribution encodée s'éloigne de cette gaussienne.
+C'est la divergence KL (Kullback-Leibler) entre la distribution apprise $q(z|x)$ et le prior $p(z) = \mathcal{N}(0, I)$ (la gaussienne standard qu'on a choisie comme hypothèse de départ). Intuitivement, cette divergence mesure "combien d'information supplémentaire" il faut pour décrire $q(z|x)$ quand on s'attendait à $p(z)$. Plus la distribution encodée s'éloigne de la gaussienne standard, plus cette pénalité augmente.
 
 Ce terme force l'espace latent à rester **régulier et structuré**. Sans lui, l'encodeur pourrait placer chaque image dans un point isolé de l'espace (variance → 0), ce qui détruirait la continuité nécessaire à la génération.
 

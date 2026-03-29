@@ -24,14 +24,14 @@ Radford et al. ont publié quelque chose d'apparence modeste : un ensemble de re
 Pourquoi ces règles sont si importantes ? Avant DCGAN, tenter de construire un GAN convolutif était un exercice de frustration : les gradients explosaient, le mode collapse était quasi systématique, les résultats étaient flous et instables. Ces quatre principes, valides empiriquement, ont stabilisé l'entraînement au point de devenir le socle de référence que toutes les architectures GAN suivantes ont hérité et perfectionné.
 
 <Callout type="tip" title={"L'espace latent du DCGAN"}>
-DCGAN a montré : l'espace z a structure arithmétique. z_homme_lunettes - z_homme + z_femme ≈ z_femme_lunettes. Sans supervision ! Découverte : G apprend des représentations sémantiques.
+DCGAN a révélé quelque chose de fascinant : l'espace latent z possède une structure arithmétique. Par exemple, $z_{\text{homme lunettes}} - z_{\text{homme}} + z_{\text{femme}} \approx z_{\text{femme lunettes}}$. Et tout cela sans aucune supervision ! Le générateur apprend spontanément des représentations sémantiques cohérentes.
 </Callout>
 
 ## WGAN (2017) : distance de Wasserstein
 
 ### Le problème mathématique fondamental
 
-La loss du GAN original utilise la divergence de Jensen-Shannon pour mesurer la différence entre les distributions reelle et générée. Le problème : en haute dimension (et les images vivent dans des espaces de très haute dimension), les deux distributions occupent presque toujours des sous-espaces complètement différents, sans aucun chevauchement. Quand ça arrive, la divergence JS **sature à sa valeur maximale** et son gradient tombe à zéro. Le générateur ne reçoit plus aucun signal utile pour s'améliorer. C'est du gradient vanishing, mais dans la loss elle-même !
+La loss du GAN original utilise la divergence de Jensen-Shannon pour mesurer la différence entre les distributions réelle et générée. Le problème : en haute dimension (et les images vivent dans des espaces de très haute dimension), les deux distributions occupent presque toujours des sous-espaces complètement différents, sans aucun chevauchement. Quand ça arrive, la divergence JS **sature à sa valeur maximale** et son gradient tombe à zéro. Le générateur ne reçoit plus aucun signal utile pour s'améliorer. C'est du gradient vanishing, mais dans la loss elle-même !
 
 ### Wasserstein = Earth Mover's Distance
 
@@ -55,7 +55,7 @@ Il y a une contrainte mathématique importante : pour que la différence des sco
 Deux approches existent pour imposer cette contrainte. Le **weight clipping** (version originale) borne brutalement les poids dans [-c, c] après chaque mise à jour — concrètement, après chaque étape d'optimisation, tous les poids du critique qui dépassent cet intervalle sont ramenés de force à la borne la plus proche. C'est simple mais problématique : ça pousse les poids vers les extrêmes et sous-utilise la capacité du réseau. Le **gradient penalty (WGAN-GP)** est une approche plus élégante : on ajoute une pénalité à la loss qui encourage la norme du gradient de D à rester proche de 1. C'est la méthode préférée en pratique car elle est plus stable et donne de meilleurs résultats.
 
 <Callout type="paper" title="Impact WGAN">
-Compréhension théorique profonde. Loss corrélée avec qualité ! Entraînement stabilisé. Moins de réglage fou d'hyperparamètres. Transformateur.
+WGAN a été un tournant dans la compréhension théorique des GAN. Pour la première fois, la loss est directement corrélée avec la qualité des images générées, l'entraînement est bien plus stable, et le réglage des hyperparamètres devient nettement moins chaotique. Un vrai changement de paradigme.
 </Callout>
 
 <ImageWithSource
@@ -83,7 +83,7 @@ L'architecture de StyleGAN se décompose en trois composants distincts.
   size="large"
 />
 
-Le **Mapping Network** est un MLP de 8 couches qui transforme le vecteur de bruit z en un vecteur w dans un espace latent intermédiaire noté W. Pourquoi cette étape supplémentaire ? L'espace Z (bruit gaussien) est très "entremele" : changer une dimension affecte plusieurs attributs à la fois. L'espace W, après passage par le mapping network, est beaucoup plus **découplé** : chaque dimension tend à contrôler un attribut sémantique distinct (âge, genre, orientation du visage) sans interférer avec les autres.
+Le **Mapping Network** est un MLP (Multi-Layer Perceptron) de 8 couches qui transforme le vecteur de bruit z en un vecteur w dans un espace latent intermédiaire noté W. Pourquoi cette étape supplémentaire ? L'espace Z (bruit gaussien) est très "entremêlé" : changer une dimension affecte plusieurs attributs à la fois. L'espace W, après passage par le mapping network, est beaucoup plus **découplé** : chaque dimension tend à contrôler un attribut sémantique distinct (âge, genre, orientation du visage) sans interférer avec les autres.
 
 Le **Synthesis Network** part d'une constante apprise (et non du bruit z directement, ce qui est une rupture majeure). À chaque couche de résolution, le vecteur w module les activations via **AdaIN** (Adaptive Instance Normalization) : il ajuste la moyenne et la variance des feature maps. Chaque couche peut utiliser un w différent, ce qui permet un contrôle granulaire.
 
@@ -91,7 +91,7 @@ Le **Noise injection** ajoute du bruit stochastique indépendant à chaque réso
 
 ### Style mixing : la magie
 
-Grâce à séparation z ↔ w ↔ synthèse, tu peux mixer :
+Grâce à la séparation z ↔ w ↔ synthèse, tu peux mixer :
 
 - **Basse résolution** (4×4-8×8) : structure globale (pose, forme du visage, présence de lunettes)
 - **Moyen** (16×16-32×32) : features intermédiaires (coiffure, yeux)
@@ -100,7 +100,7 @@ Grâce à séparation z ↔ w ↔ synthèse, tu peux mixer :
 Concrètement, tu peux utiliser w_1 pour les basses résolutions (qui détermine la structure du visage), w_2 pour les moyennes (qui fixe la coiffure et les traits), et w_3 pour les hautes (qui contrôle la couleur et la texture). Le résultat : tu peux "blender" les attributs de plusieurs images générées avec une précision inédite.
 
 <Callout type="info" title="Progressive growing">
-StyleGAN hérite de ProGAN : entraînement commence 4×4, couches ajoutées progressivement jusqu'à 1024×1024. Apprendre structure d'abord, détails après. Stabilise. StyleGAN2 a arrêté ça, autres améliorations.
+StyleGAN hérite de l'approche "progressive growing" introduite par ProGAN : l'entraînement commence à la résolution 4x4, puis des couches sont ajoutées progressivement jusqu'à 1024x1024. L'idée est d'apprendre d'abord la structure globale, puis les détails fins -- ce qui stabilise considérablement l'entraînement. StyleGAN2 a abandonné cette approche au profit d'autres améliorations architecturales.
 </Callout>
 
 ### StyleGAN2/3
@@ -121,7 +121,7 @@ StyleGAN hérite de ProGAN : entraînement commence 4×4, couches ajoutées prog
 
 ### Le problème réaliste
 
-Imaginons qu'on veuille transformer des photos de chevaux en photos de zebres. La méthode naïve nécessiterait des paires d'images : la même scène exacte, une fois avec un cheval, une fois avec un zèbre. Évidemment, de telles paires n'existent quasiment jamais. CycleGAN résout élégamment ce problème : il apprend la traduction à partir de **deux collections non appariées** (un tas de photos de chevaux et un tas de photos de zèbres, sans aucune correspondance entre elles).
+Imaginons qu'on veuille transformer des photos de chevaux en photos de zèbres. La méthode naïve nécessiterait des paires d'images : la même scène exacte, une fois avec un cheval, une fois avec un zèbre. Évidemment, de telles paires n'existent quasiment jamais. CycleGAN résout élégamment ce problème : il apprend la traduction à partir de **deux collections non appariées** (un tas de photos de chevaux et un tas de photos de zèbres, sans aucune correspondance entre elles).
 
 ### Architecture
 
@@ -140,7 +140,7 @@ $$\mathcal{L}_{\text{cycle}} = \| G_{BA}(G_{AB}(x_A)) - x_A \| + \| G_{AB}(G_{BA
 Cette contrainte de cohérence cyclique, combinée avec les loss adversariales classiques, garantit que la traduction **préserve le contenu** (la scène, la pose, la composition) tout en changeant le **style** (l'apparence, la texture, le domaine visuel). Sans cette contrainte, le générateur pourrait produire n'importe quelle image de zèbre convaincante, sans rapport avec la scène du cheval d'origine.
 
 <Callout type="tip" title="Applications magiques">
-Photos → Monet style. Été → hiver. Cheval → zèbre. Domaine adaptation (simulation → réalité). Imagerie médicale (IRM → CT). Révolutionné la traduction d'image.
+CycleGAN a ouvert la porte à des applications spectaculaires : transformer des photos en tableaux style Monet, convertir des paysages d'été en hiver, métamorphoser des chevaux en zèbres. Plus sérieusement, il est aussi utilisé en domain adaptation (simulation vers réalité) et en imagerie médicale (conversion IRM vers CT scan). Il a véritablement révolutionné la traduction d'image non appariée.
 </Callout>
 
 ## Autres architectures notables
@@ -161,16 +161,16 @@ Applications : segmentation → photo, croquis → image, colorisation.
 
 ### BigGAN
 
-BigGAN applique une leçon simple mais puissante : la taille fait la qualité. Des batchs massifs (2048 images au lieu de 64), des modèles bien plus larges, davantage de canaux dans chaque couche de convolution. La conditionnement par classe y est bien plus prononcé — le générateur sait exactement quelle catégorie produire.
+BigGAN applique une leçon simple mais puissante : la taille fait la qualité. Des batchs massifs (2048 images au lieu de 64), des modèles bien plus larges, davantage de canaux dans chaque couche de convolution. Le conditionnement par classe y est bien plus prononcé — le générateur sait exactement quelle catégorie produire.
 
 Le résultat parle de lui-même : des générations conditionnelles sur ImageNet d'une fidélité sans précédent pour les GAN. Ce n'est pas une nouveauté architecturale, c'est la preuve qu'avec suffisamment de ressources de calcul, les GAN peuvent atteindre une qualité visuelle remarquable.
 
 <Callout type="paper" title={"L'héritage post-GAN"}>
-Les diffusion models ont surpassé les GAN pour images haute-res. Mais les innovations GAN survivent :
-- Espace W de StyleGAN (découplage des attributs)
-- Distance Wasserstein (métriques stables)
-- Cycle consistency (traduction non-appariée)
-- Même dans diffusion models modernes, ces principes réapparaissent.
+Les modèles de diffusion ont surpassé les GAN pour la génération d'images haute résolution. Mais les innovations des GAN survivent et continuent d'influencer le domaine :
+- L'espace W de StyleGAN et le découplage des attributs
+- La distance de Wasserstein et ses métriques stables
+- La cycle consistency pour la traduction non appariée
+- Même dans les modèles de diffusion modernes, ces principes réapparaissent sous différentes formes.
 </Callout>
 
 <ImageWithSource

@@ -13,7 +13,7 @@ Cas réels:
 - **Moteur de recherche**: 1 milliard de pages web, trouver les 10 meilleures en <1 seconde
 - **Déduplication**: 100M produits, trouver les doublons
 - **Recommandations**: 10M utilisateurs, recommande des articles similaires
-- **RAG (Retrieval-Augmented Génération)**: 100k passages techniques, retrouve les plus pertinents pour répondre à une question
+- **RAG** (Retrieval-Augmented Generation, génération augmentée par la recherche) : 100k passages techniques, retrouve les plus pertinents pour répondre à une question
 
 ### Le problème naïf avec BERT
 
@@ -25,7 +25,7 @@ Problème: **pour chaque comparaison, BERT doit faire un forward pass complet**.
 
 Impraticable.
 
-Et pire: les embeddings BERT nuls (sans fine-tuning) produisent des similarités cosinus **mauvaises**. Moyenner simplement GloVe donne de meilleurs résultats.
+Et pire : les embeddings BERT bruts (sans fine-tuning) produisent des similarités cosinus **mauvaises**. Moyenner simplement des embeddings GloVe (un ancien modèle de word embeddings) donne de meilleurs résultats.
 
 ### L'explosion combinatoire
 
@@ -43,7 +43,7 @@ Beaucoup de systèmes NLP échouent non pas sur l'algorithme, mais sur la latenc
 
 ## SBERT: l'idée qui change tout
 
-**SBERT** (Sentence-BERT, Reimers & Gurevych 2019) fine-tune BERT pour une **seule** mission: produire des embeddings de phrases **directement comparables** par cosinus.
+**SBERT** (Sentence-BERT, Reimers & Gurevych, 2019) fine-tune BERT pour une **seule** mission : produire des embeddings de phrases **directement comparables** par similarité cosinus.
 
 <ArxivLink id="1908.10084" title="Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks" />
 
@@ -58,7 +58,7 @@ $$
 \text{Similarité} = \cos(\vec{a}, \vec{b}) = \frac{\vec{a} \cdot \vec{b}}{\|\vec{a}\| \times \|\vec{b}\|}
 $$
 
-Les deux BERT utilisent **exactement les mêmes poids** (architecture siamoise). Chaque phrase est encodée **une fois** et stockée.
+Les deux BERT utilisent **exactement les mêmes poids** (c'est une architecture siamoise : deux copies identiques du même réseau). Chaque phrase est encodée **une fois** et le vecteur résultant est stocké.
 
 ### La magie: pré-compute et recherche ultra-rapide
 
@@ -90,11 +90,11 @@ SBERT se fine-tune sur des **paires annotées** pour apprendre qui se ressemble.
 - Loss: MSE entre cosine(a, b) et score humain
 - Résultat: modèle apprend à ranger par similarité continue
 
-**Approche 2: NLI (Natural Language Inference)**
-- Paires (phrase A, phrase B, label: entailment/contradiction/neutre)
-- Architecture spéciale : encode séparément, puis concat [a, b, |a-b|] → classifier
-- Résultat: entailment = similaire, contradiction = opposé, neutre = distinct
-- Énorme dataset (SNLI, MultiNLI): centaines de milliers de paires
+**Approche 2 : NLI (Natural Language Inference, inférence en langage naturel)**
+- Paires (phrase A, phrase B, label : entailment/contradiction/neutre)
+- Architecture spéciale : encode séparément, puis concatène [a, b, |a-b|] et passe par un classifieur
+- Résultat : entailment = similaire, contradiction = opposé, neutre = distinct
+- Énorme dataset (SNLI, MultiNLI) : centaines de milliers de paires
 
 **Approche 3: OnlineContrastiveLoss**
 - Entraîne en batch: rapproche paires positives, éloigne négatives
@@ -161,11 +161,11 @@ Pour les embeddings haute-dim, cosinus/dot product battent L2. Direction > magni
 3. **Recherche**: calcule cosinus requête vs tous les vecteurs
 4. **Résultats**: retourne les top-k plus similaires
 
-Pour millions de vecteurs: utilise **ANN** (Approximate Nearest Neighbors) — FAISS, Annoy, ou bases vectorielles Pinecone/Weaviate/Qdrant pour trouver les voisins en sub-linéaire.
+Pour des millions de vecteurs, on utilise l'**ANN** (Approximate Nearest Neighbors, recherche approximative des plus proches voisins) via des outils comme FAISS, Annoy, ou des bases vectorielles (Pinecone, Weaviate, Qdrant) pour trouver les voisins en temps sub-linéaire.
 
 ## RAG: l'application ultime des embeddings
 
-**RAG** (Retrieval-Augmented Génération) est le framework favori des systèmes IA modernes. Idée: laisser un LLM répondre basé sur une base de connaissances fiable, plutôt que juste halluciner.
+**RAG** (Retrieval-Augmented Generation) est le framework favori des systèmes IA modernes. L'idée : laisser un LLM répondre en s'appuyant sur une base de connaissances fiable, plutôt que de le laisser halluciner.
 
 ### Le pipeline RAG
 
@@ -195,7 +195,7 @@ Pour millions de vecteurs: utilise **ANN** (Approximate Nearest Neighbors) — F
 La différence est **dramatique**. RAG transforme un LLM en assistant fiable pour les domaines spécifiques.
 
 <Callout type="warning" title="Le goulot: qualité de retrieval">
-RAG est aussi bon que sa bonne retrieval. Si SBERT ne retrouve pas les bons passages, le LLM ne peut pas répondre juste:
+RAG est aussi bon que sa retrieval (recherche de documents). Si SBERT ne retrouve pas les bons passages, le LLM ne peut pas répondre juste :
 
 - **Bonne retrieval** : Utilisateur → SBERT → Documents pertinents → LLM génère une réponse juste
 - **Mauvaise retrieval** : Utilisateur → SBERT → Documents irrelevants → LLM génère une réponse fausse
@@ -214,11 +214,11 @@ Depuis SBERT, l'écosystème a explosé:
 - **text-embedding-3** (OpenAI): via API, dimensions ajustables
 - **Cohere Embed**: multilingues, optimisés pour search
 
-**MTEB** (Massive Text Embedding Benchmark): compare ces modèles sur dizaines de tâches. La référence.
+**MTEB** (Massive Text Embedding Benchmark) : compare ces modèles sur des dizaines de tâches. C'est la référence du domaine.
 
-## Stratégie à deux étages: bi-encoder + cross-encoder
+## Stratégie à deux étages : bi-encoder + cross-encoder
 
-En production, on ne fait jamais "just cosinus et return results". Il y a une technique en deux étages pour la qualité:
+En production, on ne fait jamais "juste un cosinus et on renvoie les résultats". Il y a une technique en deux étages pour maximiser la qualité :
 
 ### Stage 1: Bi-encoder (retrieval initial)
 
@@ -237,7 +237,7 @@ Pour les top-100, utilise un **cross-encoder** (modèle différent) qui encode l
 - Pour chaque doc dans le top-100 : (requête + doc) → Cross-encoder → score de pertinence précis
 - Trier par score → Retourner top-5
 
-Cross-encoder est plus lent (un forward par paire), mais plus précis. C'est ok car on l'applique qu'aux top-100.
+Le cross-encoder est plus lent (un forward pass par paire), mais plus précis. C'est acceptable car on ne l'applique qu'aux top-100.
 
 **Résultat**: top-100 rapide (bi-encoder), top-5 très précis (cross-encoder).
 
@@ -249,14 +249,14 @@ Cross-encoder est plus lent (un forward par paire), mais plus précis. C'est ok 
 | Usage | Retrieval initial (large) | Re-ranking top-k |
 
 <Callout type="tip" title="Stratégie industrielle standard">
-Presque tous les systèmes de recherche sémantique production utilisent "bi-encoder pour recall, cross-encoder pour précision". C'est proven, rapide, et fiable.
+Presque tous les systèmes de recherche sémantique en production utilisent cette approche : "bi-encoder pour le recall (rappel), cross-encoder pour la précision". C'est éprouvé, rapide et fiable.
 </Callout>
 
 ## Pourquoi c'est important
 
-Les sentence embeddings (SBERT) résolvent un problème pratique majeur: **comparer un million de documents en millisecondes**. C'est le fondement de la recherche sémantique moderne, du RAG, des recommandations.
+Les sentence embeddings (SBERT) résolvent un problème pratique majeur : **comparer un million de documents en millisecondes**. C'est le fondement de la recherche sémantique moderne, du RAG et des systèmes de recommandation.
 
-SBERT montre comment fine-tuner BERT intelligemment: pas pour la génération ou la classification, mais pour des embeddings **directement comparables**. C'est spécialisé, mais crucial.
+SBERT montre comment fine-tuner BERT intelligemment : pas pour la génération ou la classification, mais pour des embeddings **directement comparables**. C'est spécialisé, mais crucial.
 
-En 2026, **choisir le bon modèle d'embedding est aussi important que choisir le LLM**. La retrieval détermine la qualité du RAG. Un bon embedding = RAG qui marche. Un mauvais embedding = LLM qui hallucine malgré le contexte.
+En 2026, **choisir le bon modèle d'embedding est aussi important que choisir le LLM**. La qualité de la retrieval détermine la qualité du RAG. Un bon embedding = un RAG qui marche. Un mauvais embedding = un LLM qui hallucine malgré le contexte fourni.
 

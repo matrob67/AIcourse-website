@@ -8,9 +8,9 @@ description: "QLoRA combine la quantification 4-bit NormalFloat avec LoRA pour p
 
 ## Le problème : fine-tuner un modèle de 65B paramètres
 
-Même avec LoRA (qui n'entraîne que quelques millions de paramètres), le fine-tuning d'un modèle de 65 milliards de paramètres nécessite de charger **tous les poids** en mémoire GPU. En FP16, 65B paramètres occupent environ 130 Go de VRAM. Aucun GPU seul ne peut gérer ça.
+Même avec LoRA (Low-Rank Adaptation, qui n'entraîne que quelques millions de paramètres), le fine-tuning d'un modèle de 65 milliards de paramètres nécessite de charger **tous les poids** en mémoire GPU. En FP16 (16 bits par paramètre), 65B paramètres occupent environ 130 Go de VRAM. Aucun GPU seul ne peut gérer ça.
 
-C'est la que QLoRA entre en jeu. L'idée est simple mais puissante : stocker le modèle de base dans un format **ultra-compressé** (4 bits par paramètre au lieu de 16), tout en gardant les adaptateurs LoRA en pleine précision pour ne pas sacrifier la qualité de l'apprentissage. Le modèle de base est figé et compressé, seuls les petits adaptateurs LoRA sont entraînés en BF16.
+C'est là que QLoRA entre en jeu. L'idée est simple mais puissante : stocker le modèle de base dans un format **ultra-compressé** (4 bits par paramètre au lieu de 16), tout en gardant les adaptateurs LoRA en pleine précision pour ne pas sacrifier la qualité de l'apprentissage. Le modèle de base est figé et compressé, seuls les petits adaptateurs LoRA sont entraînés en BF16.
 
 <ArxivLink id="2305.14314" title="QLoRA: Efficient Finetuning of Quantized LLMs (Dettmers et al., 2023)" />
 
@@ -28,7 +28,7 @@ Concrètement, NF4 atteint une qualité de représentation significativement mei
 
 ### 2. Double Quantification
 
-Toute quantification par blocs nécessite des **constantes de scaling** : pour chaque bloc de 64 poids, on stocke une constante FP32 (4 octets) qui permet de reconvertir les valeurs 4-bit en valeurs réelles. Avec 64 éléments a 4 bits (32 octets par bloc), ces constantes représentent un overhead de 12,5%.
+Toute quantification par blocs nécessite des **constantes de scaling** : pour chaque bloc de 64 poids, on stocke une constante FP32 (4 octets) qui permet de reconvertir les valeurs 4-bit en valeurs réelles. Avec 64 éléments à 4 bits (32 octets par bloc), ces constantes représentent un overhead de 12,5%.
 
 L'astuce de QLoRA : quantifier les constantes elles-mêmes. Au lieu de stocker chaque constante en FP32 (4 octets), on les quantifie en FP8 (1 octet). L'overhead tombe à environ 3%.
 
@@ -54,7 +54,7 @@ Voici l'empreinte mémoire comparée pour un modèle LLaMA 65B :
 | QLoRA NF4 | ~33 Go | 1x A100 40Go |
 | QLoRA NF4 (7B) | ~6 Go | 1x RTX 3090/4090 |
 
-Remarque un point important : LoRA seul ne réduit PAS la mémoire nécessaire pour charger le modèle. Il réduit le nombre de paramètres entraînés (et donc les gradients/états optimizer), mais le modèle de base doit toujours tenir en mémoire en FP16. C'est la quantification 4-bit de QLoRA qui divise l'empreinte du modèle de base par 4.
+Remarquez un point important : LoRA seul ne réduit PAS la mémoire nécessaire pour charger le modèle. Il réduit le nombre de paramètres entraînés (et donc les gradients/états optimizer), mais le modèle de base doit toujours tenir en mémoire en FP16. C'est la quantification 4-bit de QLoRA qui divise l'empreinte du modèle de base par 4.
 
 Le modèle de base est stocké en NF4 (4-bit), mais les adaptateurs LoRA sont entraînés en **BF16** pleine précision. Les gradients sont calculés en BF16, rétropropagés à travers les couches quantifiées, et mis à jour uniquement sur les paramètres LoRA.
 
@@ -107,7 +107,7 @@ Quatre paramètres clés dans la config `bitsandbytes` : `load_in_4bit` active l
 Avec QLoRA, tu peux te permettre un **rang plus élevé** qu'avec LoRA classique. Pourquoi ? Parce que l'empreinte mémoire des adaptateurs est dérisoire comparée au modèle de base en 4-bit. Un r=32 ou r=64 ajoute quelques dizaines de Mo, alors que le modèle de base en occupe plusieurs Go. Autant en profiter pour maximiser la capacité d'adaptation.
 
 <Callout type="warning" title="Limitations de la quantification 4-bit">
-La quantification NF4 introduit une petite perte d'information **irréversible** dans le modèle de base. Pour des tâches nécessitant une très haute précision numérique (mathématiques complexes, code très technique), un fine-tuning en 8-bit ou FP16 peut donner de meilleurs résultats. Évalue toujours sur ta tâche spécifique avant de conclure.
+La quantification NF4 introduit une petite perte d'information **irréversible** dans le modèle de base. Pour des tâches nécessitant une très haute précision numérique (mathématiques complexes, code très technique), un fine-tuning en 8-bit ou FP16 peut donner de meilleurs résultats. Évaluez toujours sur votre tâche spécifique avant de conclure.
 </Callout>
 
 ## Impact sur l'écosystème

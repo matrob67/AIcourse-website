@@ -5,9 +5,9 @@ description: "De 32K à 256K tokens : comment Mistral AI a progressivement éten
 
 ## Contexte long : lire des livres entiers d'un coup
 
-En septembre 2023, Mistral 7B offrait 32K tokens de contexte (un livre court). En 2025, Mistral Large 3 atteint **256K tokens** (2 à 3 livres complets). En deux ans, la fenêtre de contexte a ete multipliee par 8.
+En septembre 2023, Mistral 7B offrait 32K tokens de contexte (un livre court). En 2025, Mistral Large 3 atteint **256K tokens** (2 à 3 livres complets). En deux ans, la fenêtre de contexte a été multipliée par 8.
 
-La fenêtre de contexte, c'est la quantite de texte qu'un modèle peut "lire" et prendre en compte pour générer sa réponse. Plus elle est grande, plus les cas d'usage deviennent ambitieux. C'est l'une des évolutions les plus impactantes de l'IA générative.
+La fenêtre de contexte, c'est la quantité de texte qu'un modèle peut "lire" et prendre en compte pour générer sa réponse. Plus elle est grande, plus les cas d'usage deviennent ambitieux. C'est l'une des évolutions les plus impactantes de l'IA générative.
 
 ### La progression chez Mistral
 
@@ -23,51 +23,51 @@ La fenêtre de contexte, c'est la quantite de texte qu'un modèle peut "lire" et
 
 Pour comprendre l'impact, regardons ce que chaque palier permet concrètement :
 
-**32K tokens** (~24 000 mots) : un article long, un fichier de code moyen, une conversation de chat etendue. Suffisant pour du chat normal et des tâches simples.
+**32K tokens** (~24 000 mots) : un article long, un fichier de code moyen, une conversation de chat étendue. Suffisant pour du chat normal et des tâches simples.
 
 **64K tokens** (~48 000 mots) : un rapport complet, un chapitre de livre, un module de code avec ses dépendances. Ça commence à devenir vraiment utile pour l'analyse de documents.
 
-**128K tokens** (~100 000 mots) : un livre entier de 300 pages. Un projet logiciel complet avec ses dizaines de fichiers. Vous pouvez analyser un document de bout en bout sans le decouper.
+**128K tokens** (~100 000 mots) : un livre entier de 300 pages. Un projet logiciel complet avec ses dizaines de fichiers. Vous pouvez analyser un document de bout en bout sans le découper.
 
-**256K tokens** (~200 000 mots) : 2 à 3 livres. Le codebase entier d'une startup. La documentation complete d'un framework. Un contexte **massif** qui ouvre des possibilites inédites.
+**256K tokens** (~200 000 mots) : 2 à 3 livres. Le codebase entier d'une startup. La documentation complète d'un framework. Un contexte **massif** qui ouvre des possibilités inédites.
 
 <Callout type="info" title="Contexte long vs RAG : un changement de paradigme">
-Avant le contexte long, analyser un document de 100 pages necessitait un pipeline complet : decoupage en chunks, vectorisation, stockage dans une base vectorielle, retrieval, puis génération. Avec 128K ou 256K tokens de contexte, le document entier tient dans la fenêtre du modèle. L'architecture de votre application devient radicalement plus simple.
+Avant le contexte long, analyser un document de 100 pages nécessitait un pipeline complet : découpage en chunks, vectorisation, stockage dans une base vectorielle, retrieval, puis génération. Avec 128K ou 256K tokens de contexte, le document entier tient dans la fenêtre du modèle. L'architecture de votre application devient radicalement plus simple.
 </Callout>
 
 
 
-### Les defis techniques : pourquoi c'est si dur
+### Les défis techniques : pourquoi c'est si dur
 
-Etendre la fenêtre de contexte n'est pas juste "augmenter un paramètre". Plusieurs obstacles techniques majeurs rendent cette progression difficile :
+Étendre la fenêtre de contexte n'est pas juste "augmenter un paramètre". Plusieurs obstacles techniques majeurs rendent cette progression difficile :
 
 **Complexité quadratique de l'attention** : le mécanisme d'attention standard a une complexité mémoire en O(n²) par rapport à la longueur du contexte. Passer de 32K à 256K tokens, c'est multiplier la mémoire nécessaire par 64. Avec de l'attention standard, c'est tout simplement impossible sur du hardware actuel.
 
 La solution de Mistral : **Sliding Window Attention (SWA)**. Chaque couche d'attention ne regarde que les W tokens les plus récents (par exemple W = 4096). Mais en empilant 32 couches, l'information remonte de couche en couche : au total, le modèle "voit" 32 x 4096 = 131K tokens. C'est comme une chaîne humaine : chaque maillon ne touche que son voisin, mais un message peut traverser toute la chaîne.
 
-**Cache KV (clés-valeurs) énorme** : le cache KV croit lineairement avec la longueur du contexte. Pour Mistral Large (675B paramètres) avec 256K tokens de contexte, ce cache représente des **dizaines de gigaoctets** de mémoire GPU.
+**Cache KV (clés-valeurs) énorme** : le cache KV croît linéairement avec la longueur du contexte. Pour Mistral Large (675B paramètres) avec 256K tokens de contexte, ce cache représente des **dizaines de gigaoctets** de mémoire GPU.
 
-Les solutions pour gerer ce cache :
-- **Grouped-Query Attention (GQA)** : réduire le nombre de têtes K/V (divisé par 4 chez Mistral)
-- **Rolling buffer** : cache circulaire de taille fixe, les anciennes entrees sont ecrasees
+Les solutions pour gérer ce cache :
+- **GQA (Grouped-Query Attention)** : réduire le nombre de têtes K/V (divisé par 4 chez Mistral)
+- **Rolling buffer** : cache circulaire de taille fixe, les anciennes entrées sont écrasées
 - **Quantification du KV** : stocker les clés et valeurs en précision réduite (FP8 au lieu de FP16)
-- **PagedAttention** (vLLM) : gestion paginee de la mémoire, comme un système d'exploitation gere la RAM
+- **PagedAttention** (vLLM) : gestion paginée de la mémoire, comme un système d'exploitation gère la RAM
 
-**Encodage positionnel pour positions lointaines** : le modèle doit savoir ou se situe chaque token dans la sequence. Mistral utilise **RoPE** (Rotary Position Embedding), qui encode les positions via des rotations dans l'espace des vecteurs. Pour etendre au-dela de la taille d'entraînement, des techniques de scaling ajustent les fréquences de rotation (NTK-aware scaling, YaRN).
+**Encodage positionnel pour positions lointaines** : le modèle doit savoir où se situe chaque token dans la séquence. Mistral utilise **RoPE** (Rotary Position Embedding), qui encode les positions via des rotations dans l'espace des vecteurs. Pour étendre au-delà de la taille d'entraînement, des techniques de scaling ajustent les fréquences de rotation (NTK-aware scaling, YaRN).
 
-**Entraînement sur sequences longues** : le modèle doit **apprendre** à utiliser son contexte long. Mistral entraîne progressivement : d'abord sur des sequences de 4K tokens, puis 8K, puis 32K, puis 128K, puis 256K. Cet entraînement progressif est nécessaire pour que le modèle apprenne a exploiter l'information à toutes les distances.
+**Entraînement sur séquences longues** : le modèle doit **apprendre** à utiliser son contexte long. Mistral entraîne progressivement : d'abord sur des séquences de 4K tokens, puis 8K, puis 32K, puis 128K, puis 256K. Cet entraînement progressif est nécessaire pour que le modèle apprenne à exploiter l'information à toutes les distances.
 
-<Callout type="paper" title="RoPE Scaling : etendre la portee">
-RoPE encode les positions des tokens via des rotations dans l'espace vectoriel. Pour etendre le modèle au-dela de sa taille d'entraînement initiale, il faut ajuster les fréquences de rotation. Plusieurs techniques existent : NTK-aware scaling, YaRN, ou simplement un fine-tuning supplémentaire sur des sequences longues.
+<Callout type="paper" title="RoPE Scaling : étendre la portée">
+RoPE encode les positions des tokens via des rotations dans l'espace vectoriel. Pour étendre le modèle au-delà de sa taille d'entraînement initiale, il faut ajuster les fréquences de rotation. Plusieurs techniques existent : NTK-aware scaling, YaRN, ou simplement un fine-tuning supplémentaire sur des séquences longues.
 </Callout>
 
-### Techniques avancees pour le contexte long
+### Techniques avancées pour le contexte long
 
-**FlashAttention** : pas un changement algorithmique, mais une implementation GPU extremement optimisee du mécanisme d'attention. En minimisant les transferts entre la mémoire haute bande passante (HBM) et la mémoire rapide (SRAM) du GPU, FlashAttention est 2 à 3x plus rapide que l'implementation naive. C'est devenu un standard de l'industrie.
+**FlashAttention** : pas un changement algorithmique, mais une implémentation GPU extrêmement optimisée du mécanisme d'attention. En minimisant les transferts entre la mémoire haute bande passante (HBM) et la mémoire rapide (SRAM) du GPU, FlashAttention est 2 à 3x plus rapide que l'implémentation naïve. C'est devenu un standard de l'industrie.
 
-**Attention hierarchique** : pour les contextes ultra-longs, certains modèles combinent une attention locale fine (SWA sur quelques milliers de tokens) avec une attention globale sparse. Quelques tokens "sentinelles" participent à l'attention globale, permettant au modèle de maintenir des dépendances entre des parties eloignees du contexte.
+**Attention hiérarchique** : pour les contextes ultra-longs, certains modèles combinent une attention locale fine (SWA sur quelques milliers de tokens) avec une attention globale sparse. Quelques tokens "sentinelles" participent à l'attention globale, permettant au modèle de maintenir des dépendances entre des parties éloignées du contexte.
 
-**Compression du contexte** : les parties anciennes du contexte peuvent être compressees (résumé automatique, compression des embeddings) pour economiser de la mémoire tout en preservant l'information essentielle.
+**Compression du contexte** : les parties anciennes du contexte peuvent être compressées (résumé automatique, compression des embeddings) pour économiser de la mémoire tout en préservant l'information essentielle.
 
 ### Comment vérifier que le modèle utilise vraiment son contexte
 
@@ -75,7 +75,7 @@ Avoir une fenêtre de 256K tokens ne garantit pas que le modèle exploite effect
 
 **Needle in a Haystack** : on insère un fait précis ("l'aiguille") à un endroit aléatoire dans un long texte ("la botte de foin") et on demande au modèle de le retrouver. C'est le test le plus basique de la capacité de retrieval.
 
-**RULER** : un benchmark plus sophistique qui teste la capacité du modèle a effectuer du retrieval multi-hop, de l'agrégation d'information, et du suivi de variables sur de longues distances.
+**RULER** : un benchmark plus sophistiqué qui teste la capacité du modèle à effectuer du retrieval multi-hop, de l'agrégation d'information, et du suivi de variables sur de longues distances.
 
 **Lost in the Middle Effect** : les recherches montrent que les LLM utilisent mieux l'information située au début et à la fin du contexte, et tendent à "oublier" l'information au milieu. Mistral intègre des techniques d'entraînement spécifiques pour combattre ce biais.
 
@@ -85,12 +85,12 @@ Même avec 256K tokens de contexte, le modèle peut sous-utiliser l'information 
 
 ### Recommandations pratiques
 
-**Ne maximisez pas toujours le contexte.** 256K tokens = latence élevée + cout élevé. Si votre tâche ne nécessité que 4K tokens, envoyez 4K tokens. Payer pour 256K quand 4K suffit est du gaspillage.
+**Ne maximisez pas toujours le contexte.** 256K tokens = latence élevée + coût élevé. Si votre tâche ne nécessite que 4K tokens, envoyez 4K tokens. Payer pour 256K quand 4K suffit est du gaspillage.
 
-**Structurez votre information.** Même avec un contexte énorme, l'organisation aide le modèle. Format recommande : instructions système → contexte documentaire → question. C'est plus efficace qu'un dump brut de tout le texte.
+**Structurez votre information.** Même avec un contexte énorme, l'organisation aide le modèle. Format recommandé : instructions système --> contexte documentaire --> question. C'est plus efficace qu'un dump brut de tout le texte.
 
-**Testez la retention avant de déployer.** Avant de mettre en production une application qui exploite 256K tokens, verifiez avec des tests Needle-in-a-Haystack que le modèle retient vraiment les informations critiques à toutes les positions du contexte.
+**Testez la rétention avant de déployer.** Avant de mettre en production une application qui exploite 256K tokens, vérifiez avec des tests Needle-in-a-Haystack que le modèle retient vraiment les informations critiques à toutes les positions du contexte.
 
 ---
 
-**Le contexte long** permet aux LLM de lire des livres entiers, des codebases complets, et des dossiers de centaines de pages en une seule requete. C'est un changement de paradigme qui simplifie radicalement les architectures applicatives.
+**Le contexte long** permet aux LLM de lire des livres entiers, des codebases complets, et des dossiers de centaines de pages en une seule requête. C'est un changement de paradigme qui simplifie radicalement les architectures applicatives.

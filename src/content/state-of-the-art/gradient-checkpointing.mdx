@@ -3,17 +3,17 @@ title: "Gradient Checkpointing"
 description: "Analyse du gradient checkpointing (activation checkpointing), technique de compromis mémoire-calcul qui réduit la mémoire des activations en les recalculant lors du backward pass."
 ---
 
-## Le problème : les activations explosent ta mémoire GPU
+## Le problème : les activations explosent la mémoire GPU
 
-Pendant le backward pass, tu as besoin des activations du forward. Par exemple, pour une couche linéaire y = Wx + b, calculer dL/dW = (dL/dy) × x^T nécessite x (l'activation d'entrée).
+Pendant le backward pass, on a besoin des activations du forward. Par exemple, pour une couche linéaire y = Wx + b, calculer dL/dW = (dL/dy) x x^T nécessite x (l'activation d'entrée).
 
-Avec un modèle de 7B en BF16, une séquence de 4K tokens, batch=1 : tes activations intermédiaires occupent **30-60 GB**. Tes paramètres ? 14 GB. Les activations sont souvent plus grandes que le modèle lui-même.
+Avec un modèle de 7B en BF16, une séquence de 4K tokens, batch=1 : les activations intermédiaires occupent **30-60 Go**. Les paramètres ? 14 Go. Les activations sont souvent plus grandes que le modèle lui-même.
 
-Et tu dois les garder en mémoire du forward jusqu'à la fin du backward. C'est impossible à cause de la mémoire GPU.
+Et il faut les garder en mémoire du forward jusqu'à la fin du backward. C'est un problème majeur pour la mémoire GPU.
 
 ## La solution élégante : checkpointing
 
-Au lieu de stocker **toutes** les activations, tu ne stocks que quelques checkpoints. Lors du backward, tu recalcules les activations manquantes à partir du checkpoint le plus proche.
+Au lieu de stocker **toutes** les activations, on ne stocke que quelques checkpoints. Lors du backward, on recalcule les activations manquantes à partir du checkpoint le plus proche.
 
 C'est un compromis : un peu plus de calcul, beaucoup moins de mémoire.
 
@@ -41,7 +41,7 @@ Le checkpointing tous les sqrt(N) couches est provablement optimal pour le compr
 
 ## En pratique : checkpointing par bloc Transformer
 
-Au lieu de checkpointer individuellement, tu checkpointes par bloc Transformer (attention + MLP + normalisations).
+Au lieu de checkpointer individuellement, on checkpointe par bloc Transformer (attention + MLP + normalisations).
 
 Pour chaque bloc Transformer :
 1. Forward : stocke seulement l'entrée du bloc [batch, séquence, dim]
@@ -52,7 +52,7 @@ Pour chaque bloc Transformer :
 
 ## Checkpointing sélectif : cible les gros consommateurs
 
-Au lieu de tout checkpointer, tu peux cibler les opérations coûteuses :
+Au lieu de tout checkpointer, on peut cibler les opérations coûteuses :
 
 - **Checkpoint l'attention** : la matrice attention est énorme (L × L)
 - **Garde le MLP** : les activations du MLP sont plus petites à stocker
@@ -60,7 +60,7 @@ Au lieu de tout checkpointer, tu peux cibler les opérations coûteuses :
 Résultat : ~40% de réduction mémoire avec seulement ~15-20% de recalcul (vs 33%).
 
 <Callout type="tip" title="Flash Attention change la donne">
-Flash Attention ne matérialise jamais la matrice attention L×L. Il la recalcule bloc par bloc pendant le backward. Combiné avec le checkpointing par bloc Transformer, ça élimine le problème des activations attention. Avec Flash Attention + checkpointing, tu peux souvent entraîner des séquences très longues.
+Flash Attention ne matérialise jamais la matrice attention L×L. Il la recalcule bloc par bloc pendant le backward. Combiné avec le checkpointing par bloc Transformer, ça élimine le problème des activations attention. Avec Flash Attention + checkpointing, on peut souvent entraîner des séquences très longues.
 </Callout>
 
 ## Implémentation PyTorch
@@ -80,12 +80,12 @@ Le framework gère le stockage/recalcul automatiquement.
 
 Le checkpointing n'est **pas** toujours bénéfique :
 
-- **Petit modèle / batch petit** : tu as assez de mémoire sans checkpointing. Le recalcul ralentit juste l'entraînement.
+- **Petit modèle / batch petit** : on a assez de mémoire sans checkpointing. Le recalcul ralentit juste l'entraînement.
 - **Grande mémoire GPU** : pareil.
-- **Modèle énorme / batch énorme** : c'est là que checkpointing brille.
+- **Modèle énorme / batch énorme** : c'est là que le checkpointing brille.
 
-<Callout type="warning" title={"Évite le checkpointing si tu n'en as pas besoin"}>
-Mesure. Si ton GPU a assez de mémoire sans checkpointing, n'active pas. Si tu dois augmenter le batch ou la séquence, alors active. C'est un hyperparamètre comme un autre.
+<Callout type="warning" title={"Évitez le checkpointing si vous n'en avez pas besoin"}>
+Mesurez. Si votre GPU a assez de mémoire sans checkpointing, ne l'activez pas. Si vous devez augmenter le batch ou la séquence, alors activez-le. C'est un hyperparamètre comme un autre.
 </Callout>
 
 ## Impact réel sur la vitesse
@@ -96,7 +96,7 @@ Mesure. Si ton GPU a assez de mémoire sans checkpointing, n'active pas. Si tu d
 | Checkpointing complet | 15% | ~33% | ~10-25% |
 | Checkpointing sélectif | 40-50% | ~15-20% | ~5-10% |
 
-**Key insight** : le surcoût calcul de 33% se traduit souvent par seulement 10-25% de perte de throughput parce que le GPU était partiellement inactif pendant les communications. Tu gagnes du calcul utile sans perdre beaucoup en vitesse.
+**Point important** : le surcoût calcul de 33% se traduit souvent par seulement 10-25% de perte de throughput parce que le GPU était partiellement inactif pendant les communications. On gagne du calcul utile sans perdre beaucoup en vitesse.
 
 ## Combinaisons gagnantes
 
@@ -106,7 +106,7 @@ Standard pour les grands modèles. FSDP/Zéro réduit la mémoire des paramètre
 
 ### Checkpointing + TP
 
-Avec Tensor Parallelism, le checkpointing réduit les activations sur chaque GPU, ce qui te permet d'augmenter le batch ou la séquence.
+Avec Tensor Parallelism, le checkpointing réduit les activations sur chaque GPU, ce qui permet d'augmenter le batch ou la séquence.
 
 ## Techniques avancées
 
@@ -116,7 +116,7 @@ Certaines architectures (Reformer, RevNet) permettent de recalculer les activati
 
 ### Checkpointing adaptatif
 
-Des techniques récentes ajustent dynamiquement le nombre de checkpoints en fonction de la mémoire disponible. Tu dis "cible 8 GB de mémoire activations" et le framework choisit le taux de checkpointing.
+Des techniques récentes ajustent dynamiquement le nombre de checkpoints en fonction de la mémoire disponible. On dit "cible 8 Go de mémoire activations" et le framework choisit le taux de checkpointing.
 
 ## Résumé
 

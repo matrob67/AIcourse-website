@@ -12,7 +12,7 @@ Les systèmes naïfs pré-allouent un bloc de mémoire **contigu** pour la longu
 
 
 <Callout type="info" title="Une idée vieille de 60 ans">
-Ce problème de fragmentation mémoire, les systèmes d'exploitation l'ont résolu dans les années 1960 avec la **mémoire virtuelle paginée**. Au lieu d'allouer des blocs contigus de taille variable, on découpe la mémoire en petites **pages** de taille fixe qui peuvent être placées n'importe ou. PagedAttention applique exactement cette même idée au KV cache des LLM.
+Ce problème de fragmentation mémoire, les systèmes d'exploitation l'ont résolu dans les années 1960 avec la **mémoire virtuelle paginée**. Au lieu d'allouer des blocs contigus de taille variable, on découpe la mémoire en petites **pages** de taille fixe qui peuvent être placées n'importe où. PagedAttention applique exactement cette même idée au KV cache des LLM.
 </Callout>
 
 <ArxivLink id="2309.06180" title="Efficient Memory Management for Large Language Model Serving with PagedAttention (Kwon et al., 2023)" />
@@ -21,7 +21,7 @@ Ce problème de fragmentation mémoire, les systèmes d'exploitation l'ont réso
 
 ### Le modèle de paging
 
-Le KV cache est divisé en **blocs (pages)** de taille fixe, typiquement 16 tokens chacun. Chaque requête n'occupe que les blocs dont elle a effectivement besoin, et ces blocs peuvent être dispersés n'importe ou dans la mémoire GPU :
+Le KV cache est divisé en **blocs (pages)** de taille fixe, typiquement 16 tokens chacun. Chaque requête n'occupe que les blocs dont elle a effectivement besoin, et ces blocs peuvent être dispersés n'importe où dans la mémoire GPU :
 
 - **Requête A** (120 tokens) : Bloc 5, Bloc 12, Bloc 3
 - **Requête B** (30 tokens) : Bloc 7, Bloc 1
@@ -37,11 +37,11 @@ Chaque requête possède une **table de pages** qui fait le lien entre les posit
 
 ### Le kernel d'attention modifié
 
-L'opération d'attention doit être adaptée pour lire les clés et valeurs depuis des blocs potentiellement dispersés en mémoire. Un **block table** stocké en GPU indique ou trouver chaque bloc logique. Grâce à la taille fixe des blocs (16 tokens), les lectures mémoire au sein de chaque bloc restent efficaces et coalescées.
+L'opération d'attention doit être adaptée pour lire les clés et valeurs depuis des blocs potentiellement dispersés en mémoire. Un **block table** stocké en GPU indique où trouver chaque bloc logique. Grâce à la taille fixe des blocs (16 tokens), les lectures mémoire au sein de chaque bloc restent efficaces et coalescées.
 
 ## Les résultats concrets
 
-PagedAttention réduit le gaspillage de KV cache de **60-80% a moins de 4%**. En pratique, ça signifie :
+PagedAttention réduit le gaspillage de KV cache de **60-80% à moins de 4%**. En pratique, ça signifie :
 
 - **2 à 4 fois plus de requêtes simultanées** avec la même quantité de VRAM
 - **Réduction proportionnelle des coûts d'inférence** (même performance, moins de GPU)
@@ -90,7 +90,7 @@ Quand plusieurs requêtes partagent le **même préfixe** (un system prompt iden
   - Requête 2 : blocs spécifiques
   - Requête 3 : blocs spécifiques
 
-Au lieu de recalculer et stocker le KV cache du system prompt pour chaque requête, on le calcule une fois et on le réutilise. Les économies sont massives sur les systèmes RAG ou le contexte partagé est souvent bien plus long que la réponse.
+Au lieu de recalculer et stocker le KV cache du system prompt pour chaque requête, on le calcule une fois et on le réutilise. Les économies sont massives sur les systèmes RAG où le contexte partagé est souvent bien plus long que la réponse.
 
 ### Copy-on-Write
 

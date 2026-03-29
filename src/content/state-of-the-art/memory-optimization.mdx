@@ -7,7 +7,7 @@ description: "Stratégies pour réduire l'empreinte mémoire GPU des LLM : offlo
 
 ## Le mur : la mémoire GPU manque toujours
 
-Un modèle de 70B paramètres en FP16, c'est 140 Go de poids. Ton GPU le plus costaud ? 80 Go de VRAM. Tu ne peux pas faire rentrer un éléphant dans une Smart. Mais avec les bonnes techniques, tu peux découper l'éléphant en morceaux et le faire voyager entre la Smart et un camion garé à côté.
+Un modèle de 70B paramètres en FP16, c'est 140 Go de poids. Votre GPU le plus costaud ? 80 Go de VRAM. On ne peut pas faire rentrer un éléphant dans une Smart. Mais avec les bonnes techniques, on peut découper l'éléphant en morceaux et le faire voyager entre la Smart et un camion garé à côté.
 
 C'est exactement l'idée derrière l'optimisation mémoire : jouer sur plusieurs leviers pour faire tenir des modèles trop gros dans des GPU trop petits, ou pour libérer de la mémoire pour augmenter le batch size ou la longueur de contexte.
 
@@ -18,7 +18,7 @@ C'est exactement l'idée derrière l'optimisation mémoire : jouer sur plusieurs
 
 ## Offloading CPU : stocker ailleurs, calculer sur le GPU
 
-Le principe est simple : au lieu de garder tous les poids du modèle sur le GPU, tu stockes les couches inutilisées en RAM CPU. Quand une couche est nécessaire pour le calcul, tu la rapatries sur le GPU. Quand elle n'est plus nécessaire, tu la renvoies en RAM.
+Le principe est simple : au lieu de garder tous les poids du modèle sur le GPU, on stocke les couches inutilisées en RAM CPU. Quand une couche est nécessaire pour le calcul, on la rapatrie sur le GPU. Quand elle n'est plus nécessaire, on la renvoie en RAM.
 
 ```python
 from transformers import AutoModelForCausalLM
@@ -40,24 +40,24 @@ Le `device_map="auto"` fait le travail automatiquement : il remplit d'abord le G
 Le goulot d'étranglement, c'est le bus PCIe 4.0 à 32 Go/s. Charger une couche de 4 Go depuis la RAM CPU prend environ 130 ms. Pendant ce transfert, le GPU attend. C'est le prix de l'offloading.
 
 <Callout type="warning" title="Est-ce que ça vaut le coup ?">
-Ça dépend entièrement de ton cas d'usage. Pour de l'inférence batch offline (pas de contrainte de latence), perdre un facteur 3 en vitesse pour gagner un facteur 4 en taille de modèle est souvent acceptable. Pour du streaming temps réel, c'est rédhibitoire. Pour du prototypage et de l'expérimentation, c'est parfait.
+Ça dépend entièrement de votre cas d'usage. Pour de l'inférence batch offline (pas de contrainte de latence), perdre un facteur 3 en vitesse pour gagner un facteur 4 en taille de modèle est souvent acceptable. Pour du streaming temps réel, c'est rédhibitoire. Pour du prototypage et de l'expérimentation, c'est parfait.
 </Callout>
 
 ## Gradient Checkpointing : oublier pour mieux recommencer
 
 Pendant le fine-tuning, le backward pass (calcul des gradients) a besoin des activations calculées pendant le forward pass. Normalement, on les garde toutes en mémoire. Pour un modèle de 70B avec un batch de 4 séquences de 4096 tokens, ces activations peuvent occuper **des dizaines de Go** de VRAM.
 
-L'astuce du gradient checkpointing : ne garde pas les activations en mémoire. Pendant le backward pass, **recalcule-les** à partir des checkpoints sauvegardés. Tu échanges du temps de calcul contre de la mémoire.
+L'astuce du gradient checkpointing : ne garde pas les activations en mémoire. Pendant le backward pass, **recalculez-les** à partir des checkpoints sauvegardés. On échange du temps de calcul contre de la mémoire.
 
 ```python
 model.gradient_checkpointing_enable()
 ```
 
-Le surcoût en temps est d'environ 33% (tu refais le forward pass une deuxième fois), mais le gain en mémoire est d'environ 60%. C'est presque toujours un bon deal pour le fine-tuning : la mémoire libérée te permet d'utiliser un batch size plus grand, ce qui accélère la convergence et peut compenser (voire dépasser) le surcoût de calcul.
+Le surcoût en temps est d'environ 33% (on refait le forward pass une deuxième fois), mais le gain en mémoire est d'environ 60%. C'est presque toujours un bon compromis pour le fine-tuning : la mémoire libérée permet d'utiliser un batch size plus grand, ce qui accélère la convergence et peut compenser (voire dépasser) le surcoût de calcul.
 
 ## DeepSpeed Zéro : partager au lieu de dupliquer
 
-Pour l'entraînement distribué sur plusieurs GPU, le Data Parallelism classique à un défaut majeur : chaque GPU stocke une copie complète des poids, des gradients, ET des états de l'optimiseur. Avec un modèle 70B et Adam, ça fait environ 840 Go de mémoire totale par GPU (poids + gradients + 2 états optimizer + poids maîtres FP32).
+Pour l'entraînement distribué sur plusieurs GPU, le Data Parallelism classique a un défaut majeur : chaque GPU stocke une copie complète des poids, des gradients, ET des états de l'optimiseur. Avec un modèle 70B et Adam, ça fait environ 840 Go de mémoire totale par GPU (poids + gradients + 2 états optimizer + poids maîtres FP32).
 
 Zéro (Zéro Redundancy Optimizer) de Microsoft élimine cette redondance en **partageant** les données entre GPU au lieu de les dupliquer :
 
@@ -68,7 +68,7 @@ Zéro (Zéro Redundancy Optimizer) de Microsoft élimine cette redondance en **p
 Stage 2 est le "sweet spot" pour la plupart des cas : bon gain mémoire, complexité de communication raisonnable. Stage 3 est plus puissant mais ajoute de la latence (les paramètres doivent être rassemblés avant chaque forward/backward).
 
 <Callout type="tip" title={"FSDP : l'alternative PyTorch native"}>
-PyTorch propose **FSDP** (Fully Sharded Data Parallel), qui fait essentiellement la même chose que Zéro Stage 3 mais avec une intégration native dans l'écosystème PyTorch. Si tu utilises PyTorch, FSDP est généralement plus simple à configurer et à débugger que DeepSpeed.
+PyTorch propose **FSDP** (Fully Sharded Data Parallel), qui fait essentiellement la même chose que Zéro Stage 3 mais avec une intégration native dans l'écosystème PyTorch. Si vous utilisez PyTorch, FSDP est généralement plus simple à configurer et à débugger que DeepSpeed.
 </Callout>
 
 ## KV Cache : quantifier et compresser
@@ -106,4 +106,4 @@ Résultat : quelque chose qu'on pensait impossible il y a deux ans fonctionne ma
 | Inférence long contexte | GQA + KV cache quantifié (FP8) |
 | Hardware très limité | GGUF + offloading CPU complet |
 
-Le message fondamental : il n'y a pas **un seul** levier magique pour l'optimisation mémoire. C'est l'empilement de multiples petites améliorations qui produit des résultats spectaculaires. Chaque technique grignote un facteur 2x à 4x, et leur combinaison te fait gagner 10x à 30x. C'est ce qui rend les LLM modernes utilisables sur du matériel qui semblait trop modeste il y a à peine deux ans.
+Le message fondamental : il n'y a pas **un seul** levier magique pour l'optimisation mémoire. C'est l'empilement de multiples petites améliorations qui produit des résultats spectaculaires. Chaque technique grignote un facteur 2x à 4x, et leur combinaison fait gagner 10x à 30x. C'est ce qui rend les LLM modernes utilisables sur du matériel qui semblait trop modeste il y a à peine deux ans.
