@@ -1,36 +1,38 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI State of the Art — Cours complet
 
-## Getting Started
+**307 sections pour maitriser l'IA moderne** : ML, Deep Learning, LLM, NLP, MLOps, Robotics, Medical, et une section Mistral AI.
 
-First, run the development server:
+**Site en production** : [https://ai-course-website-seven.vercel.app](https://ai-course-website-seven.vercel.app)
+
+## Stack technique
+
+- **Framework** : Next.js 16 + React 19 + TypeScript
+- **Contenu** : MDX avec LaTeX (KaTeX), syntax highlighting (Shiki)
+- **Auth** : Clerk
+- **Style** : Tailwind CSS 4
+- **PWA** : Installable sur mobile (manifest + service worker)
+- **Deploiement** : Vercel
+
+## Structure du contenu
+
+Les 351 fichiers MDX sont dans `src/content/` :
+
+| Dossier | Sections | Description |
+|---------|----------|-------------|
+| `fondamentaux/` | 61 | ML, deep learning, transformers, GANs, RLHF |
+| `state-of-the-art/` | 131 | LoRA, Flash Attention, MoE, agents, RAG, quantization |
+| `mlops/` | 30 | GPU, cloud, CI/CD, monitoring, serving |
+| `domaines/` | 25 | Robotique, medical, chimie, physique |
+| `mistral/` | 42 | Modeles, APIs, deploiement Mistral AI |
+| `ecosysteme/` | 29 | Companies, papers, benchmarks |
+| `mathematiques/` | 24 | Probabilites, algebre, calcul, optimisation |
+| `ressources/` | 9 | Frameworks, datasets, communautes |
+
+## Dev local
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Ouvrir [http://localhost:3000](http://localhost:3000).
