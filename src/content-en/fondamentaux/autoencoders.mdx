@@ -1,0 +1,155 @@
+---
+title: "Autoencoders: compression and reconstruction"
+description: "Autoencoders, their encoder-decoder architecture with bottleneck, and their variants for compression, denoising, and representation learning."
+---
+
+## The seemingly stupid idea
+
+Training a network to **copy its inputs**. Put like that, it seems completely useless. Why train a model to reproduce what you give it?
+
+The trick is that it **can't actually copy**. You force a bottleneck in the middle of the network: all information must pass through a representation much smaller than the input. Imagine being asked to summarize a 500-page novel on a single index card. You can't copy it word for word: you're forced to capture the essentials, the themes, the key characters, the narrative arc. That's exactly what an autoencoder does.
+
+The result? The autoencoder **doesn't produce** a perfect copy of the input. It produces a **compact representation** that preserves important structural information and eliminates noise and superfluous details. And it's precisely this compression constraint that makes the autoencoder useful: the compressed representation (called the **latent code**) captures the essence of the data.
+
+## Basic architecture
+
+<ImageWithSource
+  src="/images/admin/img-1774010905721.png"
+  alt="Diagram of an autoencoder neural network"
+  source="https://blent.ai/blog/a/auto-encodeurs-deep-learning"
+  caption="This diagram illustrates the architecture of an autoencoder, a type of neural network used for data compression. The encoder reduces input data into a compressed representation (bottleneck), while the decoder reconstructs the original data from this compressed version."
+  size="large"
+/>
+
+### The encoder
+
+The encoder is the first half of the network. It takes input x (for example an MNIST image of 28x28 pixels, i.e., 784 dimensions) and progressively compresses it into a much smaller vector z (for example 32 dimensions, roughly 25 times smaller):
+
+$$z = f_{\text{encoder}}(x)$$
+
+In practice, for images, the encoder uses convolutions with a stride greater than 1 that reduce the spatial resolution at each layer (e.g., 28x28 then 14x14 then 7x7), followed by dense layers that flatten and further compress. Each layer forces the network to keep only the most useful information for reconstruction.
+
+### The bottleneck
+
+The vector z is the narrow neck of the architecture, the point where all information must pass through. With only 32 numbers to represent a 784-pixel image, the network is forced to make choices: which structures, which patterns, which contrasts are essential? This constraint is what forces the learning of meaningful representations. Without it, the network could simply memorize the identity function, which would be useless.
+
+### The decoder
+
+The decoder does the inverse work: it takes the compressed code z and attempts to reconstruct the original input:
+
+$$\hat{x} = f_{\text{decoder}}(z)$$
+
+It uses dense layers to re-expand the dimensions, then transposed convolutions (upsampling) that progressively enlarge the spatial resolution back to the original size. The reconstructed image will never be perfectly identical to the original, but it should capture its essential features.
+
+<Callout type="info" title={"Why it's unsupervised"}>
+This is a subtle but important point: the autoencoder doesn't need human-annotated labels. The reconstruction target is the input itself. Each image is both the input and the label. You just need a dataset of raw images, without any annotation. This is what makes autoencoders so valuable: they learn useful representations from unlabeled data, which is far more abundant and less costly to obtain.
+</Callout>
+
+## The loss: faithful reconstruction
+
+The loss function measures how closely the reconstruction resembles the original. The choice depends on the data type.
+
+For images with pixels normalized between 0 and 1, you typically use **mean squared error** (MSE):
+$$\mathcal{L} = \frac{1}{n} \sum_{i=1}^{n} (x_i - \hat{x}_i)^2$$
+
+Each reconstructed pixel is compared to the original pixel, the difference is squared (to penalize large errors more), and you take the average. For binary images (pixels that are 0 or 1), **binary cross-entropy** (BCE) is preferred, as it's better suited to probability distributions.
+
+The learning signal is clear: "compress into z, but well enough to be able to reconstruct afterward." The network seeks a balance between maximum compression and reconstruction fidelity.
+
+<ImageWithSource
+  src="/images/admin/img-1774397127543.png"
+  alt="Autoencoder diagram"
+  caption="This diagram illustrates how an autoencoder works: the original image is compressed into an intermediate representation (z) by the encoder, then reconstructed by the decoder to obtain an image similar to the input."
+  size="large"
+/>
+
+## Smart variants
+
+### Undercomplete autoencoder
+
+This is the simplest and most intuitive variant: the dimension of z is strictly smaller than that of x. For example, 32 dimensions to represent a 784-pixel image. This size constraint is what prevents the network from simply copying the input and forces it to learn true compression. This is the "standard" case we described above.
+
+### Denoising autoencoder (DAE)
+
+The idea is ingenious: you intentionally add **noise** to the input before giving it to the network, but the reconstruction target remains the **clean** input, without noise.
+
+$$\tilde{x} = x + \epsilon, \quad \epsilon \sim \mathcal{N}(0, \sigma^2)$$
+
+$$\mathcal{L} = \| f_{\text{decoder}}(f_{\text{encoder}}(\tilde{x})) - x \|^2$$
+
+You can use different types of noise: Gaussian noise (adding random values), dropout-style masking (randomly setting some pixels to zero), or "salt and pepper" noise (random pixels take the minimum or maximum value).
+
+<Callout type="tip" title="Why denoising teaches">
+By learning to remove noise, the network is forced to capture the deep **statistical structure** of the data. It can no longer just blindly copy: it must understand what is signal and what is noise. The learned representations are therefore significantly more robust and generalizable than those of a standard autoencoder.
+</Callout>
+
+### Sparse autoencoder
+
+The idea: force the representation z to be **sparse** -- most neurons must stay at zero, with only a few activating to represent each input.
+
+Concretely, you add a sparsity penalty to the reconstruction loss:
+
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{reconstruction}} + \lambda \cdot \mathcal{L}_{\text{sparsity}}$$
+
+The sparsity penalty can take two forms:
+- **L1 penalty**: you sum the absolute value of each activation. The larger an activation, the more it costs. The network thus learns to activate only what's truly necessary.
+- **KL divergence**: you compare the average activation distribution of neurons to a sparsity target (e.g., "on average, each neuron should activate 5% of the time"). If a neuron activates too often, it's penalized.
+
+**The "overcomplete" paradox**: unlike standard autoencoders where z is smaller than x, the sparse autoencoder can have a z *larger* than x. For example, a 784-pixel image with a 2000-dimensional latent space. How doesn't it just copy blindly? Because the sparsity penalty ensures that, for a given image, only 30 or 40 of those 2000 neurons activate. Each neuron becomes a specialized "pattern detector" -- somewhat like neurons in the visual cortex, which each respond to a specific type of edge or texture.
+
+### Contractive autoencoder
+
+Adds a penalty on the **sensitivity** of the encoder to small input variations. Technically, you penalize the Frobenius norm of the encoder's Jacobian with respect to the input:
+
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{reconstruction}} + \lambda \left\| \frac{\partial z}{\partial x} \right\|_F^2$$
+
+In practice: if you slightly perturb x, z should barely move. This forces the latent space to be smooth and robust -- two similar inputs yield two similar codes. Useful for learning representations invariant to small transformations.
+
+## Practical applications
+
+### Dimensionality reduction
+
+If you know PCA (Principal Component Analysis), you can think of the autoencoder as a **nonlinear PCA**. PCA can only capture linear relationships between variables. The autoencoder, thanks to its nonlinear activation functions, can capture much more complex and subtle structures in the data. For example, for face images, PCA could capture global brightness variations, while an autoencoder can learn concepts like "smile," "face orientation," or "wearing glasses."
+
+### Anomaly detection
+
+You train the autoencoder only on normal data. It learns to faithfully reconstruct what it has seen. When faced with abnormal data (fraud, a defective part), it doesn't know how to reconstruct it -- the reconstruction error spikes. You set a threshold: above it, it's an anomaly.
+
+The key advantage: you don't need examples of anomalies for training. Anomalies are often rare and unpredictable by definition -- the autoencoder detects "what it has never seen."
+
+<Callout type="tip" title={"In practice"}>
+The pipeline is simple: you train the autoencoder on a normal dataset, then measure the reconstruction error on a validation set to set a threshold. In production, each new data point passes through the autoencoder -- if the reconstruction error exceeds the threshold, it's flagged as an anomaly. This is used in banking fraud detection, industrial predictive maintenance, and visual quality control.
+</Callout>
+
+<ImageWithSource
+  src="/images/admin/img-1774397061353.png"
+  alt="Autoencoder diagram for anomaly detection"
+  caption="The image illustrates training an autoencoder on healthy images (A) and using it to detect anomalies on new images (B). The reconstruction error serves as a metric for identifying abnormal data."
+  size="large"
+/>
+
+### Pre-training (historically)
+
+Before the deep learning revolution around 2012, deep networks were very difficult to train directly. A popular technique was to pre-train each layer individually as an autoencoder, then stack the pre-trained layers. This smart weight initialization allowed launching supervised learning from a better starting point. With the arrival of powerful GPUs, large datasets, and better initialization techniques (like Xavier or He), this approach became obsolete. But historically, it was crucial for proving that deep networks could work.
+
+### Image compression
+
+Convolutional autoencoders learn an encoding specific to the type of images they're trained on. For medical images, satellite imagery, or faces, they can outperform JPEG and WebP by achieving higher compression ratios at equivalent visual quality. This is the principle behind modern neural codecs like those developed by Google and Meta.
+
+### Image denoising
+
+Denoising autoencoders (DAEs) are directly used to clean noisy images. Unlike classical filters like Gaussian blur that act blindly on all pixels, the DAE has learned the real statistical structure of clean images. It knows how to distinguish what is signal (real edges, textures) from what is noise. Result: it preserves important details while eliminating noise, which classical filters cannot do.
+
+## Limitations of the classic autoencoder
+
+1. **Disorganized latent space**: two nearby points in z don't necessarily correspond to similar data, making interpolation unpredictable
+2. **No generation possible**: you can't sample a random z and expect a realistic output, because the latent space isn't continuous
+3. **Not probabilistic**: the model is purely deterministic -- it doesn't learn a probability distribution over the data
+
+<Callout type="paper" title={"This is the limit"}>
+These three limitations directly motivate the invention of **Variational Autoencoders (VAE)**, which add a probabilistic structure to the latent space. VAEs form the bridge between classical autoencoders and modern generative models, solving each of these three limitations.
+</Callout>
+
+## Summary
+
+The autoencoder relies on a simple but powerful principle: forcing a network to compress its data through a bottleneck, then reconstruct it. This constraint forces the network to learn compact and meaningful data representations. The variants (denoising, sparse, contractive) each add an additional constraint that improves the quality of learned representations. Applications are numerous: dimensionality reduction, anomaly detection, image compression, denoising. However, the classic autoencoder has a fundamental limitation: its latent space is not structured in a way that allows generating new data. That's exactly the problem solved by **Variational Autoencoders (VAE)**, which add a probabilistic structure to the latent space. Understanding autoencoders is essential before tackling modern generative models.

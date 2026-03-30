@@ -1,0 +1,119 @@
+---
+title: "Sliding Window Attention"
+description: "Detailed implementation of sliding window attention in Mistral models: memory reduction, rolling buffer KV cache, and information propagation."
+---
+
+## Sliding Window Attention: How Mistral Reads Giant Documents Without Blowing Up Memory
+
+The problem is fundamental. A classic transformer, to generate each new token, looks at ALL previous tokens. If you give it a 100-page document, it consults all 100 pages for every word it generates. In memory: the cache grows without limit. In speed: it gets slower and slower as the text gets longer.
+
+Mistral proposed an elegant solution: instead of looking at the entire context at each layer, you only look at a local window of a few thousand tokens. That's Sliding Window Attention (SWA). Faster, more memory-efficient, and thanks to a clever mechanism, the model still "sees" far.
+
+### The Problem of Endlessly Growing Context
+
+In a standard transformer, the token at position 10,000 can "see" all tokens from 1 to 9,999. The required memory (the KV cache) grows proportionally to the sequence length.
+
+**The memory explosion.** For a model with d_model = 4096, 32 layers, and keys/values in fp16, the KV cache for a 32K token sequence takes about 8 GB. For 128K tokens, it rises to about 32 GB, just for the cache. That's GPU memory no longer available for anything else.
+
+**Quadratic complexity.** The attention computation is O(n^2): doubling the sequence length quadruples the computation time. For long sequences, this quickly becomes the main bottleneck.
+
+<Callout type="info" title="The KV cache: why it exists">
+During inference (token-by-token generation), the KV cache stores the keys and values of already-generated tokens to avoid recomputing them for each new token. It's an essential speed optimization. Without the cache, each new token would require reprocessing the entire sequence from the beginning. The problem: this cache grows with each generated token.
+</Callout>
+
+
+
+### The Principle: Only Looking at a Local Window
+
+With SWA, each attention layer only consults the last W tokens instead of the entire sequence. W is the window size.
+
+For Mistral 7B, W = 4096. This means that in each layer, a token at position t can only "see" tokens from positions max(1, t-W+1) to t. It's like reading text through a sliding window: you only see the last 4,096 tokens, but the window moves with you.
+
+#### The Immediate Gains
+
+**Constant memory.** The KV cache now has a fixed size of W tokens per layer, regardless of the total sequence length. For Mistral 7B: the cache is limited to about 1 GB instead of growing indefinitely. Whether you generate 100 tokens or 100,000, memory stays the same.
+
+**Reduced computation.** Attention is only computed over W tokens instead of t tokens, bringing complexity from O(n^2) down to O(n x W). For long sequences, that's a considerable gain.
+
+### The Trick: Propagation Through Layers
+
+The obvious question: if each layer only sees W = 4,096 tokens, how does the model capture dependencies over 32K tokens?
+
+The answer is ingenious and relies on stacking layers. Imagine a game of telephone that actually works:
+
+- **Layer 1:** the token at position t sees tokens [t-W+1, t]. Range: W tokens.
+- **Layer 2:** the token at position t sees the Layer 1 representations of tokens [t-W+1, t]. But these representations already contain information from tokens [t-2W+2, t] (because Layer 1 had itself looked backward). Effective range: 2W tokens.
+- **Layer L:** information can theoretically come from tokens [t-L x W+L, t].
+
+For Mistral 7B: L = 32 layers, W = 4096, so the theoretical range is 32 x 4096 = 131,072 tokens. That's well above the official 32K token context window. Information "percolates" from layer to layer, like waves propagating.
+
+<Callout type="tip" title="Theoretical range vs effective range">
+The theoretical range (L x W) is a maximum, not a guarantee. In practice, information dilutes as it crosses layers, like a message in a game of telephone. Very long-distance dependencies are weaker than nearby ones. However, experiments show the model effectively captures dependencies over distances well beyond W. SWA doesn't cut off information, it gradually attenuates it.
+</Callout>
+
+### The Rolling Buffer KV Cache: An Elegant Implementation
+
+The concrete implementation of SWA in Mistral uses a circular buffer (rolling buffer) for the KV cache. It's a simple but effective engineering trick.
+
+#### How It Works
+
+The cache is a fixed-size array of W. When a new token is generated at position t, its key and value are stored at index `t mod W` in the buffer. When the buffer is full, new entries overwrite the oldest ones, exactly like an airplane's black box recorder.
+
+With W = 4 (simplified for illustration):
+
+| Token position | Buffer index (t mod 4) |
+|----------------|------------------------|
+| 0 | 0 |
+| 1 | 1 |
+| 2 | 2 |
+| 3 | 3 |
+| 4 | 0 (overwrites position 0) |
+| 5 | 1 (overwrites position 1) |
+
+#### Why It's Clever
+
+**Strictly constant memory.** Regardless of sequence length (100 or 100,000 tokens), the cache occupies exactly W x d_model x 2 (keys + values) x number of layers. Not a byte more.
+
+**No dynamic allocation.** The buffer is pre-allocated at startup. No `malloc` during inference, no memory fragmentation, no surprise latency from the garbage collector.
+
+**Predictable memory access.** The buffer access patterns are regular and localized, which optimizes CPU/GPU cache usage. Hardware loves predictable memory accesses.
+
+### Chunk Pre-fill: Handling Long Prompts
+
+When a user sends a long prompt (several thousand tokens), the model must first "read" it entirely before starting to generate. This is the pre-fill phase.
+
+**The mechanism:** instead of processing the entire prompt in a single operation (which would require a massive attention matrix of size prompt x prompt), the prompt is split into chunks of size W. Each chunk is processed sequentially, and only the cache of the last W tokens is kept in memory.
+
+This chunking reduces the peak memory needed for pre-fill and maintains consistency with SWA logic. It's transparent to the user: the result is identical.
+
+<Callout type="paper" title={"SWA compared to other efficient attention techniques"}>
+SWA isn't the only approach for reducing attention complexity. Others exist: linear attention (Performer, Linear Transformer), local + global attention (Longformer, BigBird), and FlashAttention (which is a hardware optimization rather than an algorithmic one). SWA stands out for its implementation simplicity and practical effectiveness. No complex theoretical trade-off: you just look at a window, and the layers do the rest.
+</Callout>
+
+### SWA Across Different Mistral Models
+
+| Model | SWA window | Max context | Ratio |
+|-------|-----------|-------------|-------|
+| Mistral 7B | 4096 | 32K | 8:1 |
+| Mixtral 8x7B | 4096 | 32K | 8:1 |
+| Mixtral 8x22B | Variable | 64K | - |
+| Mistral NeMo | Adaptive | 128K | - |
+| Mistral Large 3 | Advanced | 256K | - |
+
+More recent models likely use more sophisticated SWA variants, combined with sparse global attention and hierarchical attention techniques to support 128K and 256K token contexts. Mistral hasn't published the details of these mechanisms, but the spectacular increase in context windows suggests significant innovations.
+
+### SWA + GQA Synergy: Multiplicative Savings
+
+The combination of SWA with Grouped-Query Attention (GQA) multiplies memory savings.
+
+**GQA** reduces the number of K/V heads. Instead of having 32 K/V heads (one per attention head), you have 8 that are shared across attention heads. Cache size is divided by 4.
+
+**SWA** limits cache length to W tokens instead of the total sequence length.
+
+The combined effect is multiplicative. For Mistral 7B with 8 K/V heads (GQA 4:1) and W = 4096 (SWA), the KV cache is about 32 times smaller than with standard Multi-Head Attention over the full context. That's what makes inference on consumer hardware possible.
+
+<Callout type="warning" title="The SWA trade-off">
+SWA implies information loss for tokens beyond the window in a given layer. For tasks that require recalling a precise detail mentioned 10,000 tokens ago (a number, a name, a date), SWA can be less accurate than full attention. That's why recent models likely combine SWA with sparse global attention mechanisms that maintain "long-term memory" for critical information.
+</Callout>
+
+Sliding Window Attention perfectly illustrates Mistral's philosophy: an elegant technical innovation, simple in principle, that delivers major practical gains (constant memory, fast inference) without excessive implementation complexity. It's this kind of "mundane but crucial" innovation that makes the difference between a theoretically good model and a production-deployable model.

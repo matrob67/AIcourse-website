@@ -1,0 +1,130 @@
+---
+title: "Tokenization at Mistral"
+description: "Mistral AI's tokenizers: 32K token vocabulary, Byte-Level BPE, evolution toward Tekken for multilingual, and impact on performance."
+---
+
+## Tokenization: How Mistral Turns Text into Numbers
+
+LLMs don't read text like we do. They don't see letters, words, or sentences. They see numbers. The word "Hello" means nothing to a Mistral model: it's the number 1532 (for example) that has meaning. A space is another number. Each "chunk" of text is converted into a numerical identifier called a "token."
+
+The tokenizer is the translator between the human world (text) and the model world (numbers). And the quality of this translator has a direct and measurable impact on performance, cost, and the model's capacity.
+
+If the tokenizer is good, 100 pages of text compress into 10,000 tokens. If it's bad, the same 100 pages become 50,000 tokens. More tokens means less available context, slower inference, and a higher bill.
+
+### A Token Is Not a Word
+
+This is a common misconception. A token is not a word. It's a text fragment that the tokenizer has learned to split in a statistically optimal way.
+
+- "Hello" = 1 token (common word, well known)
+- "Unconstitutionally" = 4-5 tokens (rare word, broken into sub-parts)
+- "The" = 1 token
+- A space = sometimes included in the preceding token, sometimes a separate token
+
+The splitting is statistical, not linguistic. The tokenizer doesn't know what a "word" is in the grammatical sense. It knows which character sequences frequently appear together in its training corpus.
+
+<Callout type="info" title="You pay per token, not per word">
+Mistral charges per token. And the number of tokens varies by language: 1,000 English words yield about 1,300 tokens, 1,000 French words about 1,100 tokens (French is slightly more "compressed"), and 1,000 Chinese words about 2,000 tokens (fewer dedicated tokens for Chinese in the vocabulary). The tokenizer choice directly influences your bill.
+</Callout>
+
+
+
+### Byte-Level BPE: The Technical Foundation
+
+Mistral's tokenizers are based on Byte-Pair Encoding (BPE) at the byte level, a proven technique massively used in modern LLMs.
+
+#### How BPE Builds Its Vocabulary
+
+BPE works iteratively, a bit like compressing text:
+
+1. **Initialization.** The base vocabulary contains the 256 possible bytes (all basic characters, in byte-level representation).
+2. **Iteration.** At each step, the algorithm finds the most frequent pair of adjacent tokens in the training corpus and merges them into a new token. For example, if "t" and "h" appear very often next to each other, they merge into "th."
+3. **Stopping.** The process continues until reaching the target vocabulary size (32,000 for the first Mistral models).
+
+It's like building progressively larger Lego bricks from elementary bricks, prioritizing the most useful combinations.
+
+#### Why "Byte-Level"?
+
+The advantage of byte-level BPE: it can encode ANY text, in any language, with any Unicode character. There's never an "unknown" token (the infamous `[UNK]` that haunted older tokenizers). In the worst case, a rare character is simply decomposed into its individual bytes. It's less efficient, but it always works.
+
+### The Mistral 7B / Mixtral Tokenizer
+
+The first Mistral models use a SentencePiece-based tokenizer with 32,000 tokens.
+
+| Parameter | Value |
+|-----------|-------|
+| Vocabulary size | 32,000 |
+| Method | Byte-level BPE (SentencePiece) |
+| Special tokens | `<s>` (BOS), `</s>` (EOS), `[INST]`, `[/INST]` |
+| Unicode support | Complete (via byte-level fallback) |
+
+**Instruction tokens.** For Instruct versions (fine-tuned to follow instructions), special tokens `[INST]` and `[/INST]` delimit user messages. This is what allows the model to distinguish "here's the user's instruction" from "here's my response."
+
+<Callout type="tip" title="Why 32K tokens and not more?">
+Vocabulary size is a trade-off. A smaller vocabulary (8K) would require more tokens per text but would reduce the embedding matrix size (fewer parameters). A larger vocabulary (100K, like GPT-4's) would be more token-efficient but would significantly increase the model's weight. 32K offers a good balance for Latin languages and English, the primary targets of the first Mistral models.
+</Callout>
+
+### Tekken: The Next-Generation Multilingual Tokenizer
+
+Introduced with Mistral NeMo 12B, Tekken is a tokenizer redesign built for a specific goal: drastically improving support for non-English languages.
+
+#### What Changes?
+
+**Expanded vocabulary.** Tekken uses a vocabulary larger than 32K tokens, leaving more "room" for sub-words specific to non-English languages. Where the old tokenizer would decompose an Arabic or Chinese word into many bytes, Tekken can represent it in 1-2 tokens.
+
+**Balanced multilingual training corpus.** The tokenizer is trained on a carefully balanced corpus across languages, avoiding the massive overrepresentation of English that characterizes many tokenizers. This is a deliberate decision: Mistral, as a European company, wants its models to handle French, German, or Spanish just as well as English.
+
+**Better compression ratio.** For text of the same length, Tekken produces fewer tokens in non-English languages.
+
+#### The Concrete Impact
+
+Take a 1,000-character French text. With the original tokenizer (32K), this text might require about 250-300 tokens. With Tekken, the same text only needs 200-250, an improvement of 15-20%.
+
+The consequences are tangible:
+- **More context:** the context window in useful character count increases for non-English languages
+- **Reduced cost:** fewer tokens per request = lower bill
+- **Better comprehension:** when a word is represented as 1 token instead of 5 bytes, the model captures its meaning better
+
+### Special Tokens and Prompt Formats
+
+Mistral models use special tokens to structure exchanges.
+
+#### Instruct Format (v1)
+
+The original format uses `[INST]` and `[/INST]` tags:
+
+`<s>[INST] User instruction [/INST] Model response</s>`
+
+#### Format with System Prompt
+
+More recent versions support a system prompt via a dedicated token:
+
+`<s>[INST] <<SYS>> System prompt <</SYS>> User instruction [/INST] Response</s>`
+
+#### Format for Function Calling
+
+Models supporting function calling add special tokens to delimit tool definitions, function calls, and returned results. This is what allows the model to "know" when it should call a tool and how to interpret the response.
+
+<Callout type="warning" title={"Each model has its tokenizer: no swapping possible"}>
+Each Mistral model is inseparable from its tokenizer. You cannot use the Mistral 7B tokenizer with Mistral NeMo, or vice versa. During deployment, using the wrong tokenizer produces incoherent results (the model "reads" a different text than what you think you're sending it). Always verify compatibility.
+</Callout>
+
+### Impact on Fine-Tuning
+
+The tokenizer has direct implications when you fine-tune a model.
+
+**The vocabulary is frozen.** You can't modify the vocabulary during standard fine-tuning. If your domain uses highly specialized jargon (medical, legal, chemical terms), those terms will be decomposed into sub-tokens. It's less efficient but functional: the model learns to associate the sub-token sequence with the concept.
+
+**Adding special tokens.** It's possible to add special tokens (section markers, custom role identifiers) by extending the vocabulary and resizing the embedding matrix. This is useful for custom data formats.
+
+**Consistent tokenization.** Fine-tuning data must be tokenized with the same tokenizer as the pre-trained model, following the prompt formats (Instruct, Chat). A format mismatch is a classic error that silently degrades performance.
+
+### Tokenizer Comparison
+
+| Tokenizer | Models | Vocabulary | Multilingual | FR Efficiency |
+|-----------|--------|------------|--------------|---------------|
+| SentencePiece (32K) | Mistral 7B, Mixtral | 32,000 | Medium | Medium |
+| Tekken | NeMo 12B, recent models | Larger | Excellent | Good |
+| tiktoken (GPT-4) | OpenAI | ~100,000 | Good | Good |
+| LLaMA tokenizer | Meta LLaMA | 32,000 | Medium | Medium |
+
+Tokenization is often overlooked in LLM discussions, but it's a determining factor in performance and cost. Mistral's evolution toward Tekken shows growing attention to linguistic inclusivity: treating French, Arabic, or Japanese with as much respect as English.

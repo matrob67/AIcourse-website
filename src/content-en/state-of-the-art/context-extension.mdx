@@ -1,0 +1,115 @@
+---
+title: "Extending context: YaRN, NTK, and other tricks"
+description: "How to fit 64K words into a model trained on 4K. Position interpolation, NTK, YaRN explained by hand."
+---
+
+## The central problem: RoPE doesn't scale
+
+You train your model on 4K token sequences. Everything goes well. Then you give it a 16K token sequence at inference. Catastrophe: quality collapses completely.
+
+Why? RoPE encodes positions via rotations at specific frequencies. During training, the model learned to interpret these rotations for positions 0 to 4095. At position 16000, the rotations take values the model has **never seen**. It's like asking someone to read a clock that suddenly makes 40 revolutions per hour instead of 1: the hands are moving, but it no longer means anything.
+
+<Callout type="info" title={"The spectrum analogy"}>
+Imagine a radio trained to pick up frequencies 100-200 MHz. At 500 MHz, it receives nothing but noise. That's exactly what happens to RoPE beyond its training window: the positional frequencies become noise for the model.
+</Callout>
+
+## Solution 1: Position Interpolation (PI)
+
+The most direct approach: **compress positions to fit them within the known range**.
+
+$$
+\text{compressed\_position} = \text{real\_position} \times \frac{L_{\text{training}}}{L_{\text{target}}}
+$$
+
+Trained on 4K, you test on 16K? Map position 16000 to 4000. All rotations stay within the range the model knows.
+
+**Advantage**: it works right away, it's just a multiplicative factor on positions.
+
+**Problem**: you crush the resolution. Imagine taking a ruler graduated from 0 to 100 cm and compressing it to measure from 0 to 400 cm. The markings are now 4 times closer together: you lose precision for distinguishing small distances. Concretely, neighboring tokens become artificially closer, and the model loses its ability to finely distinguish local positions.
+
+<Callout type="warning" title="Loss of local precision">
+With a 4x factor, two adjacent tokens go from "distance 1" to "distance 0.25." The high frequencies of RoPE (those encoding local relationships between neighboring tokens) suffer enormously. The model confuses consecutive tokens.
+</Callout>
+
+## Solution 2: NTK-aware (smarter)
+
+The key observation: in RoPE, **low frequencies** encode global positions (where am I in the document?) while **high frequencies** encode fine locality (which token is just before or after me?).
+
+The NTK-aware idea: instead of uniformly crushing all positions (like PI), modify RoPE's **base** to affect frequencies differently:
+
+$$
+\text{base}' = \text{base} \times \alpha^{\frac{d}{d-2}}
+$$
+
+where `alpha` is the extension factor (for example 4 to go from 4K to 16K).
+
+Increasing the base reduces all frequencies, but low frequencies (already small) are proportionally more stretched than high ones. Result: high frequencies maintain good local resolution, while low frequencies stretch to cover a longer context.
+
+<Callout type="paper" title="The best of both worlds">
+High frequencies preserve their ability to distinguish nearby tokens. Low frequencies adapt to cover more ground. You keep local precision while gaining global range. It's a much better trade-off than uniform interpolation.
+</Callout>
+
+### Dynamic NTK: automatic adjustment
+
+Instead of fixing the base once and for all, it's computed dynamically based on the **actual** length of the current context:
+
+$$
+\text{base}'(L) = \text{base} \times \left(\frac{L}{L_{\text{training}}}\right)^{\frac{d}{d-2}}
+$$
+
+For a 5K token sequence, the base adjusts slightly. For 20K, it adjusts much more. The advantage: instead of collapsing abruptly beyond the training length, the model degrades **progressively**. That's much more graceful.
+
+## Solution 3: YaRN (the modern approach)
+
+YaRN intelligently combines several techniques by treating each frequency according to its needs:
+
+1. **High frequencies** (short wavelength): left untouched, they already work well
+2. **Mid frequencies**: progressive linear interpolation
+3. **Low frequencies** (long wavelength): full NTK scaling
+4. **Temperature correction**: without correction, attention becomes too "sharp" (concentrated on too few tokens) as the sequence gets longer. YaRN adjusts the attention scale to compensate.
+
+It's like an audio equalizer: instead of applying the same treatment to all frequencies, you adjust each band independently based on its needs.
+
+<Callout type="tip" title="YaRN results in practice">
+LLaMA 2 goes from 4K to 64K tokens with only ~400 fine-tuning steps. Perplexity stays close to the original up to 32x extension. That's a remarkable effort/result ratio.
+</Callout>
+
+
+
+## Other approaches
+
+### LongRoPE
+Uses an automatic search to find the best interpolation factors per dimension. Can achieve 2048x extension (from 4K to 8M tokens) but requires more fine-tuning and compute for the search phase.
+
+### Self-Extend
+No fine-tuning needed! Combines local attention (normal positions) with "grouped" attention (positions divided by a factor). Relies on the fact that the model already handles local positions well and only needs an approximation for distant positions.
+
+### Long Training (the brute force method)
+Retrain directly on long sequences with a RoPE base of 500K. It's slow and expensive, but gives the best results because the model truly learns to handle long distances.
+
+## Comparison table
+
+| Method | Fine-tune? | Max extension | Quality | Cost |
+|---------|------------|---------------|---------|------|
+| Position Interp | Yes, short | 4-8x | Good | Low |
+| NTK-aware | No/Yes | 4-16x | Good | Low-Medium |
+| Dynamic NTK | No | 4-8x | Decent | Very low |
+| YaRN | Yes, minimal | 16-64x | Excellent | Medium |
+| LongRoPE | Yes, short | 128-2048x | Very good | Medium-High |
+| Long Training | Yes, massive | Infinite | Optimal | Very high |
+
+<Callout type="info" title="Practical recommendation">
+For 99% of cases: **YaRN**. The quality/effort ratio is unbeatable. For extreme extensions (millions of tokens): LongRoPE. For zero-shot use without any fine-tuning: Dynamic NTK (acceptable for 2-4x extension).
+</Callout>
+
+## Evaluating a context extension
+
+### Needle in a Haystack
+The classic test: insert specific information at a random position in a very long text, then ask the model to retrieve it. If the model finds it regardless of position, the extension works. If not, it's a bluff: the model "accepts" the long context but doesn't really exploit it.
+
+### RULER and advanced benchmarks
+More demanding tests that don't just check whether the model retrieves information, but whether it can **reason** about information scattered throughout a long context. Extensions through simple interpolation often fail at these more realistic tests.
+
+<Callout type="info" title="Conclusion">
+Context extension is both a science and an art. The techniques are based on relatively simple modifications to RoPE parameters, but hyperparameter tuning is delicate. YaRN is the current sweet spot: minimal fine-tuning, excellent results.
+</Callout>

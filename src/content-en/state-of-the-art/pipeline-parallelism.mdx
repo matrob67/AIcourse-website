@@ -1,0 +1,91 @@
+---
+title: "Pipeline Parallelism"
+description: "Study of Pipeline Parallelism, the technique that distributes model layers across GPUs in stages and uses micro-batching to minimize idle time."
+---
+
+
+
+## The problem: your GPU is waiting for the other one
+
+Imagine an assembly line in a factory. You have 8 workstations in series to assemble a product. If you send a single part down the line, here's what happens: station 1 works for 10 seconds, then passes the part to station 2. While station 2 works, stations 3 through 8 are completely idle -- they're waiting for the part to reach them. 7 out of 8 stations are doing nothing. It's a colossal waste.
+
+That's exactly what happens when you naively distribute a model across multiple GPUs. You put layers 0-11 on GPU 0, layers 12-23 on GPU 1, and so on. While GPU 0 processes the batch, all the others are sleeping. Then GPU 0 hands off to GPU 1, and it's GPU 0's turn to sleep. At any given moment, only one GPU is working.
+
+**Pipeline Parallelism** solves this problem with a trick borrowed from industrial assembly lines: instead of processing one batch at a time, you divide it into 4, 8, or 16 **micro-batches** and feed them through the pipeline continuously. While GPU 0 processes micro-batch 2, GPU 1 works on micro-batch 1, GPU 2 on micro-batch 0... everyone is busy simultaneously.
+
+## How it works in detail
+
+### Layer distribution
+
+For a model with N layers and P stages (GPUs), each stage handles approximately N/P consecutive layers. For example, a 96-layer model on 8 GPUs:
+- GPU 0: layers 0-11
+- GPU 1: layers 12-23
+- ...
+- GPU 7: layers 84-95
+
+Each GPU only stores the parameters for its own layers. This divides the required memory by P (here by 8). That's the fundamental advantage of Pipeline Parallelism: a model too large for a single GPU can be spread across multiple ones.
+
+### The pipeline bubble problem
+
+Even with micro-batching, there's an inevitable moment of inefficiency: the **pipeline bubble**. At the very beginning, only GPU 0 has work (the first micro-batch). At the next step, GPU 0 and GPU 1 are busy. It's only at the 8th step (for 8 GPUs) that the entire pipeline is finally full and all GPUs are working. This filling phase is wasted time.
+
+Similarly, at the end of processing, the pipeline drains gradually: GPU 0 finishes first and waits for the others.
+
+<Callout type="warning" title="The cost of the bubble">
+The fraction of time lost due to the bubble is simply calculated: $(P - 1) / (M + P - 1)$, where P is the number of stages (GPUs) and M the number of micro-batches. With P=8 and M=32: the bubble represents only 7/39 = 18% of the time. But with only M=8: 7/15 = 47% of the time is wasted! The lesson: the more micro-batches you have, the more the bubble is amortized. In practice, you aim for M >> P.
+</Callout>
+
+## The two main strategies
+
+### GPipe: simple but memory-hungry
+
+GPipe is one of the first practical pipeline parallelism frameworks. Introduced by Google Brain in 2018, it popularized the idea of **micro-batching** to reduce the pipeline bubble and make pipeline parallelism usable at scale. It's the paper that laid the foundations for everything we do today in this area.
+
+<ArxivLink id="1811.06965" title="GPipe: Easy Scaling with Micro-Batch Pipeline Parallelism (Huang et al., 2018)" />
+
+GPipe is the most intuitive approach: do **all** forward passes for all micro-batches first, then **all** backward passes.
+
+**Advantage**: it's simple to implement and understand.
+**Disadvantage**: you must keep activations for all micro-batches in memory during the entire forward phase (the backward will need them to compute gradients). With 16 micro-batches, that's 16 times more activations in memory than a single batch.
+
+<Callout type="info" title="Memory with GPipe">
+With 16 micro-batches and a 4096-token context, stored activations can easily exceed 100 GB. This is often GPipe's limiting factor: you have enough GPUs to distribute the weights, but not enough memory to store all the activations.
+</Callout>
+
+### 1F1B: alternate forward and backward to save memory
+
+1F1B stands for "One Forward, One Backward." Instead of separating phases, you **alternate**: do a forward on one micro-batch, then immediately a backward on an older micro-batch, then a forward, a backward, and so on.
+
+The crucial advantage: you free a micro-batch's activations as soon as its backward is done, instead of keeping them all until the end. In steady state, you only store activations for about P micro-batches simultaneously (where P is the number of stages), instead of M micro-batches with GPipe. When M = 32 and P = 8, that's 4x less activation memory.
+
+### Interleaved 1F1B: further reducing the bubble
+
+A more sophisticated variant: instead of assigning each GPU a contiguous block of layers, you give it **multiple small non-contiguous blocks**. For example, GPU 0 handles layers 0-5, 48-53, 96-101. This increases the effective number of stages in the pipeline, which proportionally reduces the bubble. The price: more inter-GPU communications, since the same micro-batch must make round trips.
+
+## Combining with other parallelisms
+
+Pipeline Parallelism is almost never used alone in practice. It shines when you combine it with other forms of parallelism in a **3D** system:
+
+**Tensor Parallelism (within a node)**: uses NVIDIA's ultra-fast NVLink connections to partition each layer across 8 local GPUs. Each matrix operation is divided among GPUs in the same node.
+
+**Data Parallelism (replicas)**: multiplies the complete pipeline to process multiple copies of the same model in parallel on different data.
+
+For a 175 billion parameter model on 512 GPUs (64 DGX nodes):
+- Tensor Parallelism = 8 (within each node, via NVLink)
+- Pipeline Parallelism = 8 (between 8 nodes, via InfiniBand)
+- Data Parallelism = 8 (8 replicas of the complete pipeline)
+- Total: 8 x 8 x 8 = 512 GPUs
+
+<Callout type="tip" title="Why PP works well inter-node">
+PP only needs **point-to-point** communications: GPU N sends activations to GPU N+1. This is very efficient on InfiniBand (low latency, high throughput). Tensor Parallelism, on the other hand, requires frequent all-reduces between all GPUs in the group, which is much more bandwidth-intensive. Hence the classic split: TP intra-node (fast NVLink), PP inter-node (InfiniBand).
+</Callout>
+
+## When to use Pipeline Parallelism?
+
+PP is essential when your model is too large to fit on a single node's GPUs, even with Tensor Parallelism. This is the case for all 100B+ parameter models. For "small" models (7B-70B), TP + Data Parallelism usually suffice.
+
+The main cost of PP is the bubble. With enough micro-batches (M >> P), it becomes negligible. Combined with TP and DP, Pipeline Parallelism forms the foundation for scaling all the largest LLMs (GPT-4, Claude, LLaMA 405B, etc.).
+
+<Callout type="info" title="Summary">
+Pipeline Parallelism distributes a model's layers across multiple GPUs so each only stores a fraction of the weights. Micro-batching keeps all GPUs busy. The pipeline bubble is the price to pay, but with enough micro-batches, it's negligible. Combined with TP and DP, it's the pillar of scaling the largest LLMs.
+</Callout>

@@ -1,0 +1,139 @@
+---
+title: "Dataloaders: Feeding the Training"
+description: "Streaming, packing, multitask and multimodal loading -- strategies for efficiently feeding a large-scale LLM training."
+---
+
+## The Component That Feeds the Model
+
+The dataloader is the component that feeds data to the model during training. Its role: read raw data, transform it into ready-to-consume tensors, and deliver them to the GPU at the right time.
+
+It sounds simple, but at the scale of modern LLMs, it's anything but trivial. A 70B parameter model trained on 15 trillion tokens with 4096 GPUs consumes tens of gigabytes of data **per second**. If the dataloader can't keep up, the GPUs wait. And a waiting GPU is money burned --- literally thousands of dollars per hour on a cluster of that size.
+
+The dataloader is therefore a critical performance component. Not the most glamorous, but a weak link here can ruin an entire training run.
+
+## Streaming: Never Load Everything into Memory
+
+### The Problem
+
+A 15T token dataset weighs about 30 TB once tokenized. No machine can store that in RAM. Even a node with 2 TB of RAM can't host the entire dataset.
+
+### The Solution: Streaming
+
+Instead of loading the entire dataset into memory, you **stream** data from disk or network on the fly. The dataloader reads a small block of data, prepares it, sends it to the GPU, then moves to the next block. At any given moment, only a tiny fraction of the dataset is in memory.
+
+It's the same principle as watching a video via streaming rather than downloading the whole thing before watching.
+
+In practice, streaming involves:
+- **Prefetching**: loading the next batches in advance while the GPU processes the current batch, to mask I/O latency
+- **Sharding**: splitting the dataset into thousands of files (shards) to parallelize reading between workers and nodes
+- **Distributed shuffling**: shuffling the order of shards (and examples within each shard) to guarantee batch diversity without requiring global random access to the entire dataset
+
+<Callout type="info" title={"Formats Optimized for Streaming"}>
+Classic formats (JSON, CSV, plain text) are unsuitable for streaming because they don't support index-based access. Optimized formats like MDS (Mosaic Data Shard), WebDataset (indexed TAR archives), or Arrow (Hugging Face datasets) allow fast positional access and efficient sequential reading, with built-in compression.
+</Callout>
+
+## Packing and Padding: Minimizing Wasted Tokens
+
+### The Padding Problem
+
+Transformers (the neural network architecture underlying LLMs) process fixed-length sequences. But real documents have highly variable lengths: a tweet is 20 tokens, a research article is 8,000. If the maximum length is 4,096, a 20-token tweet requires 4,076 padding tokens (useless zeros). The GPU computes operations on these padding tokens for nothing --- it's pure waste.
+
+### The Solution: Packing
+
+Instead of padding each document individually, you **concatenate** multiple documents into the same sequence until you fill the target length. A 20-token tweet, a 300-token paragraph, and a 3,776-token article perfectly fill a 4,096 sequence.
+
+Packing eliminates virtually all padding and increases effective GPU utilization by 30 to 50% on datasets with highly variable lengths.
+
+In practice, an attention mask is used to prevent documents from "seeing" each other within the same packed sequence. Each document remains isolated from the model's perspective.
+
+<Callout type="tip" title={"Packing Algorithms"}>
+The naive packing algorithm (concatenate in order) still leaves padding at the end of sequences. More sophisticated algorithms, like bin packing (inspired by the classic bin packing problem), group documents by similar length to maximize fill rate. In practice, a greedy bin packing easily achieves 98-99% utilization.
+</Callout>
+
+## Multitask Loading: Mixing Training Objectives
+
+A modern LLM isn't trained on a single type of data. The post-pretraining pipeline mixes multiple objectives:
+
+- **SFT** (Supervised Fine-Tuning): instruction/response pairs
+- **Preference data**: chosen/rejected pairs for RLHF or DPO
+- **Code**: source files with their context
+- **Multi-turn conversations**: complete dialogues with history
+
+The multitask dataloader must:
+1. **Alternate** between these sources according to defined proportions (for example, 50% SFT, 30% code, 20% preferences)
+2. **Adapt the format** of each source: SFT data has an `instruction -> response` template, preference data has `chosen/rejected` pairs, code has a different structure
+3. **Handle lengths**: code examples are often much longer than short conversations
+4. **Maintain the mix** within each batch or between consecutive batches to prevent the model from "forgetting" an objective during long periods
+
+The most common implementation uses weighted samplers: at each iteration, draw a source dataset according to defined probabilities, then draw an example from that dataset. Simple and effective.
+
+## Multimodal Loading: Text, Images, Audio
+
+Multimodal models (VLMs, audio models) add an extra level of complexity to the dataloader. Different modalities require:
+
+- **Different tokenizers**: text goes through a BPE tokenizer, images through a vision encoder (ViT, SigLIP), audio through an audio encoder (Whisper encoder)
+- **Specific preprocessors**: image resizing and normalization, audio conversion and resampling, modality-specific data augmentation
+- **Coherent assembly**: tokens from different modalities must be correctly interleaved in the final sequence (for example, `[text] [image_tokens] [text]`)
+- **Adapted memory management**: a high-resolution image can produce hundreds of tokens, which radically changes the effective batch size
+
+The multimodal dataloader must coordinate all these transformation pipelines and produce homogeneous batches despite the heterogeneity of input data.
+
+<Callout type="warning" title={"The Unbalanced Batch Trap"}>
+A batch containing many high-resolution images consumes significantly more memory than a purely textual batch. Without control, this can cause sporadic OOM (Out of Memory) errors. The solution: limit the number of visual tokens per batch and dynamically adjust composition to respect a fixed memory budget.
+</Callout>
+
+## Data Mixing Ratios: Controlling Proportions
+
+The choice of proportions for each data source directly influences the final model's capabilities. A typical pretraining mix looks like:
+
+| Source | Proportion | Role |
+|--------|-----------|------|
+| Web (filtered Common Crawl) | 40% | General knowledge, linguistic diversity |
+| Code (GitHub, StackOverflow) | 30% | Logical reasoning, programming capabilities |
+| Books and long articles | 20% | Long-context coherence, deep knowledge |
+| Scientific articles | 10% | Specialized knowledge, formal reasoning |
+
+These ratios aren't arbitrary: they're the result of experiments on small models (scaling law-guided) or automatic optimization algorithms like DoReMi.
+
+The dataloader must respect these proportions stably throughout training, while ensuring sufficient mixing within each batch. If the model sees 10 consecutive code batches then 10 web batches, the training dynamics differ from when each batch contains a balanced mix.
+
+## On-the-Fly Preprocessing
+
+Some transformations are applied dynamically by the dataloader rather than during an offline preparation step:
+
+- **Tokenization**: converting raw text into token ID sequences. Sometimes done on the fly to save disk space (tokenized text is larger than compressed raw text)
+- **Dynamic filtering**: rejecting examples that don't pass certain quality criteria at load time, without having to recreate the entire dataset
+- **Data augmentation**: for non-text modalities, applying random transformations (crop, rotation for images) at each epoch
+- **Online deduplication**: detecting duplicates within a sliding window to avoid presenting the same content too frequently, even if the global dataset has already been deduplicated
+
+This on-the-fly preprocessing adds work to the dataloader, but it's executed on CPU in parallel with GPU computation. The trick is to use enough CPU workers so the data pipeline is always ahead of the GPU.
+
+## Tools and Frameworks
+
+### Mosaic Streaming (MDS)
+
+Developed by MosaicML (Databricks), Mosaic Streaming is designed specifically for large-scale distributed training. It handles sharding, distributed shuffling, resumption (picking up exactly where you left off after a crash), and streaming from object storage (S3, GCS). It's the reference choice for serious multi-node training.
+
+### Hugging Face Datasets with Streaming
+
+The `datasets` library from Hugging Face supports streaming mode (`load_dataset(..., streaming=True)`). Data is downloaded and processed on the fly from the Hub. Ideal for prototyping and datasets hosted on Hugging Face, but less optimized than MDS for very large scales.
+
+### WebDataset
+
+Format based on TAR archives containing key-value pairs. Particularly suited for multimodal data (image + text) and streaming from object storage. Used notably for large-scale image datasets (LAION).
+
+<Callout type="info" title={"Choosing the Right Tool"}>
+For serious training on a multi-node cluster, Mosaic Streaming (MDS) is the current standard. For quick experimentation or fine-tuning on a Hugging Face dataset, `datasets` in streaming mode is more than sufficient. WebDataset remains the preferred choice for large multimodal datasets with lots of images or audio files.
+</Callout>
+
+## Summary
+
+The dataloader is an infrastructure component often overlooked, but one that conditions the efficiency of the entire training. The key strategies:
+
+1. **Streaming**: never load the entire dataset into memory. Stream from disk or network.
+2. **Packing**: concatenate short documents to eliminate padding and maximize GPU utilization.
+3. **Multitask loading**: mix training objectives according to controlled proportions.
+4. **Multimodal loading**: coordinate transformation pipelines for heterogeneous data.
+5. **Data mixing**: respect source proportions to steer the model's capabilities.
+
+A slow dataloader turns a multi-million-dollar GPU cluster into a machine that spends half its time waiting for data. Optimizing data loading means optimizing the return on investment of the entire training infrastructure.

@@ -1,0 +1,212 @@
+---
+title: "Game theory"
+description: "The fundamental concepts of game theory -- Nash equilibrium, minimax, the prisoner's dilemma -- and their direct applications in AI: GANs, multi-agent RL, alignment, mechanism design."
+---
+
+## What is game theory?
+
+Game theory is the mathematical study of strategic interactions between rational agents. The word "game" is misleading: it's not about board games, but about any situation where the outcome depends on the simultaneous choices of multiple actors. A trading algorithm facing the market, a generator facing a discriminator in a GAN, an RL agent facing other agents in a shared environment -- these are all games in the theoretical sense.
+
+Founded by John von Neumann and Oskar Morgenstern in the 1940s with their foundational work *Theory of Games and Economic Behavior*, then enriched by John Nash in the 1950s (Nobel Prize in Economics 1994), game theory is now at the heart of modern AI. GANs, multi-agent reinforcement learning, model alignment, and mechanism design all rely on its concepts.
+
+### The elements of a game
+
+Every game is described by four components:
+
+- **Players** ($N$): the agents making decisions. In AI, these can be neural networks, RL agents, or a human and an AI.
+- **Strategies** ($S_i$): the set of possible actions for each player $i$. For example, in a GAN, the generator chooses how to transform noise into an image, and the discriminator chooses how to classify each image.
+- **Payoffs** ($u_i$): the reward each player receives based on the strategies chosen by all players. It's the objective function of the game.
+- **Information**: what each player knows about the others. A complete information game means everyone knows the rules and possible payoffs. A perfect information game means each player observes all past actions of all others (like chess, unlike poker).
+
+## Fundamental concepts
+
+### Zero-sum vs non-zero-sum games
+
+**Zero-sum game**: one player's gain is exactly the other's loss. Mathematically, for two players: $u_1 + u_2 = 0$. Chess, poker, Go -- and GANs -- are zero-sum games. What the generator "wins" by fooling the discriminator, the discriminator "loses."
+
+**Non-zero-sum game**: payoffs don't necessarily cancel out. Cooperation can benefit everyone. Trade is the classic example: two parties exchange and both gain. The prisoner's dilemma is a non-zero-sum game where mutual cooperation yields a better collective outcome than mutual betrayal.
+
+<Callout type="info" title={"Why this distinction matters in AI"}>
+GANs are a zero-sum game: you're looking for a saddle point of the objective function. Multi-agent RL is often non-zero-sum: agents can learn to cooperate or compete, and the outcome depends on the emergent dynamics. The nature of the game determines the appropriate training algorithms.
+</Callout>
+
+### Nash equilibrium
+
+The Nash equilibrium is the central concept of game theory. It's a state where no player can improve their payoff by unilaterally changing their strategy, given the strategies of the others.
+
+Formally, a strategy profile $(s_1^*, s_2^*, \dots, s_n^*)$ is a Nash equilibrium if, for each player $i$:
+
+$$u_i(s_i^*, s_{-i}^*) \geq u_i(s_i, s_{-i}^*) \quad \forall s_i \in S_i$$
+
+Where $s_{-i}^*$ denotes the strategies of all other players. In plain terms: even if player $i$ knows everyone's strategies, they have no incentive to deviate.
+
+**Intuition**: think of a road where drivers choose between two routes. The Nash equilibrium is the traffic distribution where no individual driver can reduce their travel time by switching routes -- even if, collectively, a different distribution would be more efficient.
+
+A game can have zero, one, or multiple Nash equilibria. Nash's theorem (1950) guarantees that by allowing mixed strategies, every finite game has at least one equilibrium.
+
+<Callout type="info" title={"Nash equilibrium in AI"}>
+GAN training converges (in theory) to a Nash equilibrium of the minimax game. In multi-agent RL, learned policies tend toward Nash equilibria. The problem: in practice, finding a Nash equilibrium is PPAD-complete (PPAD being a computational complexity class considered hard, comparable to NP for search problems), and gradient algorithms don't always converge to an equilibrium.
+</Callout>
+
+### The prisoner's dilemma
+
+The prisoner's dilemma is the most famous example in game theory. Two suspects are interrogated separately. Each can cooperate (stay silent) or defect (betray the other). The payoff matrix (in prison years, so to minimize):
+
+|  | **B cooperates** | **B defects** |
+|---|---|---|
+| **A cooperates** | (-1, -1) | (-3, 0) |
+| **A defects** | (0, -3) | (-2, -2) |
+
+Each player reasons: "If the other cooperates, I gain by defecting (0 > -1). If the other defects, I also gain by defecting (-2 > -3). So I defect no matter what." Defecting is a dominant strategy. The result: both defect and get 2 years each, when mutual cooperation would have given only one year each.
+
+The Nash equilibrium is (Defect, Defect), but it's not the collective optimum (Cooperate, Cooperate). That's the heart of the dilemma: individual rationality leads to a collectively suboptimal outcome.
+
+<Callout type="info" title={"The prisoner's dilemma in AI"}>
+This dilemma appears everywhere in multi-agent AI. RL agents trained independently in a shared environment can learn to "defect" (selfishly exploit resources) rather than cooperate, even if cooperation would benefit everyone. It's also at the heart of AI safety: an AI that optimizes its own reward can "betray" human interests if the reward function is poorly designed. The iterated version of the dilemma (where agents interact repeatedly) shows that cooperation can emerge when agents have memory and a notion of reputation.
+</Callout>
+
+### Pure vs mixed strategies
+
+A **pure strategy** consists of always playing the same action. A **mixed strategy** consists of randomizing between actions with specific probabilities.
+
+Take rock-paper-scissors. There's no Nash equilibrium in pure strategies -- whatever pure strategy you choose, the opponent can adapt. But the equilibrium exists in mixed strategies: play each option with probability $1/3$. No opponent can exploit this strategy.
+
+More formally, a mixed strategy for player $i$ is a probability distribution $\sigma_i$ over their set of pure strategies $S_i$. The expected payoff becomes:
+
+$$u_i(\sigma_1, \dots, \sigma_n) = \sum_{s \in S} \left(\prod_j \sigma_j(s_j)\right) u_i(s)$$
+
+Each player maximizes their expected payoff given the distributions of the others.
+
+<Callout type="info" title={"Mixed strategies in AI"}>
+The epsilon-greedy strategy in RL is a mixed strategy: with probability $\epsilon$, the agent explores randomly, and with probability $1 - \epsilon$, it exploits its best known action. Boltzmann sampling (softmax) is also a mixed strategy, where the probability of each action depends on its estimated value. More generally, any stochastic policy in RL is a mixed strategy.
+</Callout>
+
+## Applications in AI
+
+### GANs (Generative Adversarial Networks)
+
+GANs are the most direct application of game theory in deep learning. Two networks play a zero-sum game:
+
+- The **generator** $G$ transforms random noise $z$ into synthetic data $G(z)$, trying to fool the discriminator.
+- The **discriminator** $D$ receives real or generated data and tries to tell them apart.
+
+The objective function is a minimax game. Before the formula, let's understand what each term measures:
+- The **first term** measures how well the discriminator recognizes real data. You draw a real example $x$ from the real distribution, and $D(x)$ is the probability the discriminator assigns it of being "real." The discriminator wants $D(x) \to 1$ (recognize the real), which pushes $\log D(x) \to 0$.
+- The **second term** measures how well the discriminator detects fakes. You draw noise $z$, the generator produces $G(z)$, and $D(G(z))$ is the probability the discriminator judges this image "real." The discriminator wants $D(G(z)) \to 0$ (detect the fake), which pushes $\log(1 - D(G(z))) \to 0$. The generator, on the other hand, wants $D(G(z)) \to 1$ (fool the discriminator).
+
+$$\min_G \max_D \; V(D, G) = \mathbb{E}_{x \sim p_{\text{data}}}[\log D(x)] + \mathbb{E}_{z \sim p_z}[\log(1 - D(G(z)))]$$
+
+The discriminator maximizes $V$ (it wants both terms close to 0, which maximizes the sum of logs). The generator minimizes $V$ (it wants the second term to be very negative, meaning the discriminator is fooled).
+
+Training alternates between updating the discriminator (maximization) and the generator (minimization). The theoretical Nash equilibrium is reached when $p_G = p_{\text{data}}$ and $D(x) = 1/2$ everywhere -- the discriminator can no longer tell real from fake.
+
+**Mode collapse** is a common GAN failure where the generator learns to produce a small number of very realistic images instead of covering the entire distribution. In game theory terms, it's a failure to converge to the global Nash equilibrium. Training oscillates instead of converging, a well-known phenomenon in zero-sum games when using naive gradient descent.
+
+### Multi-Agent Reinforcement Learning (MARL)
+
+When multiple RL agents learn simultaneously in a shared environment, the problem becomes a game. Each agent has its own policy, and environment transitions depend on the joint actions of all agents. Optimal policies are interdependent.
+
+**Markov Games (Stochastic Games)**: the standard formalization of MARL. It's an extension of MDPs (Markov Decision Processes) to multiple players. At each step, the state depends on the previous state and all players' actions:
+
+$$s_{t+1} \sim P(s_{t+1} | s_t, a_1^t, a_2^t, \dots, a_n^t)$$
+
+Three types of configurations are distinguished:
+
+- **Competitive**: agents have opposing objectives (zero-sum games). Example: AlphaGo learns to play Go through self-play.
+- **Cooperative**: agents share the same objective. Example: a team of robots coordinating their movements.
+- **Mixed**: each agent has their own objective, with partially aligned interests. This is the most general case and closest to real situations.
+
+**Self-play**: a technique where an agent trains by playing against copies of itself (or past versions). AlphaGo Zero and AlphaZero mastered Go, chess, and shogi without any human data, purely through self-play. Self-play dynamics generate an automatic curriculum: the opponent improves at the same time as the agent, constantly pushing toward better strategies.
+
+<Callout type="info" title={"Emergent strategies"}>
+In MARL, complex behaviors emerge from simple rules. OpenAI showed that RL agents in a hide-and-seek game spontaneously learn to use tools, build shelters, and exploit the simulator's physics -- strategies the designers hadn't anticipated. Game theory provides the framework for analyzing these emergent dynamics.
+</Callout>
+
+### Mechanism design
+
+Mechanism design is sometimes called "reverse game theory." Instead of analyzing an existing game, you design the rules of the game so that rational agents naturally produce the desired outcome.
+
+The key principle is **incentive compatibility**: designing the mechanism so that each agent has an interest in honestly revealing their preferences and playing the desired behavior, rather than cheating.
+
+**Applications in AI**:
+
+- **Reward function design**: in RL, the reward function defines the "game" the agent plays. Mechanism design helps create rewards that align agent behavior with the actual objective. Reward hacking (the agent exploiting flaws in the reward) is exactly a failure of mechanism design.
+- **RLHF (Reinforcement Learning from Human Feedback)**: the RLHF process is a form of mechanism design. You design the feedback loop -- collecting human preferences, training a reward model, optimizing via RL -- so the final model aligns with human preferences. The challenge: designing this mechanism so that human evaluators are incentivized to give honest feedback and the model can't "game" the system.
+- **Voting and aggregation systems**: when aggregating judgments from multiple annotators or models, mechanism design theory guides the design of voting rules resistant to manipulation.
+
+### Auction theory
+
+Auctions are a special case of mechanism design, with direct applications in AI.
+
+- **First-price auction**: the highest bidder wins and pays their bid. Problem: each bidder has an incentive to underbid relative to their true value.
+- **Second-price auction (Vickrey auction)**: the highest bidder wins but pays the second-highest bid. Remarkable property: it's optimal for each bidder to reveal their true value. It's an incentive-compatible mechanism.
+
+**In AI**: real-time advertising bidding systems (RTB, Real-Time Bidding) use variants of these mechanisms. Google, Meta, and other advertising platforms design auctions where advertisers' bidding algorithms interact strategically. Resource allocation in cloud computing (GPUs, bandwidth) also uses auction mechanisms to efficiently distribute scarce resources among competing users.
+
+### AI Safety and alignment
+
+The AI alignment problem can be formulated as a game theory problem.
+
+**The principal-agent problem**: in economics, the "principal" (employer, client) delegates a task to an "agent" (employee, contractor) whose interests may diverge. The principal can't perfectly observe the agent's efforts. In AI: the human is the principal, the AI is the agent. The AI may have implicit incentives (maximize a reward score) that don't exactly match the human's wishes.
+
+**The AI race dynamics**: competition between companies or nations to develop the most advanced AI is a non-zero-sum game that resembles the prisoner's dilemma. Each actor is incentivized to move fast (at the risk of neglecting safety), even if coordinated slowdown would benefit everyone. It's a classic cooperation problem studied by game theory.
+
+**Cooperative AI**: a research field that uses game theory to train AI systems that cooperate reliably with humans and with each other. The challenge: how do you ensure cooperation remains stable even when betrayal would be locally profitable for the agent?
+
+<Callout type="info" title={"Alignment and incentives"}>
+Reward hacking is a direct symptom of poor game design. An agent that exploits a flaw in the reward function is acting rationally in the game as defined -- it's the designer who poorly defined the rules. Game theory and mechanism design provide formal tools to analyze and prevent these situations.
+</Callout>
+
+## Key mathematical concepts
+
+### The payoff matrix
+
+Any two-player game with a finite number of strategies can be represented by a matrix. For a two-player game with $m$ strategies for player 1 and $n$ strategies for player 2, the matrix $A$ of size $m \times n$ contains player 1's payoffs. In a zero-sum game, player 2's payoffs are $-A$.
+
+Example: rock-paper-scissors.
+
+$$A = \begin{pmatrix} 0 & -1 & 1 \\ 1 & 0 & -1 \\ -1 & 1 & 0 \end{pmatrix}$$
+
+The row corresponds to player 1's choice (rock, paper, scissors), the column to player 2's choice. Each entry $A_{ij}$ is player 1's payoff when they play strategy $i$ and player 2 plays strategy $j$.
+
+### Von Neumann's minimax theorem
+
+The minimax theorem (1928) is the founding result of game theory. For any finite two-player zero-sum game, there exists a unique game value $v$ such that:
+
+$$\max_x \min_y \; x^T A y = \min_y \max_x \; x^T A y = v$$
+
+Let's break down each term:
+- $x$ is **player 1's mixed strategy**: a probability vector over their pure strategies ($x \in \Delta_m$, the $m$-dimensional simplex). Each component $x_i$ represents the probability that player 1 plays their $i$-th pure strategy. For example, in rock-paper-scissors, $x = (1/3, 1/3, 1/3)$ means playing each option with equal probability.
+- $y$ is **player 2's mixed strategy**: a probability vector over their pure strategies ($y \in \Delta_n$), defined the same way.
+- $A$ is player 1's payoff matrix.
+- $x^T A y$ is player 1's expected payoff when both players play their mixed strategies.
+- $\max_x \min_y$: player 1 chooses $x$ to maximize their payoff in the worst case (where player 2 plays optimally against them).
+- $\min_y \max_x$: player 2 chooses $y$ to minimize player 1's maximum payoff.
+
+The theorem says these two values are equal -- regardless of who plays first, the game value is the same if both players play optimally. Put differently: player 1, playing optimally, can guarantee a payoff of at least $v$, and player 2 can guarantee that player 1 won't earn more than $v$. The order of max and min doesn't matter, which is remarkable because in general $\max \min \leq \min \max$. The equality is specific to zero-sum games with mixed strategies. There always exists a pair of optimal mixed strategies.
+
+<Callout type="info" title={"Minimax and GANs"}>
+The GAN objective function is directly a minimax problem: $\min_G \max_D V(D, G)$. The minimax theorem guarantees the existence of an equilibrium point. In practice, the difficulty is that $G$ and $D$ are neural networks with millions of parameters, and the strategy space is continuous and high-dimensional -- the conditions of the classical theorem don't directly apply, which explains the instability of GAN training.
+</Callout>
+
+### Pareto optimality
+
+An outcome is **Pareto-optimal** (or Pareto-efficient) if no player's situation can be improved without worsening another's. Formally, a strategy profile $s^*$ is Pareto-optimal if there's no other profile $s$ such that:
+
+$$u_i(s) \geq u_i(s^*) \; \forall i \quad \text{and} \quad u_j(s) > u_j(s^*) \; \text{for at least one } j$$
+
+In the prisoner's dilemma, (Cooperate, Cooperate) is Pareto-optimal but is not the Nash equilibrium. (Defect, Defect) is the Nash equilibrium but is not Pareto-optimal. This tension between collective efficiency and individual rationality is at the heart of many multi-agent AI problems.
+
+In MARL, we often seek training algorithms that converge to Pareto-optimal equilibria rather than to just any Nash equilibrium -- that is, equilibria that don't "waste" value.
+
+## Summary
+
+Game theory provides the formal language for reasoning about strategic interactions between agents. In AI:
+
+- **GANs** are a zero-sum minimax game between generator and discriminator.
+- **Multi-agent RL** models environments as Markov games where policies are interdependent.
+- **Mechanism design** guides the design of reward functions and feedback systems (including RLHF).
+- **AI safety** uses game theory concepts (prisoner's dilemma, principal-agent problem) to formalize the alignment problem.
+- The **minimax theorem** guarantees the existence of optimal strategies in zero-sum games and theoretically grounds GANs.
+
+The key concepts to remember: Nash equilibrium (stability), minimax (optimality in zero-sum games), Pareto optimality (collective efficiency), mixed strategies (randomization). These tools are essential for understanding modern AI systems where multiple agents -- or an agent and its environment -- interact.

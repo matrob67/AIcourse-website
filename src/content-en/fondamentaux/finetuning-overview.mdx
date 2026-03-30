@@ -1,0 +1,131 @@
+---
+title: "Full fine-tuning vs parameter-efficient"
+description: "When to use full fine-tuning or PEFT methods (LoRA, QLoRA, adapters): costs, performance, and use cases."
+---
+
+## The Base Model Is an Unusable Genius
+
+After pre-training, you have a model that has read the entire Internet and knows an enormous amount... but it doesn't know how to *answer your questions*. Ask it "What is the capital of Germany?" and instead of saying "Berlin," it's likely to continue with "What is the capital of Italy? What is the capital of Spain?" -- because in its training data, lists of questions were common and that's the most likely pattern.
+
+The base model is a *text completer*, not an *assistant*. It doesn't understand that it's being spoken to. It doesn't know it should be helpful. It doesn't know it shouldn't generate toxic content. **Fine-tuning** is the process that transforms it into a tool usable by real humans.
+
+There are two major families of approaches, and the choice between them has major consequences on cost, required resources, and performance: **full fine-tuning** (you modify *all* the model's parameters) and **PEFT** methods (Parameter-Efficient Fine-Tuning) like LoRA (you modify only a tiny fraction, often less than 1%).
+
+
+
+
+
+## Full Fine-tuning: Heavy Surgery
+
+### The Principle
+
+You take the pre-trained model and continue training on a specialized dataset (conversations, instructions, domain-specific data). **Every parameter** of the model can be modified -- the billions of weights learned during pre-training are all "unfrozen" and subject to adjustment. It's the equivalent of deeply re-educating someone: you're not just changing their specialty, you're potentially modifying their entire internal functioning.
+
+### The Real Cost -- and This Is Where It Hurts
+
+To fine-tune a 7-billion-parameter model with the AdamW optimizer, you need to store in GPU memory:
+
+| Component | VRAM Required |
+|---|---|
+| Model weights (FP16) | ~14 GB |
+| Gradients | ~14 GB |
+| Optimizer states (AdamW, 2 moments in FP32) | ~28 GB |
+| Activations (depending on sequence length) | ~20-50 GB |
+| **Total** | **~70-100 GB minimum** |
+
+A 70-billion-parameter model? Multiply by 10: you need a high-end GPU cluster and several hundred thousand dollars' worth of hardware.
+
+<Callout type="warning" title="Catastrophic Forgetting">
+Another danger of full fine-tuning: by specializing the model on a task, you can make it "forget" capabilities learned during pre-training. This is **catastrophic forgetting**. A model fine-tuned exclusively on medical code might become unable to draft a professional email. The solution: mix fine-tuning data with a fraction of pre-training data, and use a very low learning rate.
+</Callout>
+
+## LoRA: The Genius of Minimalist Adaptation
+
+### A Surprising Observation
+
+In 2021, researchers at Microsoft (Hu et al.) made a discovery that would change fine-tuning practice: when you adapt a pre-trained model to a new task, the resulting weight changes have a particular mathematical structure -- they are **low-rank**. In simple terms, even though the model has billions of parameters, the modifications needed to adapt it live in a very small-dimensional subspace.
+
+It's as if, to redirect a general medicine expert toward cardiology, you only needed to adjust a few key connections rather than rewiring their entire brain. So why modify the billions of original parameters if the actual adaptation only touches a tiny corner of the parameter space?
+
+### The LoRA Solution
+
+**LoRA** (Low-Rank Adaptation) doesn't touch the original weights W. Instead, it adds a "low-rank correction" to them:
+
+$$
+W_{\text{nouveau}} = W_{\text{original}} + B \times A
+$$
+
+| Matrix | Dimensions | Status |
+|---|---|---|
+| $W_{\text{original}}$ | $d \times d$ | Frozen, never modified |
+| $B$ | $d \times r$ | Learned |
+| $A$ | $r \times d$ | Learned |
+| $r$ (rank) | Typically 8, 16, or 64 | Much smaller than $d$ |
+
+You train **only** the small matrices A and B. The original weights $W$ remain frozen and intact -- they don't budge one bit. Let's do the math with concrete numbers: if $d$ = 4,096 (typical dimension of a 7B model) and $r$ = 16 (adaptation rank), instead of modifying $4\,096 \times 4\,096 = 16.7$ million parameters per matrix, you only train $2 \times 4\,096 \times 16 = 131\,072$ -- that's **128 times fewer**. And you apply LoRA to the attention matrices (Q, K, V, O) of each layer, which covers the most important parts of the model.
+
+<Callout type="paper" title="Why Does It Actually Work?">
+The intuition: adapting a pre-trained model to a new task isn't a radical change -- it's a slight refocusing of an already highly capable model. This "slight refocusing" effectively lives in a low-dimensional subspace. In practice, LoRA with r=16 achieves **95 to 99%** of full fine-tuning performance while training only 0.1 to 1% of parameters.
+</Callout>
+
+### The Practical Advantages
+
+- **Memory**: you don't keep optimizer states for frozen weights -- massive savings
+- **Portability**: the LoRA adapter (the A and B matrices) weighs a few dozen MB, not hundreds of GB
+- **Modularity**: a single base model can have 10 different LoRA adapters -- one for each client, language, or task
+- **Free inference**: you can merge the matrices (W + B*A) before deployment, zero overhead in production
+
+## QLoRA: Fine-tuning a 70B on a Single GPU
+
+**QLoRA** (Quantized LoRA, Dettmers et al., 2023) pushes LoRA even further by combining two complementary techniques:
+1. The base model is **quantized** to 4 bits (instead of 16) -- this takes 4 times less memory. The weights are compressed with a technique called NF4 (Normal Float 4-bit), specifically designed for the statistical distribution of neural network weights
+2. LoRA adapters are trained in normal precision (BF16), which preserves learning quality
+
+Stunning results:
+
+| Model | Full fine-tuning (VRAM) | LoRA (VRAM) | QLoRA (VRAM) |
+|---|---|---|---|
+| 7 billion params | ~80 GB | ~16 GB | ~6 GB |
+| 70 billion params | ~800 GB | ~160 GB | ~48 GB |
+
+<Callout type="tip" title={"QLoRA Democratized Alignment"}>
+With an NVIDIA RTX 4090 (24 GB, about $1,500), you can fine-tune a 7-13 billion parameter model. With an A100 (80 GB), you can reach 70 billion. What required a million-dollar cluster 2 years ago is now accessible to a student with a good graphics card.
+</Callout>
+
+## Other PEFT Methods in Brief
+
+LoRA and QLoRA aren't the only PEFT approaches. Here are others, in chronological order:
+
+**Adapters** (Houlsby et al., 2019): small modules (dense "bottleneck" layers) are inserted between the existing Transformer layers. This is the original PEFT method, predating LoRA. Downside: the added modules remain active at inference, which adds slight latency. With LoRA, you can merge the matrices before deployment, so there's zero overhead.
+
+**Prefix Tuning** (Li & Liang, 2021): you learn fake "virtual tokens" placed at the beginning of the context, which don't correspond to any real word but steer the model's behavior. Very lightweight in parameters, but generally less performant than LoRA.
+
+**Prompt Tuning** (Lester et al., 2021): even more minimal -- you only learn the embeddings of a few tokens added to the input. Extremely lightweight (a few thousand parameters), but only works well with very large models (100B+). For smaller models, LoRA is significantly better.
+
+## How to Choose?
+
+| Criterion | Full fine-tuning | LoRA | QLoRA |
+|---|---|---|---|
+| Parameters modified | 100% | 0.1-1% | 0.1-1% |
+| VRAM (7B model) | ~80 GB | ~16 GB | ~6 GB |
+| Relative performance | Reference (100%) | 95-99% | 93-97% |
+| Portability | Full model (14 GB) | Adapter (50 MB) | Adapter (50 MB) |
+
+**Choose full fine-tuning if:**
+you're a lab with GPU clusters, you're building a foundation model for a highly specialized domain (medical, legal, proprietary code), and you have hundreds of thousands of training examples.
+
+**Choose LoRA/QLoRA if:**
+you're adapting an existing model to a specific use case, your resources are limited, you need to iterate quickly, or you have multiple adapters for multiple different tasks.
+
+<Callout type="info" title={"What the Industry Actually Does"}>
+The vast majority of fine-tuning in industry uses LoRA or QLoRA. Full fine-tuning is reserved for major players (OpenAI, Google, Meta, Anthropic, Mistral) for their main models. For any specific use case, PEFT methods have become the absolute standard.
+</Callout>
+
+## What's Next?
+
+Choosing between full fine-tuning and LoRA is only the first technical decision. The real strategic question is: *what* to fine-tune on, and *with what objective*? There are two major steps after pre-training:
+
+1. **SFT** (Supervised Fine-Tuning): teaching the model to follow instructions, have a conversation, and respond in the right format. You show it examples of high-quality question-answer pairs.
+2. **Alignment**: teaching the model to be helpful, honest, and harmless -- via techniques like RLHF (Reinforcement Learning from Human Feedback) and DPO (Direct Preference Optimization).
+
+That's what we explore in the following sections. But remember the key takeaway: LoRA and QLoRA have democratized fine-tuning. What was reserved for tech giants 3 years ago is now accessible to a developer with a good graphics card.

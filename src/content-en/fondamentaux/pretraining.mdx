@@ -1,0 +1,120 @@
+---
+title: "Pre-training"
+description: "LLM training objectives: causal language modeling, masked language modeling, span corruption, and next-token prediction."
+---
+
+## A Child Who Reads the Entire Internet
+
+Imagine a child given access to an infinite library -- billions of books, articles, conversations, code -- and told: "Read all of this, and every time we hide a word, guess it." After years of reading, this child has seen so many patterns that they can finish any sentence, in any style. They don't know *why* "the Earth revolves around the Sun" is true, but they know it's the most likely continuation after certain phrases. And by accumulating these predictions, they end up developing something that strangely resembles understanding.
+
+This is exactly what **pre-training** an LLM is. It's the first phase of a model's life, the longest (weeks, sometimes months) and the most expensive (millions of dollars). The model ingests astronomical amounts of raw text -- Wikipedia pages, GitHub code, books, forums, scientific papers -- without being told "this sentence is good" or "this answer is wrong." It simply learns to guess the next word. This is called **self-supervised learning**: the signal that enables learning comes directly from the text itself, not from a human annotating the data.
+
+
+
+<Callout type="info" title={"Self-supervised -- what does that mean?"}>
+In traditional supervised learning, someone labels the data by hand: "this photo is a cat," "this email is spam." It's slow, expensive, and doesn't scale to billions of examples. Self-supervised learning is clever: it creates its own labels from the text. If a sentence says "The capital of France is ___," the answer "Paris" is already there, hidden in the data. It's an elegant trick: you have an infinite dataset of (context, next word) pairs without ever asking a human to annotate anything.
+</Callout>
+
+## The Big Question: How Exactly Does It Learn?
+
+OK, we know the model has to "guess words." But the precise way you frame this guessing game changes *everything*. The **training objective** is the rule of the game: which words you hide, in which direction you read the sentence, and how you measure whether the model guessed correctly. There are three main types, and each produces a fundamentally different kind of model -- much like a musician who trains by ear, by sight-reading, or by improvisation.
+
+## Objective 1: Causal Language Modeling -- Guessing the Next Word
+
+This is the approach behind GPT, LLaMA, Mistral, Claude -- virtually all of today's large models. The rule is simple: **predict the next word, only looking to the left**.
+
+**Sequence**: "The cat eats a ___"
+- The model sees: "The", "cat", "eats", "a"
+- It must predict: "mouse" (or "treat", or "apple"...)
+
+The word "causal" comes from the fact that information flows in only one direction: from past to future. The token at position 5 cannot see the token at position 6. This is a natural constraint: when you write a sentence, you don't yet know what comes next. This is exactly the constraint the model learns to respect.
+
+In practice, this restriction is implemented via a **causal attention mask**: a triangular matrix that blocks connections to future tokens. The model literally "looks" in only one direction.
+
+<Callout type="tip" title={"Ilya Sutskever's Argument"}>
+The co-founder of OpenAI has often said: to perfectly predict the next word of an article about quantum physics, you need to *understand* quantum physics. Predicting the next token seems trivial, but pushed to the extreme with enough data, it forces the model to build an internal model of the world. Knowing that after "water boils at" comes "100 degrees" is encoding a physical fact. At the scale of trillions of tokens, the model ends up encoding phenomenal amounts of knowledge -- just by playing the prediction game.
+</Callout>
+
+In practice, training works as follows:
+1. Raw text is split into chunks of fixed length (e.g., 4,096 tokens per chunk, sometimes 8,192 or more)
+2. Thousands of chunks are processed in parallel (this is a **batch**)
+3. For **every position** in each chunk, the model predicts the next token -- a single 4,096-token chunk thus provides 4,096 training signals
+4. The error is measured (the **cross-entropy loss**: how far the predicted distribution is from the correct token) and weights are adjusted via backpropagation
+5. This is repeated billions of times, over trillions of tokens, for weeks
+
+## Objective 2: Masked Language Modeling -- Filling in the Blanks
+
+This is the approach behind BERT, RoBERTa, DeBERTa. Here, 15% of the words in a sentence are randomly hidden, and the model is asked to recover them -- but this time, it can look in **both directions**, before and after the gap.
+
+**Input**: "The [MASK] eats a mouse in the [MASK]."
+**To predict**: "cat" and "attic"
+
+The advantage is clear: seeing the full context (what comes before AND after the gap) makes the model very good at *understanding* the meaning of a text. To guess that the first [MASK] is "cat," it uses both "eats" (to the right) and "mouse" (even further right). This is a superpower that CLM doesn't have.
+
+The major downside: this model cannot *generate* text naturally. It knows how to fill gaps, not write a story from beginning to end. Why? Because it was trained to predict *missing* words in a complete sentence, not to produce the *next* word in an unfinished sequence. The architecture itself (bidirectional attention) is not designed for sequential generation.
+
+<Callout type="info" title="Why BERT Disappeared from AI Assistants">
+BERT (2018) dominated NLP for years in classification, semantic search, and text analysis. But when the goal shifted to chatbots, generation was needed -- and BERT is powerless there. You can't ask it to "write a poem" because it doesn't know how to produce text token by token. That's why assistants like ChatGPT or Claude all use Causal Language Modeling. However, BERT remains widely used in production for understanding tasks (embeddings, classification, NER).
+</Callout>
+
+## Objective 3: Span Corruption -- Hiding Entire Chunks
+
+This is the approach behind T5 and BART. It goes further than hiding a single word: entire **sequences** (3-5 token "spans") are hidden and replaced with a single sentinel token. The encoder-decoder model must then regenerate the missing sequences.
+
+**Input**: "The cat \<X\> in the garden \<Y\> mouse."
+**Target**: "\<X\> was sleeping peacefully \<Y\> while chasing a"
+
+This is a significantly harder exercise than MLM: the model must not only guess *which* words are missing, but also *how many* there are (the length of the hidden span is unknown). The encoder reads the corrupted text with bidirectional attention and understands it despite the gaps. The decoder regenerates the missing spans token by token.
+
+This hybrid approach thus combines bidirectional understanding (encoder) and sequential generation (decoder). T5 pioneered the idea of unifying all NLP tasks under a single "text-to-text" format: translation, summarization, classification -- everything becomes "convert this text into this result."
+
+## Why Causal Language Modeling Won
+
+| Objective | Architecture | Direction | Good for |
+|---|---|---|---|
+| CLM (next token) | Decoder-only | Left to right | Generation, conversation |
+| MLM (masked) | Encoder-only | Bidirectional | Understanding, classification |
+| Span corruption | Encoder-decoder | Both | Text-to-text tasks |
+
+<Callout type="paper" title="CLM Scales Better">
+CLM ended up dominating for several converging reasons. First, it lends itself naturally to text generation -- which is what users want (chatbots, writing, code). Second, **scaling laws** (Kaplan et al., 2020) show that when you increase the size of decoder-only models, performance gains are more regular and predictable. Finally, CLM requires no data pairs: any raw text is sufficient, giving access to virtually unlimited training corpora. Simplicity pays off.
+</Callout>
+
+## The Technical Tricks That Make It Work
+
+Pre-training a modern LLM is as much an engineering feat as a research one. Here are the key techniques that make it possible.
+
+### The Learning Rate Schedule
+
+You don't start at full throttle. Training uses a **warmup** (gradual ramp-up): during the first few thousand steps, the learning rate progressively rises from a near-zero value. Why? Because at the very beginning, gradients are unstable and overly aggressive updates can cause the model to diverge. Once the warmup is complete, the learning rate gradually decreases following a cosine curve until the end of training. It's like starting a car in first gear before hitting the highway, then gradually easing off the gas as you approach your destination.
+
+### Gigantic Batches
+
+You don't process texts one by one -- that would be hopelessly slow. You process millions at once: often 4 to 16 million tokens per batch. Some modern training runs start with small batches (the signal is noisier, which promotes exploration of the parameter space) and gradually increase (more stable signal for fine weight adjustments). LLaMA-3, for example, doubles the batch size midway through.
+
+### Mixed Precision: Memory Comes at a Price
+
+GPUs have limited memory (40-80 GB for the best ones). To fit billions of parameters, **mixed precision** is used: reference weights are stored in FP32 (32 bits, full precision) but forward and backward pass computations are done in BF16 (16 bits, half). Memory footprint is cut in half with virtually no loss in quality. The BF16 format is particularly well-suited because it retains the same range as FP32 (unlike FP16 which can overflow).
+
+### Splitting the Model Across Hundreds of GPUs
+
+A 70-billion-parameter model doesn't fit on a single GPU (it would need ~140 GB just for the weights in FP16). It has to be split up -- and this is a major engineering challenge:
+- **Tensor parallelism**: a single layer is split across multiple GPUs (each GPU computes a portion of the attention matrices)
+- **Data parallelism**: the same model is replicated across multiple GPUs, each processing a different batch, then gradients are averaged
+- **Pipeline parallelism**: layers are distributed sequentially across GPUs, like an assembly line -- while one GPU processes layer 10, another processes layer 11 on the previous batch
+
+<Callout type="warning" title="The Astronomical Cost of Pre-training">
+LLaMA-3 405B reportedly required around 30 million GPU hours on H100s. At current cloud prices, that represents tens of millions of dollars -- not counting electricity, cooling, and engineers. That's why only a handful of organizations in the world (OpenAI, Google, Meta, Anthropic, Mistral...) do pre-training from scratch. Everyone else starts from an existing model and adapts it via fine-tuning.
+</Callout>
+
+### Data Quality: The Best-Kept Secret
+
+An often underestimated aspect: the quality of pre-training data is at least as important as model size. You don't just dump "all of the Internet" into the model without filtering. Pre-training teams invest enormously in data curation: deduplication (removing duplicate texts), quality filtering (keeping well-written texts), decontamination (removing benchmarks to prevent cheating), and balancing (the right proportion of code, science, conversation, etc.). LLaMA-3 was trained on 15 trillion carefully selected tokens -- that's less than what's available, but quality comes first.
+
+## What You Get -- and What's Still Missing
+
+At the end of pre-training, you have a **base model** (also called a "foundation model"). It's impressive at completing text coherently. Give it the beginning of a physics article, and it will continue with sentences that look like physics. Give it Python code, and it will complete it with syntactically correct code.
+
+But if you ask it a question, it might... continue with more questions. "What is the capital of Germany?" could be followed by "What is the capital of Italy? What is the capital of Japan?" Because in its training data, lists of questions were common, and the model is just completing the most likely pattern.
+
+The base model doesn't know how to have a conversation, follow instructions, or refuse dangerous requests. It's like a living encyclopedia that doesn't understand it's being spoken to. It's **fine-tuning** -- and particularly alignment techniques like RLHF (Reinforcement Learning from Human Feedback) and DPO (Direct Preference Optimization) -- that transform this raw encyclopedia into a useful and safe assistant. That's what we explore in the following sections.

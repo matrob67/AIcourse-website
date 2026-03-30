@@ -1,0 +1,143 @@
+---
+title: "AI Agents: Taxonomy and Concepts"
+description: "Overview of LLM-based AI agents: definition, architecture, taxonomy of approaches, and fundamental principles of autonomous systems."
+---
+
+## What Is an Agent?
+
+An AI agent is an LLM that **acts** on the world. Not just a chatbot that answers your questions — an autonomous system that:
+- Uses **tools** (API calls, code execution, web search, file manipulation)
+- Maintains **memory** (conversation context and long-term knowledge)
+- Pursues **objectives** in multiple steps, planning and adapting
+- Observes the results of its actions and corrects its trajectory
+
+The fundamental difference between a chatbot and an agent is the **feedback loop**. A chatbot receives a question, produces an answer, and that's it. An agent receives an objective, thinks, acts, observes the result, thinks again, acts differently if needed, and continues until the objective is achieved (or abandoned).
+
+Let's take a concrete example. Ask a chatbot "fix the bugs in my code": it will give you textual suggestions. Ask an agent: it will read your code, run the tests, identify errors, modify files, rerun the tests, and iterate until everything passes. It's a qualitative difference.
+
+<Callout type="info" title="The Minimalist Definition">
+Agent = LLM + ability to act (tools) + feedback loop (observe, decide, act, observe). Without the loop, it's just a model generating text. With the loop, it's a system that solves problems.
+</Callout>
+
+## Architecture of an Agent
+
+Every agent, from the simplest to the most complex, rests on four fundamental components:
+
+**The brain (LLM)**: the language model that reasons, plans, and makes decisions. It's the conductor. The agent's quality depends directly on the quality of the underlying LLM — a mediocre model will produce a mediocre agent, regardless of the tools.
+
+**Tools**: the agent's action capabilities. Web search, Python code execution, API calls, file read/write, sending emails, SQL queries... Each tool extends what the agent can do. Without tools, the agent can only talk — with tools, it can act on the real world.
+
+**Memory**: short-term (the current conversation, recent action results) and long-term (knowledge base, previous session history, user preferences). Memory allows the agent to maintain context and learn from its interactions.
+
+**The execution loop**:
+
+$$\text{Objective} \rightarrow \text{Think} \rightarrow \text{Act} \rightarrow \text{Observe} \rightarrow \text{Think} \rightarrow \cdots \rightarrow \text{Result}$$
+
+1. An objective arrives ("deploy this application")
+2. The agent thinks: what's the plan? Which tool to call first?
+3. It calls the chosen tool (e.g., read the Dockerfile)
+4. It observes the result (file contents)
+5. It decides: continue (build the image), correct (modify the Dockerfile), or finish
+
+This loop runs until the objective is reached or a stopping condition is met (max iterations, timeout, unrecoverable error).
+
+## The Scaffold: The Technical Architecture of an Agent
+
+In the literature and technical discussions, you'll often hear the terms **scaffold**, **orchestrator**, or **harness** to refer to the same thing: **the code that wraps the LLM and runs the agentic loop**. It's not the LLM itself — it's all the code around it.
+
+Concretely, the scaffold is the program that:
+
+1. **Parses prompts** — builds the system message, injects context, formats tool descriptions
+2. **Calls the LLM** (inference engine) — sends the prompt, retrieves the response
+3. **Detects tool calls** — parses the response to identify if the LLM wants to call a tool (function calling)
+4. **Executes tools** — runs the corresponding code (API request, Python execution, file reading...)
+5. **Manages context** — decides what to keep in memory, what to summarize, what to forget when the context window fills up
+6. **Manages the loop** — decides when to continue, when to stop, when to ask the human
+7. **Connects services** — integrates different APIs, databases, external systems via connectors
+
+<Callout type="info" title={"Scaffold, Orchestrator, Harness: Three Names, One Concept"}>
+These three terms are used interchangeably in the ecosystem:
+- **Scaffold** — the most common in research, emphasizes that it's a support structure around the LLM
+- **Orchestrator** — common in production, emphasizes coordination of different components
+- **Harness** — common in engineering, emphasizes that you're "harnessing" the LLM to tools
+
+In all cases, it's **the glue code** that sticks together the inference engine, prompt parsing, context management, tool execution, and connectors. Frameworks like LangGraph, CrewAI, or Smolagents are ready-made scaffolds — but you can also write your own in a few hundred lines of Python.
+</Callout>
+
+### Why Understanding This Distinction Matters
+
+The LLM is the brain. The scaffold is the body. Without a scaffold, the LLM can only talk. It's the scaffold that gives it hands (tools), eyes (observing results), and memory (context management).
+
+When an agent "fails," the problem rarely comes from the LLM itself — it almost always comes from the scaffold: a poorly described tool, poorly managed context, a loop that doesn't stop at the right time, a connector returning cryptic errors. Debugging an agent is primarily debugging its scaffold.
+
+## Levels of Autonomy
+
+Not all agents are equal in autonomy. You can classify them on a scale:
+
+| Level | Description | Example | Human Intervention |
+|---|---|---|---|
+| L1: Chat | Simple conversation | Standard ChatGPT | Every message |
+| L2: Tool-use | Uses tools on demand | GPT-5.4 with function calling | Per request |
+| L3: Autonomous | Plans and executes alone | Devin, Claude Code | Per task |
+| L4: Multi-agent | Agents that collaborate | AutoGen, CrewAI | Per project |
+
+
+
+## The Relational Reasoning Challenge
+
+An often underestimated aspect: classic neural networks struggle with **relational reasoning** — that is, comparing and relating entities to each other. Work from DeepMind has shown that a simple specialized module (a "relation network") can fill this gap spectacularly. This is one of the reasons why AI agents need dedicated architectures and mechanisms when it comes to reasoning about relationships between objects, entities, or concepts — the LLM alone isn't always enough.
+
+<ArxivLink id="1706.01427" title="A Simple Neural Network Module for Relational Reasoning (Santoro et al., 2017)" />
+
+## Common Reasoning Patterns
+
+**ReAct (Reasoning + Acting)**: the most popular and proven pattern. The agent explicitly alternates between thinking ("I think that...") and action ("I call tool X"). The reasoning is visible in the trace, making behavior **debuggable** — you can see why the agent made each choice.
+
+**Plan-and-Execute**: the agent first creates a complete plan (numbered list of steps), then executes each step sequentially. Advantage: coherent big-picture view. Disadvantage: the initial plan can become obsolete if intermediate results are unexpected. Some variants re-plan after each step.
+
+**Reflexion**: after producing a result, the agent self-evaluates: "Is my answer good? What could I have done better?" It uses this critique to iterate and improve. This is particularly effective for tasks with a verifiable quality criterion (passing tests, measurable score).
+
+<Callout type="tip" title="Start Simple, Add Complexity If Needed">
+The majority of use cases are solved with a simple agent (ReAct) + a few well-defined tools. Only add complexity (multi-agents, elaborate planning) if the simple approach fails. A well-configured simple agent often beats a poorly designed multi-agent system.
+</Callout>
+
+## Tool Types and Best Practices
+
+Tools are the keystone of an agent's effectiveness. Common categories:
+- **Search**: web, RAG, database, file search
+- **Computation**: calculator, Python/JS code execution, data analysis
+- **Communication**: email, Slack, notifications
+- **Files**: read, write, edit, navigate a project
+- **APIs**: weather, finance, CRM, SaaS tools
+
+A good tool is like a good API: it has a **descriptive name** and a **clear description** (the LLM reads these descriptions to decide which tool to use), well-**typed parameters** with explicit descriptions, **informative error messages** (not just "Error 500"), and **structured output** easy for the LLM to parse.
+
+Investing time in the quality of your tools has a direct and measurable impact on agent performance. A tool with a poor description will be misused. A tool with cryptic errors will derail the agent.
+
+## Real Production Challenges
+
+**Compound reliability**: each step can fail. If each tool succeeds at 95%, a 10-step workflow:
+
+$$0.95^{10} = 0.60$$
+
+That's **40% total failure**. This is the fundamental challenge of agents: reliability multiplies, it doesn't add up.
+
+**Cost**: each loop iteration consumes tokens. 10 steps x 2000 tokens x $10/M tokens = $0.20 per request. For 10,000 requests/day, that's $2,000/day. Not free, especially compared to a deterministic pipeline.
+
+**Security**: an agent that can execute code or access APIs = serious risks. A bug in the prompt can lead to file deletions, unwanted email sends, or data leaks. Strict sandboxing, granular permissions, and human review for critical actions are essential.
+
+<Callout type="warning" title="Compound Reliability: The Central Problem">
+If each step succeeds at 95%, a 10-step workflow fails 40% of the time. The robustness of each component is **critical**. Invest in solid tools (that handle errors gracefully), clear and unambiguous prompts, and recovery mechanisms (retry, fallback, asking for human help). The agent's quality is capped by the quality of its weakest link.
+</Callout>
+
+## Popular Frameworks
+
+| Framework | Approach | Strength | Ideal For |
+|---|---|---|---|
+| LangGraph | State graph | Fine control, debuggable | Production |
+| CrewAI | Multi-agent by roles | Simple, intuitive | Rapid prototyping |
+| AutoGen | Multi-agent conversation | Flexible, research | Experimentation |
+| Smolagents | Code-first | Lightweight, open-source | Simple agents |
+| OpenAI Assistants | Managed API | Simple, integrated | OpenAI applications |
+
+The following sections will dive deeper into concrete patterns (ReAct, Tree of Thoughts), function calling in detail, and multi-agent orchestration frameworks.

@@ -1,0 +1,106 @@
+---
+title: "Paper: Flash Attention - Making Attention Run Fast"
+description: "Attention is slow. Flash Attention makes it 2-4x faster by optimizing the memory hierarchy. Now incorporated everywhere. Not an improvement, an implementation revolution."
+---
+
+
+
+## The Bottleneck Nobody Saw
+
+You have an ultra-powerful GPU. Trillions of operations per second. But the Transformer's attention only uses it at **25% of its capacity**.
+
+Why? Not because it lacks computing power. Because the GPU spends its time **waiting** for data to arrive from memory. It's like having a Ferrari on a one-lane road: the engine is powerful, but traffic limits the speed.
+
+**Flash Attention** (Tri Dao et al., Stanford, 2022) solves this problem. 2 to 4x faster. The exact same computation, but organized in a radically smarter way to exploit the GPU's memory hierarchy.
+
+It's one of the most practically important papers of modern AI. Not a new architecture, not a new theoretical algorithm. A better **implementation** of existing computation.
+
+<Callout type="info" title="Memory-bound vs Compute-bound">
+Standard attention is **memory-bound**: limited by the speed of data transfer in memory, not by available computing power. It's counterintuitive: we're used to thinking "more compute = faster." Flash Attention shows that the real bottleneck is **data movement**, not data processing.
+</Callout>
+
+## The GPU Memory Hierarchy: The Key to Understanding
+
+To understand Flash Attention, you need to understand how a GPU manages its memory. An A100 GPU (the reference chip when the paper came out) has **two levels of memory**:
+
+- **SRAM (on-chip)**: 20 MB, ultra-fast. Bandwidth: **19 TB/s**. This is the memory directly on the chip, right next to the compute units.
+- **HBM (off-chip)**: 80 GB, much slower. Bandwidth: **2 TB/s**. This is the GPU's "main memory," but it's physically separate from the chip.
+
+SRAM is **10x faster** than HBM, but **4,000x smaller**.
+
+The analogy: SRAM is your desk. Small, but everything is within arm's reach. HBM is the library down the hall. Large, but you have to get up every time you need a book. If you spend your time making round trips, it doesn't matter how fast you can read.
+
+## The Problem with Standard Attention: Too Many Round Trips
+
+The classic implementation of attention makes constant round trips between HBM (slow) and SRAM (fast):
+
+1. **Read** Q, K, V from HBM -> load into SRAM
+2. **Compute** $S = Q \cdot K^T$ (the attention matrix)
+3. **Write** S to HBM (it's too large to stay in SRAM)
+4. **Read** S back from HBM, apply softmax
+5. **Write** the softmax result to HBM
+6. **Read** again to compute $O = \text{softmax}(S) \cdot V$
+7. **Write** O to HBM
+
+Each "read/write" arrow is a transfer between slow memory and fast memory. And the attention matrix $S$ has a size of $n \times n$ (quadratic in sequence length). For an 8K token sequence, that's 64 million elements to read and write multiple times.
+
+The computation is fast. The memory transfers are the bottleneck.
+
+## The Solution: Tiling and Online Softmax
+
+Flash Attention uses two key ideas:
+
+**Tiling** (block decomposition): instead of computing attention on the entire sequence at once, you split Q, K, V into **small blocks** that fit entirely in fast SRAM. Each block is processed locally: computation happens entirely in SRAM, and only the **final result** is written to HBM. One round trip instead of five or six.
+
+**Online Softmax**: classic softmax needs to see the **entire row** of the attention matrix before it can normalize (it needs the maximum and sum of the entire row). This is an obstacle to block-by-block processing. The trick from Milakov and King (2018), adopted by Flash Attention: compute softmax **incrementally**, block by block. You maintain a running maximum and running sum, updated with each block. The final result is mathematically identical to classic softmax.
+
+Result: the exact same attention computation, but with **far fewer memory transfers**. The GPU spends its time computing instead of waiting for data.
+
+<Callout type="tip" title={"IO-awareness: the new optimization paradigm"}>
+Before Flash Attention, optimizing an algorithm meant reducing FLOPs (the number of floating-point operations). After Flash Attention, the paradigm changes: optimize **IO** (memory input-output). FLOPs are nearly free on modern GPUs. What costs is data movement. This realization changed the approach to GPU optimization across the entire field.
+</Callout>
+
+## Results: Massive Gains
+
+The improvements are spectacular:
+
+- **2-4x faster** than PyTorch's standard attention implementation
+- **5-7x less GPU memory** consumed
+- **4-16x longer contexts** for the same memory budget
+
+And the best part: the result is **bit-exact**. Flash Attention makes no approximation. It's the same computation, just better organized. Models trained with Flash Attention produce exactly the same results as with standard attention.
+
+## The Transformative Impact: Long Contexts Become Possible
+
+Before Flash Attention, context windows were severely limited. GPT-3: 2K tokens. BERT: 512 tokens. GPU memory imposed a low ceiling.
+
+After Flash Attention, the barriers fall:
+- **GPT-4**: 128K tokens
+- **Claude**: 200K tokens
+- **Gemini**: 1 million tokens (then 2 million)
+
+**This context progress? Flash Attention made it possible.** Without this optimization, long-context models would be impractical: the memory cost and computation time of standard attention would make training and inference unaffordable.
+
+## Flash Attention 2 and 3: Continued Evolution
+
+**Flash Attention 2** (2023): 2x faster than FA1. Better parallelization of work across GPU threads. Reduction of non-matmul operations (those that don't use the specialized Tensor Core compute units).
+
+**Flash Attention 3** (2024): specifically optimized for H100 GPUs (Hopper architecture). 1.5-2x faster than FA2. Exploits new hardware features (asynchronous execution, warp specialization).
+
+Each new GPU generation brings new possible optimizations, and Flash Attention evolves to exploit them. It's continuous engineering work, not a one-shot.
+
+<Callout type="paper" title={"Universal adoption"}>
+Flash Attention is now **everywhere**. Natively integrated into PyTorch (`torch.nn.functional.scaled_dot_product_attention`). Supported by Hugging Face Transformers, vLLM, TensorRT-LLM, and all major inference frameworks. It's one of the most universally adopted technical contributions in AI. Tri Dao has become a major figure in GPU optimization.
+</Callout>
+
+## What Flash Attention Doesn't Change
+
+It's important to understand the limits. Flash Attention doesn't modify the **asymptotic complexity** of attention: it remains **O(n^2)**. Flash Attention optimizes the constants (the multiplicative factors), not the fundamental curve.
+
+For sequences of more than a million tokens, even with Flash Attention, quadratic attention eventually becomes prohibitive. That's why architectures with **linear attention** like Mamba (O(n)) or sparse attention methods remain necessary for very long contexts.
+
+Flash Attention solves the **implementation** problem. The **complexity** problem awaits an architectural solution.
+
+<Callout type="warning" title={"Linear attention: the next step"}>
+Flash Attention has pushed the limits of quadratic attention spectacularly. But O(n^2) remains O(n^2). For contexts of 10 million tokens or more, linear architectures (Mamba, RWKV, or hybrid approaches) will probably become necessary. Flash Attention bought time for the Transformer, but not eternity.
+</Callout>

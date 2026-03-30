@@ -1,0 +1,155 @@
+---
+title: "Learning Rate Scheduling: Warmup, Cosine, WSD"
+description: "Complete guide to learning rate scheduling strategies for LLM training: linear warmup, cosine decay, WSD, and their impacts on convergence."
+---
+
+## The Problem: What Learning Rate at Each Step?
+
+The learning rate (LR) is the step size the model takes at each weight update. Too large, it jumps over good solutions. Too small, it moves at a snail's pace.
+
+But the thing is, **the right LR changes during training**. Imagine you're descending a mountain in fog. At the start, you don't know the terrain: you take small, cautious steps. Once you have a feel for the landscape, you speed up. And when you're approaching the bottom of the valley, you slow down so you don't overshoot and go back up the other side.
+
+That's exactly what learning rate scheduling does: it adapts the step size based on where you are in training.
+
+## Linear Warmup: Let the Optimizer Calibrate
+
+### Simple Idea
+
+You start with an LR of zero (or very small) and increase linearly during the first iterations:
+
+$$lr(t) = lr_{\max} \times \frac{t}{T_{\text{warmup}}}$$
+
+Concrete example: with lr_max=3e-4 and warmup of 1000 iterations:
+- Iteration 0: lr = 0
+- Iteration 500: lr = 1.5e-4
+- Iteration 1000: lr = 3e-4 (switch to cosine)
+
+### Why It's Necessary
+
+<Callout type="info" title={"Optimizer calibration"}>
+Adam maintains internal statistics (momentum and variance) of gradients to decide the direction and amplitude of updates. At the very beginning, these statistics are based on a single batch --- so they're very imprecise. It's like trying to estimate a whole country's weather by looking out the window. The warmup gives Adam time to collect enough data for its estimates to become reliable, while keeping updates small and safe during this period of uncertainty.
+</Callout>
+
+### Typical Duration
+
+| Model size | Warmup |
+|--------------|--------|
+| < 1B | 500-1000 iterations |
+| 1-10B | 1000-2000 iterations |
+| > 10B | 2000-5000 iterations |
+| Huge batch | Longer warmup |
+
+Rule of thumb: warmup ≈ 0.5% to 2% of total iterations. The larger the batch size, the longer the warmup needs to be, since each update has a bigger impact on the weights.
+
+
+
+## Cosine Decay: The Elegant Curve
+
+After warmup, the LR follows a cosine shape:
+
+$$lr(t) = lr_{\min} + 0.5 \times (lr_{\max} - lr_{\min}) \times \left(1 + \cos\left(\pi \times \frac{t - T_{\text{warmup}}}{T_{\text{total}}}\right)\right)$$
+
+Visually, it's an inverted bell curve: it decreases slowly at first, accelerates in the middle, then slows down as it approaches the end.
+
+### Why This Shape Works So Well
+
+- **Slow start**: you keep a high LR to broadly explore the parameter space and find the right "regions" of the loss
+- **Fast middle**: the loss decreases less quickly, a sign you're approaching a minimum --- you reduce the LR to refine
+- **Gentle end**: you converge very softly toward a flatter local minimum, which favors generalization (a flat minimum is more robust than a narrow one)
+
+The sculptor analogy works well here: at the start, you roughly shape the marble block. In the middle, you sculpt the main forms. And at the end, you polish the details with tiny movements.
+
+<Callout type="tip" title="The de facto standard">
+Warmup + cosine is used by **LLaMA, GPT-3, Chinchilla, Mistral**, and virtually all large LLMs. It's the gold baseline --- if you don't know what to choose, go with this one.
+</Callout>
+
+## WSD: Warmup-Stable-Decay
+
+An increasingly popular alternative that divides training into three distinct phases:
+
+1. **Warmup**: linear increase (as before)
+2. **Stable**: constant LR during the majority of training
+3. **Decay**: rapid decrease (linear or exponential) at the end
+
+### Major Advantage: Flexibility
+
+With cosine, you have to declare the total number of iterations T_total **before** starting. The entire curve is calculated based on this duration. Want to extend training because the loss keeps going down? Bad news: the entire schedule has to be recalculated.
+
+With WSD, the stable phase has an arbitrary duration. You can train for 100K, 500K, or 2 million iterations in this phase --- when you're satisfied, you simply trigger the decay. It's like a faucet you can turn off whenever you want, instead of a timer you have to program in advance.
+
+<Callout type="paper" title="WSD for continuation">
+Classic scenario: you finish training with cosine, and realize the model could still improve. Problem: the LR is already at its minimum. Raising the LR risks destabilizing the model. With WSD, you're in the stable phase (constant LR), so you can simply continue and launch a new decay whenever you want. It's much more pragmatic.
+</Callout>
+
+### Comparison
+
+| Aspect | Cosine | WSD |
+|--------|---------|-----|
+| Total duration required in advance | Yes | No |
+| Training continuation | Difficult | Easy |
+| Adoption | Dominant (70%) | Growing (30%) |
+| Performance | Reference | Comparable |
+
+DeepSeek, MiniCPM, and recent models increasingly choose WSD for this flexibility, especially when the compute budget isn't fixed in advance.
+
+## Other Less Common Strategies
+
+### Linear Decay
+
+The LR decreases linearly from lr_max to lr_min. Simple and intuitive, but slightly suboptimal compared to cosine: the transition is too uniform and doesn't adapt to the different training phases.
+
+### Inverse Square Root
+
+$$lr(t) = lr_{\max} \times \sqrt{\frac{T_{\text{warmup}}}{t}}$$
+
+Used in the original Transformer (Vaswani et al., 2017) and T5. The LR decreases quickly at first, then very slowly. No need to declare T_total, which was an advantage before WSD came along. Less popular for modern LLMs, but still useful for exploratory projects without a fixed duration.
+
+### Cosine with Restarts
+
+The LR oscillates in cosine with periodic restarts: when it reaches the minimum, it jumps back up. The idea is to let the model explore new regions. Rarely used for large-scale LLMs since restarts introduce instability.
+
+## Choosing the Maximum Learning Rate: Depends Heavily on the Model
+
+| Model size | Typical LR (Adam) |
+|--------------|-------------------|
+| 100M | 5e-4 to 1e-3 |
+| 1B | 3e-4 to 5e-4 |
+| 7B | 1e-4 to 3e-4 |
+| 70B | 1e-5 to 3e-5 |
+
+**Counter-intuitive trend**: larger models require lower learning rates. Why? Because a larger model has more parameters interacting with each other. An LR that's too high causes updates that propagate and amplify through the layers, leading to instability. The deeper and wider the network, the gentler you need to be.
+
+### Scaling with Batch Size
+
+When you increase batch size, each gradient is estimated on more examples and therefore more stable. You can afford a bigger step. This is the **linear scaling rule**:
+
+$$lr_{\text{new}} = lr_{\text{base}} \times \frac{\text{new\_batch}}{\text{base\_batch}}$$
+
+Example: batch x8 => LR x8, but with a longer warmup to give the optimizer time to adjust.
+
+<Callout type="warning" title={"The LR is the most sensitive hyperparameter"}>
+2x too high = catastrophic divergence (the loss explodes and never comes back).
+2x too low = training 2x slower (you're wasting GPU for nothing).
+
+That's why LR grid searches on small proxy models (1-3B) before launching expensive runs on large models are absolutely essential. A 70B run that diverges after 3 days is tens of thousands of dollars lost.
+</Callout>
+
+## Advanced Practices
+
+### Batch Size Ramp-Up with LR Adjustment
+
+You start with a small batch (2M tokens) and a high LR, then gradually increase the batch (2M -> 4M -> 8M) while adjusting the LR accordingly. The advantage: at the start, you make many updates with little data per step (fast but noisy learning), then you switch to more stable and compute-efficient updates with large batches.
+
+### Fine-Tuning: Much Lower LR
+
+Fine-tuning uses LRs **10-100x lower** than pre-training. Example: if pre-training uses 1e-4, fine-tuning uses 1e-5 to 1e-6. The logic is simple: the model has already learned solid representations, you want to adjust them delicately, not overwrite them. Little to no warmup needed.
+
+### Continuation: WSD > Cosine
+
+If you're resuming training, WSD makes continuation trivial: just resume in the stable phase. With cosine, you have to hack together a new schedule, often by "rewarming" the LR, which can introduce instability.
+
+## Summary
+
+**Warmup + cosine** = the standard and reliable combination for pre-training. **WSD** = the pragmatic alternative for flexibility. The **maximum LR** is the most critical hyperparameter --- it depends heavily on model size and batch size. Always do a grid search before investing heavily.
+
+The big rules to remember: always warmup, adjust the LR with the batch size, and bigger model = smaller LR.

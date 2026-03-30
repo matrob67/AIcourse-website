@@ -1,0 +1,135 @@
+---
+title: "KV Cache: the hidden memory that slows everything down"
+description: "KV Cache: why we store keys and values. How it gets huge. The tricks to compress it (quantization, MLA, eviction)."
+---
+
+## Why the KV Cache exists
+
+When a Transformer generates text token by token (autoregressive mode), each new token must "look at" all previous tokens via the attention mechanism. Without a cache, that means recomputing the keys (K) and values (V) for **all previous tokens** at each step. For the 1000th token, you'd have to recompute K/V for the 999 tokens before it. That's absurd waste.
+
+The solution: the **KV Cache**. You store each token's K and V at the moment it's processed, and reuse them for all subsequent tokens. Each new token only costs the computation of its own K/V, plus the attention operation with the existing cache.
+
+In terms of complexity, you go from $O(L \times d^2)$ per token to $O(d^2)$ for the K/V computation (the attention itself remains $O(L \times d)$).
+
+
+
+<Callout type="info" title={"The library analogy"}>
+Imagine you're looking for a book in a library of 10,000 volumes. Without a cache, for each question you go back to the shelves to find all the relevant books. With a cache, you keep the useful books stacked on your table. Next question? You look at your stack directly. Enormously faster.
+</Callout>
+
+## Real KV Cache size: it blows up fast
+
+Let's do the math for LLaMA 2 7B with an 8K token context in FP16 (2 bytes per value):
+
+$$
+\text{KV cache} = 2 \times 32 \text{ layers} \times 32 \text{ heads} \times 8000 \text{ tokens} \times 128 \text{ dim} \times 2 \text{ bytes} \approx 4 \text{ GB}
+$$
+
+The factor of 2 at the beginning counts both keys AND values. 4 GB just for the cache of **a single request**.
+
+For GPT-3 175B with 8K tokens? About **18 GB**. On an A100 GPU with 80 GB, once the model is loaded and the cache allocated, there's almost nothing left to process other requests in parallel.
+
+<Callout type="warning" title="The real bottleneck: memory bandwidth">
+Autoregressive inference is limited by **memory bandwidth**, not by compute power. For each generated token, the GPU must read the entire KV cache from HBM memory. For 4 GB of cache on an A100 at 2 TB/s bandwidth, that takes about 2ms per token. The GPU may be incredibly powerful in compute, but it spends its time waiting for data to arrive from memory.
+</Callout>
+
+## KV Cache compression techniques
+
+### Cache quantization
+
+The most direct approach: reduce the precision of stored K/V.
+
+**INT8**: instead of FP16 (2 bytes), you store in INT8 (1 byte). The cache is cut in half. Degradation is minimal for most tasks.
+
+**INT4**: 4x reduction, but trickier. You need to quantize by groups to preserve precision.
+
+**FP8**: a good compromise that preserves FP16's dynamic range while halving the size.
+
+<Callout type="tip" title="Key/value asymmetry">
+Keys and values have different statistical distributions. Keys tend to be uniformly distributed, while values exhibit outliers (extreme values). Asymmetric quantization (with a zero-point) works better than symmetric for values. A detail that matters in practice.
+</Callout>
+
+### Smart eviction: dropping what's no longer useful
+
+Instead of keeping everything, you can intelligently remove cache entries that contribute little to attention.
+
+**Heavy Hitter Oracle (H2O)**: identifies tokens that receive the most attention (the "heavy hitters") and only keeps those, plus a local window of recent tokens. Cache reduction of 5 to 10x.
+
+**Sink Tokens**: systematically keeps the very first tokens (typically the system prompt) in addition to the local window. Essential for tasks that depend on an initial instruction.
+
+**Sliding Window**: a radical approach used by Mistral. You only keep the last $W$ tokens in the cache. Ultra memory-efficient, but only works if the recent context is sufficient for the task.
+
+### Structural compression: rethinking the architecture
+
+**Multi-Head Latent Attention (MLA)**, introduced by DeepSeek, is the most aggressive compression. Instead of storing K and V separately for each attention head, they're compressed together into a shared latent space:
+
+$$
+\text{latent} = W_{\text{compress}} [K; V]
+$$
+$$
+K' = W_{\text{decompress\_K}} \cdot \text{latent}, \quad V' = W_{\text{decompress\_V}} \cdot \text{latent}
+$$
+
+In plain terms: instead of storing K and V separately (large), you compress them together into a small `latent` vector via a learned matrix $W_{\text{compress}}$. When you need K and V to compute attention, you reconstruct them on the fly with two decompression matrices. The cache only stores the `latent` vector, which is much smaller. At attention time, K and V are reconstructed on the fly.
+
+<Callout type="paper" title="MLA in DeepSeek-V2: 93% compression">
+DeepSeek-V2 reduces the KV cache by 93% with MLA. This is far more aggressive than GQA (Group Query Attention) while being more expressive: K and V share a rich representation in latent space, rather than simply sharing heads.
+</Callout>
+
+## Implementation optimizations
+
+### PagedAttention (vLLM)
+
+vLLM's brilliant idea: manage the KV cache like an **OS's virtual memory**.
+
+- The cache is divided into **pages** (fixed-size blocks, typically 16 tokens)
+- Pages are dynamically allocated as needed, not pre-allocated
+- Multiple requests with the same prefix (system prompt) **share the same pages**
+
+The result: near-zero memory fragmentation. Where naive allocation wasted 60-80% of GPU memory, PagedAttention achieves near-optimal utilization.
+
+### Prefix Caching
+
+If 100 requests share the same 2000-token system prompt, you compute the KV cache for that prompt **once** and share it across all requests. The savings are massive in production deployments where the system prompt is fixed.
+
+### Speculative Decoding
+
+Instead of generating one token at a time (very bandwidth-inefficient), a small fast model generates several candidate tokens, then the large model verifies them in a single batch. The cache is updated in batch rather than token by token, which makes much better use of GPU bandwidth.
+
+## The direct economic impact
+
+Reducing KV cache per request means being able to process more requests in parallel on the same GPU:
+
+$$
+\text{batch\_max} = \frac{\text{GPU\_memory} - \text{model\_weights}}{\text{KV\_cache\_per\_request}}
+$$
+
+Halving the cache = doubling the batch size = doubling the throughput = **cutting the cost per token in half**. For a production LLM service, KV cache size is directly linked to profitability.
+
+<Callout type="info" title={"This is not an optional optimization"}>
+Cache quantization, GQA, MLA, eviction, PagedAttention: these are not marginal optimizations to squeeze out a few percentage points of performance. They are fundamental elements of economic viability. Without them, serving LLMs at scale would be financially impossible.
+</Callout>
+
+## TurboQuant: quantizing the KV cache to 3 bits without loss (Google, ICLR 2026)
+
+TurboQuant is a **training-free** compression algorithm developed by Google that quantizes the KV cache to just 3 bits per coordinate, without precision degradation. The process relies on two complementary steps:
+
+1. **PolarQuant**: converts each K/V vector to polar coordinates (radius = magnitude, angles = direction). After a random orthogonal rotation, the distribution of each coordinate becomes an analytically known Beta distribution. You can therefore precompute the optimal quantizer (Lloyd-Max) once and reuse it for all vectors, which eliminates the costly per-block normalization of classical quantizers.
+
+2. **QJL (Quantized Johnson-Lindenstrauss)**: uses 1 additional bit per dimension to compensate for PolarQuant's residual error. The residual is projected via a random Gaussian matrix, and only the sign (+1 or -1) is stored. This single bit is enough to make the dot product estimate **mathematically unbiased**, eliminating systematic error.
+
+In total, 2 bits (PolarQuant) + 1 bit (QJL) = **3 bits per coordinate**, a 5 to 6x memory reduction compared to FP16. On H100 GPUs, TurboQuant achieves up to **8x speedup** for attention logit computation.
+
+Results are validated on **Llama-3.1-8B** and **Mistral-7B** with LongBench, Needle in a Haystack, ZeroSCROLLS, and RULER benchmarks. The compressed cache maintains near-perfect fidelity, including on long-context retrieval tasks.
+
+No training or fine-tuning is needed: TurboQuant applies directly to any existing model in a single pass.
+
+<ArxivLink id="2504.19874" title="TurboQuant: Online Vector Quantization for Quantized KV Cache in Large Language Models" />
+
+<Callout type="info" title={"Implications for long-context serving"}>
+With context windows now exceeding a million tokens (Gemini 1.5, Claude), the KV cache becomes the primary limiting factor. A 6x smaller cache means being able to serve 6x longer contexts on the same hardware, or 6x more requests in parallel. TurboQuant makes serving very long contexts economically viable without quality compromise.
+</Callout>
+
+## In summary
+
+The KV Cache is what makes autoregressive inference practical, but it quickly becomes a bottleneck in memory and bandwidth. Compression techniques (quantization, eviction, MLA) and optimization techniques (PagedAttention, prefix caching) are pillars of modern LLM infrastructure. This is a very active area of research, directly tied to the profits and viability of LLM services.

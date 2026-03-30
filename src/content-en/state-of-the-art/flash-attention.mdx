@@ -1,0 +1,173 @@
+---
+title: "Flash Attention"
+description: "In-depth analysis of Flash Attention, the revolutionary algorithm that makes exact attention efficient by exploiting the memory hierarchy of modern GPUs."
+---
+
+## The dirty secret of attention
+
+Attention is amazing. It's the heart of Transformers, it's what allows GPT to understand that in "the cat sleeps on the couch," the word "sleeps" is related to "cat" and not to "couch." But attention has a dirty secret: **it's a memory hog**.
+
+Why? Because to compute attention, you have to create a **score matrix** that compares every token with every other token. For a sequence of 4096 tokens, that gives a matrix of 4096 x 4096 = **16 million numbers**. Double the sequence? You need **4 times more memory**. This is what's called $O(n^2)$ complexity: memory explodes with the square of the sequence length.
+
+This is exactly why GPT-3 was limited to 2048 tokens. Not because the GPU wasn't powerful enough to do the computations, but because it simply **didn't have enough memory** to store this huge intermediate matrix.
+
+And that's where Flash Attention comes in, developed by Tri Dao at Stanford in 2022:
+
+<ArxivLink id="2205.14135" title="FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness" />
+
+The brilliant insight? The problem is **not the computation**. GPUs are computation monsters. The real problem is **moving data around in memory**. And Flash Attention solves exactly that, without any approximation. The result is mathematically identical, just much faster and much more memory-efficient.
+
+
+
+## Understanding the problem: your GPU has two types of memory
+
+To understand Flash Attention, you first need to understand how GPU memory works. And the perfect analogy is that of a **desk and a warehouse**.
+
+Your GPU has two types of memory:
+
+- **SRAM (on-chip)**: this is your **desk**. Tiny (~20 MB on an A100), but incredibly fast (~19 TB/s bandwidth). Everything on your desk, you can access instantly.
+- **HBM (off-chip)**: this is your **warehouse**. Huge (~80 GB on an A100), but much slower (~2 TB/s). Every time you need something from the warehouse, you have to walk over to it, find the right box, and come back to your desk.
+
+The speed difference? SRAM is about **10 times faster** than HBM. And that's where things get stuck.
+
+<Callout type="info" title={"Why is this a problem?"}>
+Modern GPUs are so powerful in terms of computation that they spend more time **waiting for data to arrive** from HBM than actually doing the computations. It's like an ultra-fast chef who spends 80% of their time fetching ingredients from the pantry instead of cooking.
+</Callout>
+
+## How standard attention wastes memory
+
+Let's look concretely at what happens with the naive implementation of attention. We have three matrices: Q (queries), K (keys), and V (values). Here are the steps:
+
+**Step 1**: Read Q and K from HBM (the warehouse) → compute the score matrix $S = QK^T$ → write S to HBM (back to the warehouse).
+
+**Step 2**: Re-read S from HBM → apply softmax to get $P = \text{softmax}(S)$ → re-write P to HBM.
+
+**Step 3**: Re-read P and V from HBM → compute the output $O = PV$ → write O to HBM.
+
+See the problem? We make **six round trips to the warehouse** for a single attention computation. And the worst part is that we store in HBM this huge matrix $S$ of size $L \times L$ (where $L$ is the sequence length) just to re-read it two seconds later. It's like printing a 16-million-page document, storing it in the warehouse, then immediately going to fetch it to read it.
+
+<Callout type="warning" title={"The real bottleneck"}>
+On an A100 GPU, compute operations (FLOPS) are so fast that the GPU spends the majority of its time **moving data** between HBM and SRAM. Standard attention is what's called "memory-bound": it's limited by memory, not by compute power.
+</Callout>
+
+## The solution: working in blocks (tiling)
+
+The core idea of Flash Attention is simple and elegant. Going back to our cooking analogy:
+
+> Imagine you're preparing a banquet for 200 people. Standard attention is putting **all the ingredients** for all the recipes on the counter at the same time. Result: you run out of space and spend all your time moving things around.
+>
+> Flash Attention is the **smart chef** who works in batches: they take out the ingredients for 10 servings, cook them, put things away, then move on to the next 10. Their counter never overflows.
+
+Concretely, Flash Attention splits the Q, K, V matrices into **small blocks** that fit in SRAM (the desk). And it does all the computation directly in SRAM, without ever writing the full attention matrix to HBM.
+
+Here's how it works:
+
+1. **Load a block of Q** into SRAM
+2. **For each block of K and V**:
+   - Load the K and V block into SRAM
+   - Compute the piece of the attention matrix $S_{ij} = Q_i K_j^T$ **directly in SRAM**
+   - Apply a partial softmax and accumulate the result
+3. **Write only the final result** to HBM
+
+The $L \times L$ attention matrix never exists in its entirety. It's computed in pieces in SRAM and immediately consumed. It's as if the chef tasted each ingredient as they went along without ever piling everything up on the counter.
+
+<Callout type="info" title="IO-awareness: the key word">
+Flash Attention is called "IO-aware" (input/output aware). This means the algorithm is designed **with the cost of memory transfers in mind**. It deliberately does a bit more computation (which is almost free on a GPU) to do much fewer HBM <-> SRAM transfers (which are expensive). It's an extremely winning trade-off.
+</Callout>
+
+## The magic trick: online softmax
+
+There's a catch with tiling. Softmax is the operation that transforms attention scores into probabilities. And to compute a softmax, you normally need the **entire row of scores at once**. Why? Because the softmax divides each exponential by the sum of all exponentials in the row:
+
+$$\text{softmax}(x_i) = \frac{e^{x_i}}{\sum_j e^{x_j}}$$
+
+If you work block by block, you don't yet know the complete denominator when you process the first block. How do you handle that?
+
+### The incremental softmax trick
+
+Flash Attention uses **online softmax**, an algorithm that allows computing the softmax exactly and incrementally. The idea: you maintain two statistics across blocks:
+
+- $m$: the **running maximum** of the scores (for numerical stability)
+- $\ell$: the **running sum** of the exponentials
+
+With each new block, you update these statistics:
+
+$$m_{\text{new}} = \max(m_{\text{old}}, \max(S_{ij}))$$
+$$\ell_{\text{new}} = e^{m_{\text{old}} - m_{\text{new}}} \cdot \ell_{\text{old}} + \sum_j e^{S_{ij} - m_{\text{new}}}$$
+
+In plain terms: $m$ keeps the maximum of scores seen so far (for numerical stability -- you subtract the max before the exponential to avoid astronomically large numbers). $\ell$ accumulates the sum of exponentials (the softmax denominator). The factor $e^{m_{\text{old}} - m_{\text{new}}}$ is a correction: if the new block contains a score higher than all previous ones, you need to readjust the already-done computations to account for this new maximum.
+
+<Callout type="paper" title="Online softmax is exact">
+This is not an approximation. The result of online softmax is **mathematically identical** to the standard softmax computed over the entire row. You get exactly the same numbers, down to the bit. The only difference is that you never needed to store the entire row in memory.
+</Callout>
+
+<details>
+<summary>Technical corner: IO complexity</summary>
+
+For the curious, here's why Flash Attention is optimal in terms of memory transfers.
+
+Standard attention does $O(Ld + L^2)$ reads/writes to HBM (where $L$ is the sequence length and $d$ the dimension). The $L^2$ term comes from materializing the attention matrix.
+
+Flash Attention reduces this to $O(L^2 d^2 / M)$ where $M$ is the SRAM size. The authors prove this is **optimal**: no exact attention algorithm can do fewer HBM transfers. In practice, since $M \gg d^2$, the number of transfers is drastically reduced.
+
+</details>
+
+## Concrete results: before vs after
+
+Let's look at the numbers, because this is where it gets impressive.
+
+### Speedup
+
+| Sequence length | Speedup vs standard PyTorch attention |
+|---------------------|--------------------------------------|
+| 512                 | ~2x faster                       |
+| 1024                | ~2-3x faster                     |
+| 2048                | ~3-5x faster                     |
+| 4096                | ~5-7x faster                     |
+| 8192+               | ~7-10x faster                    |
+
+The longer the sequence, the more advantageous Flash Attention becomes. This makes sense: the bigger the $L \times L$ matrix would be, the more we gain by never materializing it.
+
+### Memory
+
+With standard attention, required memory grows as $O(L^2)$. With Flash Attention, it grows as $O(L)$, meaning **linearly**. In practice:
+
+- An A100 80 GB GPU that topped out at **~2K tokens** with standard attention can handle **8K-16K tokens** with Flash Attention
+- That's a **4 to 8x greater capacity** on the same hardware
+
+<Callout type="tip" title={"The impact on training"}>
+This memory reduction doesn't just make inference faster. Most importantly, it allows you to **train** models with much longer contexts. And a model trained on longer sequences better understands long-range relationships in text. It's a virtuous cycle.
+</Callout>
+
+## The backward pass: recompute rather than store
+
+During training, you also need to compute gradients (the backward pass). Normally, you'd keep the matrix $P = \text{softmax}(S)$ in memory for the backward. But this matrix is $L \times L$, and that's exactly what we want to avoid.
+
+Flash Attention makes a smart choice: it only stores the online softmax statistics ($m$ and $\ell$, a few numbers per row) and **recomputes** $P$ block by block during the backward. Yes, that means we redo computation. But remember: on a modern GPU, computation is almost free compared to memory transfers. This trade-off is a clear winner.
+
+## Causal masking: a free bonus
+
+For autoregressive models (like GPT), a **causal mask** is applied: each token can only "look at" previous tokens. In the attention matrix, this means the entire upper triangular part is zero.
+
+Flash Attention handles this natively by **skipping entirely masked blocks**. If a block falls entirely within the masked zone, it's not computed at all. Result: you save roughly **50% more computation** for autoregressive models.
+
+## The impact: Flash Attention changed everything
+
+Flash Attention isn't just another technical optimization. It's a fundamental change that had repercussions across the entire ecosystem:
+
+- **Extended contexts**: before Flash Attention, models were stuck at 2K-4K tokens. After, we moved to 32K, 128K, then millions of tokens. "Long context models" wouldn't exist without Flash Attention.
+- **2-4x faster training** in wall-clock time, which means training costs divided by 2 to 4.
+- **Universal standard**: today, Flash Attention is used by virtually **all major models**: GPT-5.4, Claude Opus 4.6, Llama 4, Gemini 3.1, Mistral...
+- **Integrated everywhere**: available directly in PyTorch (`torch.nn.functional.scaled_dot_product_attention`), Hugging Face Transformers, xFormers (Meta), and many other libraries.
+
+<Callout type="info" title="Flash Attention 2 and 3">
+Flash Attention continued to evolve. **Flash Attention 2** (2023) brought better parallelism and an additional ~2x speedup. **Flash Attention 3** (2024) leverages Hopper GPUs (H100) with even more advanced techniques like asynchronous pipelining. The fundamental principle remains the same: minimize memory transfers.
+</Callout>
+
+## The fundamental lesson
+
+Flash Attention teaches us something profound about optimization in deep learning: **it's not always about reducing the number of operations**. Sometimes, it's about **knowing where those operations happen**.
+
+An algorithm that does more computation but keeps its data in the right place in memory can be 10 times faster than an algorithm that's "optimal" in number of operations but spends all its time moving data around. On modern GPUs, understanding the memory hierarchy isn't a luxury: it's the key to performance.
+
+Flash Attention has become a foundational component of modern LLM infrastructure, and its impact will continue to be felt as sequences get longer and models get bigger.

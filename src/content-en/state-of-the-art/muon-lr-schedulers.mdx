@@ -1,0 +1,212 @@
+---
+title: "Muon, LR Schedulers: Advanced Optimization"
+description: "The Muon optimizer challenges AdamW with update orthogonalization. LR schedulers (cosine, WSD, warmup) steer the learning rate throughout training."
+---
+
+## Muon: The Post-Adam Optimizer
+
+Adam and AdamW have dominated LLM training since 2014. But in 2024, a new optimizer emerged: **Muon** (Momentum + Orthogonalization). Its central idea is simple but powerful: after computing the classic momentum update, you **orthogonalize** the update matrix before applying it to the weights.
+
+### The Problem It Solves
+
+With Adam, weight updates tend to **collapse into a low-rank subspace**. Concretely, this means the update only modifies the weight in a few privileged directions, ignoring the others. The model then uses only a fraction of its weight matrix capacity.
+
+Imagine a weight matrix of dimension 1024 x 1024: it theoretically has 1024 independent directions to exploit. But if the update has rank 5, only 5 of those directions are actually modified at each step. The other 1019 remain unexploited.
+
+### Orthogonalization: Forcing Diversity
+
+Orthogonalization transforms the update matrix so that its rows (or columns) are **orthogonal to each other**, meaning perpendicular in vector space. The result: the update uniformly covers all directions of the weight space, instead of concentrating on a few.
+
+In mathematical terms, if $G$ is the raw update matrix (after momentum), Muon computes:
+
+$$G_{\text{orth}} = \text{orthogonalize}(G)$$
+
+then applies $W \leftarrow W - \eta \cdot G_{\text{orth}}$ with $\eta$ the learning rate.
+
+Orthogonalization essentially amounts to finding the **closest orthogonal matrix** to $G$, in the Frobenius norm sense. Formally, we seek $G_{\text{orth}} = \arg\min_{Q : Q^TQ = I} \|G - Q\|_F$, which corresponds to the unitary component of the singular value decomposition (SVD) of $G$.
+
+### Newton-Schulz: Orthogonalize Without SVD
+
+The problem is that computing a full SVD is **extremely expensive** computationally. For an $n \times n$ matrix, SVD has $O(n^3)$ complexity, which is prohibitive when $n = 4096$ or more.
+
+Muon works around this problem with **Newton-Schulz iterations**, an iterative method to approximate orthogonalization. The algorithm is remarkably simple:
+
+1. Normalize $G$ so that its largest singular value is $\leq 1$
+2. Iterate the formula: $X_{k+1} = \frac{1}{2} X_k (3I - X_k^T X_k)$
+3. In 5-10 iterations, $X_k$ converges to the closest orthogonal matrix to $G$
+
+<Callout type="info" title={"Why Newton-Schulz converges fast"}>
+Each Newton-Schulz iteration performs a matrix multiplication and brings all singular values closer to 1 (the condition for an orthogonal matrix). Singular values close to 1 move little, those far from it converge quickly. In practice, 5 iterations are enough for an excellent approximation. The cost per iteration is dominated by matrix multiplications, which GPUs execute very efficiently.
+</Callout>
+
+### Results: Fewer Steps, Same Quality
+
+Benchmarks show that Muon **reaches the same loss as AdamW with about 2x fewer steps** on LLM pre-training tasks. Put differently, each Muon step extracts more information from the gradients.
+
+The gain comes from better utilization of the parameter space: instead of concentrating updates in a few directions, Muon distributes learning uniformly, which accelerates convergence.
+
+### Limitations and Hybrid Configuration
+
+Muon is not a universal replacement for AdamW. It has two major constraints:
+
+**1. Extra cost per step.** Newton-Schulz iterations add matrix multiplications at each step. For a matrix of size $d \times d$ with $k$ iterations, the overhead is about $k$ matrix multiplications of size $d \times d$. The gain in number of steps must compensate this wall-clock time overhead.
+
+**2. Only works on matrix parameters.** Orthogonalization only makes sense for rank-2 tensors (matrices). Bias vectors ($d \times 1$) and embeddings (which have special semantics: each row corresponds to a token) don't benefit from this technique.
+
+<Callout type="warning" title={"The hybrid configuration is mandatory"}>
+In practice, training with Muon uses **two optimizers simultaneously**:
+- **Muon** for the weight matrices of attention layers (Q, K, V, O) and MLPs (up, gate, down)
+- **AdamW** for token embeddings, biases, LayerNorm/RMSNorm, and the output head (lm_head)
+
+You therefore need to manage two distinct sets of hyperparameters (LR, weight decay), which complicates tuning.
+</Callout>
+
+### Simplified Pseudocode
+
+```python
+# Initialization
+momentum = torch.zeros_like(W)
+beta = 0.95  # momentum coefficient
+
+for step in range(num_steps):
+    grad = compute_gradient(W)
+
+    # 1. Momentum update (classic)
+    momentum = beta * momentum + grad
+
+    # 2. Orthogonalization via Newton-Schulz
+    X = momentum / momentum.norm()  # normalization
+    for _ in range(5):  # 5 iterations suffice
+        X = 0.5 * X @ (3 * I - X.T @ X)
+
+    # 3. Weight update
+    W = W - lr * X
+```
+
+## SGD: Still Alive
+
+Before Adam, there was SGD + momentum (Stochastic Gradient Descent with momentum). This optimizer is much simpler: it maintains only one state per parameter (momentum), compared to two for Adam (momentum + variance).
+
+### Why Some Still Use It
+
+The main reason is **memory**. Adam stores two state tensors per parameter: the first moment (running average of gradients) and the second moment (running average of squared gradients). For a 70B parameter model in FP32, that's **560 GB** of optimizer states (70B x 2 x 4 bytes). SGD with momentum stores only one tensor: **280 GB** for the same model.
+
+| Optimizer | States per parameter | Memory for 70B (FP32) |
+|-----------|---------------------|--------------------------|
+| SGD + momentum | 1 | 280 GB |
+| Adam / AdamW | 2 | 560 GB |
+| Muon | 1 (momentum only) | 280 GB |
+
+<Callout type="info" title={"Muon is memory-light"}>
+Notable fact: Muon stores only a momentum state, like SGD. Orthogonalization is computed on the fly and requires no persistent storage. Muon thus offers the convergence gains of an advanced optimizer with the memory footprint of SGD.
+</Callout>
+
+### When to Choose SGD
+
+- **Very large-scale distributed training** where per-GPU memory is the limiting factor
+- **Vision**: SGD + momentum remains competitive for ConvNets (ResNet, EfficientNet)
+- **Simplicity**: fewer hyperparameters to tune (no $\beta_1$, $\beta_2$, $\epsilon$)
+
+For LLM pre-training, Adam/AdamW remains the default choice. SGD converges more slowly on Transformers, and the memory savings generally don't compensate for the additional compute time.
+
+## LR Schedulers: Steering the Learning Rate
+
+The learning rate is **the most critical hyperparameter** of training. Too high, the loss explodes (divergence). Too low, the model progresses uselessly slowly. And most importantly, the right learning rate **changes during training**. That's the scheduler's role: define an LR trajectory adapted to each phase.
+
+### Phase 1: Warmup (Gradual Ramp-Up)
+
+You start with an LR of zero and increase linearly to the maximum LR during the first 1-5% of training:
+
+$$\text{lr}(t) = \text{lr}_{\max} \times \frac{t}{T_{\text{warmup}}}$$
+
+- $t$: the current step
+- $T_{\text{warmup}}$: the number of warmup steps
+- $\text{lr}_{\max}$: the target learning rate
+
+**Why is it necessary?** At the very beginning, gradients are computed from randomly initialized weights. These gradients are very noisy and point in unreliable directions. A high LR would apply large updates based on noise, which risks pushing the weights into a bad region the model will never recover from. The warmup gives time for the optimizer's internal statistics (momentum, variance for Adam) to stabilize before increasing update amplitude.
+
+### Phase 2a: Cosine Decay (The Standard)
+
+After warmup, the LR decays following a cosine curve:
+
+$$\text{lr}(t) = \text{lr}_{\min} + \frac{1}{2}(\text{lr}_{\max} - \text{lr}_{\min})\left(1 + \cos\left(\pi \cdot \frac{t - T_{\text{warmup}}}{T_{\text{total}} - T_{\text{warmup}}}\right)\right)$$
+
+- $\text{lr}_{\min}$: the minimum LR at the end of training (often $\text{lr}_{\max} / 10$ or $\text{lr}_{\max} / 100$)
+- $T_{\text{total}}$: the total number of training steps
+
+The cosine shape gives slow decay at the beginning (you keep a high LR to explore), fast in the middle, then slow again at the end (to converge smoothly). This is the scheduler used by LLaMA, GPT-3, Mistral, and the majority of current LLMs.
+
+<Callout type="tip" title={"Cosine is the default choice"}>
+If you don't know which scheduler to choose, warmup + cosine decay is the safest combination. It's the industry standard for LLM pre-training, validated on hundreds of models.
+</Callout>
+
+### Phase 2b: WSD (Warmup-Stable-Decay)
+
+WSD divides training into three distinct phases:
+
+1. **Warmup**: linear LR ramp-up (identical to cosine)
+2. **Stable**: constant LR during the majority of training
+3. **Decay**: rapid decrease (linear or exponential) at the end
+
+The piecewise formula:
+
+$$\text{lr}(t) = \begin{cases} \text{lr}_{\max} \times \frac{t}{T_w} & \text{if } t < T_w \text{ (warmup)} \\ \text{lr}_{\max} & \text{if } T_w \leq t < T_s \text{ (stable)} \\ \text{lr}_{\max} \times \frac{T_{\text{total}} - t}{T_{\text{total}} - T_s} & \text{if } t \geq T_s \text{ (decay)} \end{cases}$$
+
+- $T_w$: end of warmup
+- $T_s$: start of decay
+- $T_{\text{total}}$: end of training
+
+**WSD's decisive advantage**: with cosine, you must declare $T_{\text{total}}$ before starting, as the entire curve depends on it. If you want to extend training, the schedule is compromised. With WSD, the stable phase can last as long as you want. When you're satisfied, you trigger the decay phase. It's much more flexible for experimentation.
+
+WSD is used by MiniCPM, and more and more teams are adopting it for its flexibility.
+
+### Linear Decay and Cooldown
+
+**Linear decay** is the simplest: the LR decreases linearly from $\text{lr}_{\max}$ to $\text{lr}_{\min}$. Less used for LLMs because it doesn't adapt to the different training phases (too uniform), but perfectly viable for short runs.
+
+**Cooldown** refers to the final decay phase, regardless of the scheduler. This phase is critical for the model's final quality: it's during cooldown that the model converges toward a flatter loss minimum, which improves generalization. A cooldown that's too short or absent can leave the model in a narrow minimum, sensitive to perturbations.
+
+### Scheduler Comparison
+
+| Scheduler | Needs $T_{\text{total}}$ in advance | Easy continuation | LLM adoption |
+|-----------|:---:|:---:|:---:|
+| Cosine decay | Yes | Difficult | Dominant (~70%) |
+| WSD | No | Easy | Growing (~30%) |
+| Linear | Yes | Difficult | Rare |
+| Inverse sqrt | No | Easy | Historical (original Transformer) |
+
+<Callout type="info" title={"Practical guidance"}>
+**Cosine** is the safe default choice, validated by years of practice on the largest models. **WSD** is the pragmatic choice when you don't know the compute budget in advance or want to be able to extend training. Both give comparable performance; the difference is operational.
+</Callout>
+
+## Muon + LR Scheduling: How to Combine Them
+
+Muon is used with the same schedulers as AdamW. The typical combination is warmup + cosine decay. However, since Muon converges in fewer steps, you can afford a **relatively shorter warmup** and a slightly more aggressive LR.
+
+In hybrid configuration (Muon + AdamW), each optimizer has its own schedule and its own max LR. Typically, Muon's LR is **higher** than AdamW's on the same model, because orthogonalization stabilizes the updates.
+
+```python
+# Typical hybrid configuration
+muon_lr = 0.02         # LR for weight matrices (attention, MLP)
+adamw_lr = 3e-4        # LR for embeddings, biases, norms
+warmup_steps = 1000
+total_steps = 100000
+
+# Muon: warmup + cosine
+muon_scheduler = CosineWithWarmup(muon_lr, warmup_steps, total_steps)
+
+# AdamW: warmup + cosine (same schedule, different LR)
+adamw_scheduler = CosineWithWarmup(adamw_lr, warmup_steps, total_steps)
+```
+
+## Summary
+
+| | AdamW | Muon | SGD + momentum |
+|---|---|---|---|
+| Memory states | 2 per param | 1 per param | 1 per param |
+| LLM convergence | Reference | Faster (2x fewer steps) | Slower |
+| Cost per step | Reference | Higher (Newton-Schulz) | Lower |
+| Applicable to | Everything | Matrices only | Everything |
+| Adoption | Standard | Emerging | Niche for LLMs |
+
+LR schedulers are independent of the optimizer choice: warmup + cosine for robustness, WSD for flexibility. The maximum learning rate remains the most critical hyperparameter, regardless of the combination chosen.

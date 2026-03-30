@@ -1,0 +1,169 @@
+---
+title: "Regularization: Preventing Overfitting"
+description: "L1, L2, dropout, early stopping, data augmentation. The techniques that keep your model honest."
+---
+
+## Introduction: Keeping Discipline
+
+Here's the classic deep learning trap: you train a model, your training loss drops to 0.001, you're happy... and then in production, performance is catastrophic. What happened? The model **memorized** the training data instead of extracting general patterns. It learned that image number 4,327 is a cat, but it didn't learn to recognize *a cat in general*. A network large enough can memorize anything: every photo, every email, every price -- including noise and labeling errors.
+
+**Regularization** adds "brakes" to the model: constraints, penalties, and perturbations that force it to find **simple and generalizable** solutions, not just brute memorization.
+
+It's the practical application of **Occam's razor**: between two models that perform equally well on training data, prefer the simpler one -- it's the one most likely to work on new data.
+
+This principle has an elegant formalization in information theory: **MDL (Minimum Description Length)**. The idea, explored as early as 1993 by Hinton & van Camp, is that a good model is one you can describe with **few bits**. A model that memorizes noise needs an enormous number of bits to precisely encode all its weights. A model that captures the true underlying patterns can be described much more compactly. L1 and L2 regularization, viewed from this angle, are ways of penalizing the "description length" of the model: small weights (L2) or sparse weights (L1) require fewer bits to encode. Fewer bits = simpler model = better generalization.
+
+<ArxivLink id="math/0406077" title="A Tutorial Introduction to the Minimum Description Length Principle (Grünwald, 2004)" />
+
+## L2: Pushing Weights Toward Zero
+
+**L2** regularization (also called **Ridge** or **weight decay**) adds a penalty term to the loss function: the sum of squares of all model weights.
+
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{error}} + \lambda \sum_{i} w_i^2$$
+
+The parameter $\lambda$ (lambda) controls the strength of the penalty. The larger lambda is, the more the model is forced to keep its weights small.
+
+**The intuition**: why do small weights reduce overfitting? Think of a function that passes through noisy data. With huge weights, the function makes violent zigzags to pass through each point -- it memorizes the noise. With small weights, the function is forced to be "smooth": it captures the general trend without sticking to the noise. Small weights = smooth and stable decisions.
+
+In practice with the SGD optimizer, L2 amounts to multiplying each weight by $(1 - \lambda \cdot \text{lr})$ at each training step, before applying the gradient. The weights slowly "melt" toward zero -- hence the name **weight decay**. With Adam, the correspondence between L2 and weight decay is no longer exact, which is why AdamW exists, implementing true decoupled weight decay.
+
+<Callout type="tip" title={"L2 is the baseline tool"}>
+L2 / weight decay is used almost everywhere in deep learning. A lambda between 0.0001 and 0.1 is typical (0.01 is a good starting point). It's your first line of defense against overfitting -- simple, effective, and with no additional computational cost.
+</Callout>
+
+## L1: Forcing Weights to Exactly Zero
+
+**L1** regularization (also called **Lasso**) penalizes the **absolute value** of the weights instead of the square:
+
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{error}} + \lambda \sum_{i} |w_i|$$
+
+**The big question: why does L1 create sparsity (weights exactly at zero), and not L2?** The answer lies in the shape of the penalty's gradient.
+
+With L2, the penalty is $w^2$: its gradient is $2w$, which becomes nearly zero when the weight approaches zero. It's like a restoring force that weakens as you get closer to the center. Result: the weight approaches zero but never really gets there.
+
+With L1, the penalty is $|w|$: its gradient is $\pm\lambda$, **constant regardless of the weight's value**. Even a weight at 0.0001 gets the same push toward zero as a weight at 10. It's this constant push, like a wind that always blows just as hard, that crosses the threshold and eliminates the weight completely.
+
+Practical result: L1 produces **sparse** models where only a few weights are non-zero. This is extremely useful for **feature selection** -- L1 implicitly tells you "these features matter, the others don't". In deep learning, L1 is less common than L2, but it remains important in classical ML and for linear models.
+
+Use L1 when you suspect that only a fraction of your features is truly important and you want the model to discover this on its own.
+
+## Dropout: Deactivating Neurons
+
+Dropout is simple in principle: during training, at each forward pass, you **randomly deactivate** 10 to 50% of neurons. Their outputs become zero for that step.
+
+<ImageWithSource
+  src="/images/admin/img-1774008796634.png"
+  alt="Comparison of neural network with and without dropout"
+  source="https://vitalitylearning.medium.com/understanding-dropout-a-key-to-preventing-overfitting-in-neural-networks-21b28dd7c9b1"
+  caption="The image illustrates the principle of dropout in a neural network. On the left, the full network is active, while on the right, some neurons are randomly deactivated during training to prevent overfitting."
+  size="large"
+/>
+
+### Why It Works
+
+Imagine a network that memorizes training data: certain neurons learn to cooperate very precisely to recognize a particular example. Neuron A activates B which activates C -- together they memorize a specific pattern. With dropout, A, B, or C can be turned off at any moment. This precise cooperation becomes impossible to maintain. The network is forced to learn **redundant and distributed** representations: each useful feature is encoded in multiple different ways, and everything becomes more robust.
+
+Another angle: dropout is equivalent to implicitly training a gigantic ensemble of sub-networks. With 100 neurons, you get potentially $2^{100}$ possible configurations. At inference, all neurons are active -- it's like averaging the votes of all these sub-networks simultaneously.
+
+It's like training $2^n$ different sub-networks implicitly (where $n$ is the number of neurons).
+
+### At Inference
+
+All neurons are active. But you multiply the outputs by $(1 - \text{dropout\_rate})$ to compensate for the fact that more neurons are contributing. Or better, use "inverted dropout": divide by $(1 - \text{rate})$ during training and change nothing at inference.
+
+<Callout type="info" title="Dropout rate by layer">
+Input: 0.1-0.2 (not too much on raw data)
+Hidden layers: 0.3-0.5 common
+Modern Transformers: often just 0.1
+</Callout>
+
+## Early Stopping: Stop Before Things Go Wrong
+
+Ridiculously simple but terribly effective. It's probably the regularization technique with the best effort-to-result ratio.
+
+<ImageWithSource
+  src="/images/admin/img-1774008861616.png"
+  alt="Training and validation error curves"
+  caption="This graph illustrates the error of a machine learning model as a function of the number of iterations, showing the value of early stopping to prevent overfitting. The validation curve goes back up after a minimum, indicating the optimal moment to stop training."
+  size="medium"
+/>
+
+The principle: monitor the validation error at each epoch during training. As soon as it stops decreasing (or starts going back up), stop everything.
+
+The key implementation: **always save the best weights** (the "checkpoint" at the best validation score). When you decide to stop, you go back to those weights, not the latest ones. It's the model from before the overfitting started.
+
+**Patience**: in practice, you don't stop at the first epoch without improvement -- validation can fluctuate. You tolerate 5 to 20 epochs without improvement before cutting off. This patience parameter should be adjusted based on the task.
+
+**Why it works**: training goes through two distinct phases. Phase 1: training and validation errors decrease together -- the model is learning true and general patterns. Phase 2: training error continues to drop but validation error plateaus or goes back up -- the model is starting to memorize noise specific to the training data. Early stopping captures you right at the transition point between these two phases.
+
+## Data Augmentation: Inventing Variants
+
+You don't really create new data, you create variants that remain valid.
+
+**Images**: rotation, horizontal flip, random zoom, crop, Gaussian noise, contrast/brightness changes. Advanced techniques: mixup (interpolates two images), cutout (masks random regions), RandAugment/AutoAugment (chooses automatically).
+
+<ImageWithSource
+  src="/images/admin/img-1774008919094.png"
+  alt="Examples of image augmentation for AI"
+  caption="This image illustrates different data augmentation techniques for training artificial intelligence models. It shows the original image and its variants modified by common transformations such as rotation, flipping, cropping, adding noise or blur."
+  size="large"
+/>
+
+**Text**: paraphrase (rephrase without changing the meaning), word substitution, back-translation to keep things natural.
+
+<ImageWithSource
+  src="/images/admin/img-1774009007422.png"
+  alt="Examples of text regularization methods"
+  caption="The image illustrates four regularization techniques for improving the robustness of natural language processing models: swapping (exchanging words), deletion (removing words), insertion (adding words), and substitution (replacing words). These methods help generate augmented data to train more performant models."
+  size="medium"
+/>
+
+**Tabular data**: add small Gaussian noise, use SMOTE to oversample rare classes.
+
+<Callout type="warning" title={"Often the most effective tool"}>
+Data augmentation is often **the** most powerful regularization technique in computer vision. Use it.
+</Callout>
+
+## Label Smoothing: Being Honest About Uncertainty
+
+Instead of telling the model "this is class 3 with 100% certainty" (one-hot: [0, 0, 1, 0]), you tell it "this is probably class 3, but there's a small chance it's something else" (smoothed: [0.025, 0.025, 0.925, 0.025]). You distribute a small epsilon ($\varepsilon$ = 0.1 typically) of probability uniformly across all classes.
+
+The effect is subtle but important: the model no longer needs to push its logits toward infinity to produce a 100% probability. The logits stay reasonable, which makes the predicted probabilities better **calibrated** (when the model says "80% confidence", it's actually correct in ~80% of cases). A well-calibrated model is much more useful in production than a model that always says "99% sure" even when it's wrong.
+
+Label smoothing has become standard in Transformer training (it was already used in "Attention Is All You Need").
+
+## Combined Techniques
+
+In practice you mix them all:
+
+| Technique | When | Cost |
+|---|---|---|
+| Weight decay (L2) | Always | None |
+| Dropout | Dense layers, Transformers | Slightly slows training |
+| Early stopping | Always | None |
+| Data augmentation | Limited data | Preprocessing cost |
+| Label smoothing | Classification, Transformers | None |
+
+## Modern Architectures Regularize Implicitly
+
+A fascinating point: many components of modern architectures have **implicit regularization effects**, even if that's not their main purpose.
+
+**Skip connections** (present in ResNets and Transformers) smooth the loss surface, making optimization more stable and less prone to overfitting. **LayerNorm** and **BatchNorm** normalize activations, preventing weights from diverging. **Multi-head attention** distributes information across multiple subspaces, creating a form of redundancy. And **attention dropout** is standard in Transformers.
+
+Notable fact: in very large language models trained for a single epoch on trillions of tokens, classic dropout often disappears. Why? Because each example is only seen once -- there literally isn't enough time to memorize. The architecture and the massive dataset size prevent overfitting on their own.
+
+## Practical Summary
+
+Here's the baseline recipe, applicable in 90% of situations:
+
+1. Start with **L2 weight decay** (lambda = 0.01). It's free in compute and always helps
+2. Add **dropout** (0.1-0.5) on your dense layers, especially if the model is small relative to the data
+3. Set up **early stopping** with patience of 10 epochs. It's free and prevents surprises
+4. If you have little data, **data augmentation** is your best weapon -- often more effective than all other techniques combined
+5. For Transformers, add **label smoothing** ($\varepsilon$ = 0.1)
+
+Regularization isn't an exact science. It's a set of complementary tools, and experience tells you which one is most critical for your specific situation. Learn to combine them intelligently and you'll master overfitting.
+
+## Why This Matters
+
+Overfitting is the silent death of ML. Your model shows a perfect score in the lab, everyone applauds, and then in production it collapses miserably. Regularization protects you from this scenario. It's a fundamental skill -- and the hallmark of a practitioner who knows what they're doing.

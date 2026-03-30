@@ -1,0 +1,104 @@
+---
+title: "FSDP: Fully Sharded Data Parallel"
+description: "Guide to FSDP (Fully Sharded Data Parallel), PyTorch's native implementation of full parameter, gradient, and optimizer state partitioning for distributed training."
+---
+
+## The concept: partitioning the model across GPUs
+
+Imagine you want to move an entire apartment, but each mover can only carry a single piece of furniture. Instead of giving each one a complete floor plan of the apartment (what DDP does), FSDP gives each mover **only their piece of furniture to carry**. When you need to reassemble a room to check that everything fits together, you temporarily gather the furniture, check, and everyone heads off with their piece again.
+
+Concretely, FSDP is PyTorch's native answer to ZeRO (DeepSpeed). Instead of giving each GPU a complete copy of the model, FSDP divides the parameters, gradients, and optimizer states into fragments. Each GPU only stores one fragment. When a GPU needs all the parameters to compute a forward or backward, it requests the fragments from other GPUs via an **all-gather**, performs its computation, then immediately frees the memory.
+
+It's simple in theory, subtle in practice. Let's see how it works step by step.
+
+## The lifecycle of parameters in FSDP
+
+For each FSDP unit (a group of layers, typically a Transformer block), here's what happens:
+
+1. **All-gather**: reconstructs the full parameters from all GPUs
+2. **Forward**: computes activations with the full parameters
+3. **Free**: non-local parameters are erased from GPU memory
+4. **All-gather** (again): for the backward pass this time
+5. **Backward**: computes gradients on the full parameters
+6. **Reduce-scatter**: combines gradients from all GPUs, then distributes each one's fraction
+7. **Free**: non-local parameters erased again
+
+The key point to remember: at any given moment, only a small fraction of the model is "materialized" in full on any given GPU. That's what allows fitting much larger models than a single GPU's memory.
+
+<Callout type="info" title={"Memory at peak usage"}>
+During an FSDP unit's forward, the full parameters of that unit are temporarily in memory. Maximum memory = (local parameters x number of GPUs) + (full parameters of one unit) + activations. The choice of unit granularity directly affects this trade-off: the larger the units, the higher the peak memory.
+</Callout>
+
+## Configuration: wrapping policies
+
+FSDP "wraps" the model to determine which parts become independent units. This choice is crucial as it determines the partitioning granularity.
+
+### Auto wrap
+Automatic wrapping based on size: any module with more than N parameters (e.g., 1M) becomes an FSDP unit. Simple, but not always optimal.
+
+### Transformer wrap (the most common)
+Each Transformer block (attention + MLP + norms) becomes a unit. This is the natural choice for LLMs since the Transformer block is the natural computational unit of these architectures.
+
+### Manual wrap
+Explicit control: you specify exactly which modules are FSDP units. Useful for exotic architectures or when you want fine-grained control.
+
+<Callout type="tip" title="What granularity to choose?">
+Too-fine wrapping (per individual linear layer) = too many network communications, each small module triggers an all-gather/reduce-scatter. Too-coarse wrapping (the entire model as one unit) = you must gather the whole model in memory at once. Per Transformer block is the sweet spot: communications are amortized over an entire block, and peak memory stays limited to a single reconstructed block at a time.
+</Callout>
+
+## Sharding strategies
+
+| Strategy | ZeRO equivalent | Memory | Communication |
+|-----------|-----------------|---------|---------------|
+| `FULL_SHARD` | ZeRO-3 | Minimal | 1.5x |
+| `SHARD_GRAD_OP` | ZeRO-2 | Moderate | 1x |
+| `NO_SHARD` | Classic DDP | Maximum | 1x |
+
+`FULL_SHARD` partitions everything (parameters + gradients + optimizer states): it's the most memory-efficient but requires more communication. `SHARD_GRAD_OP` keeps parameters replicated but partitions gradients and states: a good compromise for models that almost fit in memory. `NO_SHARD` is simply classic DDP via the FSDP API.
+
+### Mixed precision in FSDP
+
+FSDP natively handles three precision levels, offering fine-grained control:
+- **param_dtype**: parameter precision during computation (BF16 typically)
+- **reduce_dtype**: precision during network communications (BF16 or FP32)
+- **buffer_dtype**: buffer precision like LayerNorm (FP32 recommended)
+
+## FSDP2: the modern version (PyTorch 2.x+)
+
+FSDP2 is a complete rewrite that brings significant improvements:
+
+- **Per-parameter sharding**: partitioning is done at the individual parameter tensor level, instead of entire modules. Much more flexible.
+- **Better composability**: natively compatible with `torch.compile` and Tensor Parallelism, which was a weak point of FSDP1.
+- **DTensor**: uses the DTensor framework as the base abstraction for tensor distribution, offering cleaner semantics.
+
+<Callout type="paper" title="FSDP2 + torch.compile">
+FSDP2 is designed for torch.compile (PyTorch's JIT compiler). The compiler sees FSDP code as standard PyTorch code and can optimize it aggressively (kernel fusion, copy elimination). Result: 10-30% additional speedup compared to FSDP1. It's a nearly free gain for new projects.
+</Callout>
+
+## Best practices for LLMs
+
+### Activation checkpointing + FSDP
+
+Always combine them. FSDP reduces parameter and state memory, checkpointing reduces activation memory. One without the other leaves a bottleneck. Together, they allow training models well beyond what a single GPU could contain.
+
+### Prefetching
+
+FSDP can prefetch the next layer's parameters **while** you compute the current layer. The all-gather for layer N+1 happens in parallel with layer N's forward. This masks communication latency and keeps GPUs busy.
+
+### Hybrid Sharding
+
+On a multi-node cluster, network bandwidth isn't uniform. NVLink between GPUs in the same node offers ~900 GB/s, while InfiniBand between nodes caps at ~100-400 Gb/s. Hybrid sharding exploits this hierarchy: full FSDP within a node (fast NVLink communications), simple DDP between nodes (minimizes inter-node traffic).
+
+<Callout type="tip" title="Recommended configuration for 7-13B">
+FSDP FULL_SHARD with per-Transformer-block wrapping + BF16 mixed precision + activation checkpointing + prefetching. This configuration offers the best performance/memory balance. For 70B+ models, you need to combine FSDP with Tensor Parallelism since even FSDP alone is no longer enough.
+</Callout>
+
+## Migrating FSDP1 to FSDP2
+
+<Callout type="warning" title="Incompatible API">
+FSDP2 completely reimagines the API. FSDP1 uses manual wrapping with wrapper classes, FSDP2 uses policy classes and DTensor. Migrations are non-trivial and require rewriting distributed configuration code. New projects should start directly with FSDP2 to avoid this technical debt.
+</Callout>
+
+## Summary
+
+FSDP is the standard PyTorch solution for large-scale distributed training. It's native (no external dependency like DeepSpeed), well integrated into the PyTorch ecosystem (torch.compile, activation checkpointing, mixed precision), and actively maintained. For the vast majority of LLM training projects, it's the right default choice. Start with `SHARD_GRAD_OP` (ZeRO-2) if you want a good balance between memory savings and simplicity, then switch to `FULL_SHARD` (ZeRO-3) if you need more free memory.

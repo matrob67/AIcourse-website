@@ -1,0 +1,104 @@
+---
+title: "Text Embedding Models"
+description: "Embedding models transform text into dense vectors capturing semantic meaning. Understanding architectures, benchmarks, and choosing the right model for your use case."
+---
+
+
+
+## What Is an Embedding?
+
+An embedding is a translation from human language to the language of math. You provide a sentence, the model returns a **vector** — a list of numbers. The brilliant part: two texts that talk about the same thing produce vectors that are close together in space. We measure this proximity with **cosine similarity** (the angle between the two vectors: the smaller it is, the more similar the texts are).
+
+Concrete example: "cat" → [0.8, 0.2, 0.1, ...] and "tiger" → [0.75, 0.25, 0.15, ...] end up close (they're felines). "chair" → [0.1, 0.9, 0.05, ...] is very far away (completely unrelated). It's as if the model placed words on a geographic map where nearby concepts are neighbors.
+
+<Callout type="info" title="From Word to Sentence">
+Old embeddings (Word2Vec, 2013) produced one vector per isolated **word** — "bank" had the same vector whether it was a river bank or a financial bank. Modern models produce a vector per **full sentence or paragraph**, which captures context. This is infinitely more powerful for semantic search.
+</Callout>
+
+## How It Works
+
+The process relies on a **Transformer encoder** (BERT-type). You pass it the text, it produces a representation for each token. To get a single vector per sentence, you either take the special [CLS] token or the average of all tokens (mean pooling).
+
+But a raw BERT doesn't produce good sentence embeddings. It needs to be specifically trained with a **contrastive loss**: pairs of similar texts (question + relevant answer) must produce close vectors, and dissimilar pairs must be far apart.
+
+$$\mathcal{L} = -\log \frac{\exp(\text{sim}(A, B_{\text{positive}}) / T)}{\sum \exp(\text{sim}(A, B_*) / T)}$$
+
+The temperature T (typically 0.05) controls the "hardness" of the separation. It's softmax over similarities: we push positives close and negatives far, like a magnetic sorting that attracts similar pairs and repels the others.
+
+## Architectures
+
+### Bi-encoders (dominant)
+The query and document are **encoded separately**, then compared by cosine similarity. The major advantage: you can pre-encode all your documents offline and only compute the query embedding in real time. This is what makes search fast over millions of documents. The tradeoff: no direct interaction between query and document, so slightly less accurate than a cross-encoder.
+
+### Recent: Instructions and Task-Awareness
+Models like E5 and GritLM accept **instructions** that guide the embedding:
+
+- **Instruction**: "retrieve relevant documents for this query"
+- **Query**: "What is photosynthesis?"
+
+The instruction tells the model which "role" to play. The same text can produce different embeddings depending on whether it's encoded as a question to ask or a document to index. This provides a significant quality boost.
+
+## Popular Models in Practice
+
+| Model | Dimensions | Context | MTEB Score | Usage |
+|---|---|---|---|---|
+| all-MiniLM | 384 | 512 | Good (56) | Prototyping, fast |
+| BGE-M3 | 1024 | 8192 | Excellent (68) | Production, multilingual |
+| E5-mistral | 4096 | 32768 | Very good (67) | High quality, slow |
+| OpenAI small | 1536 | 8191 | Good (62) | Simple, paid |
+
+<Callout type="tip" title="Pragmatic Choice">
+Quick prototyping? **all-MiniLM** (free, lightweight, runs anywhere).
+Multilingual production? **BGE-M3** (open-source, excellent in multiple languages).
+Maximum quality, unlimited budget? **text-embedding-3-large** (OpenAI, paid but state of the art).
+</Callout>
+
+## MTEB: The Reference Benchmark
+
+**MTEB** (Massive Text Embedding Benchmark) tests models on 56+ tasks across categories: retrieval, STS (Semantic Textual Similarity, i.e., semantic similarity between sentences), classification, clustering, reranking.
+
+Warning: a model can be excellent at retrieval but mediocre at classification. The overall score is an average — look at scores by **category** based on your actual use case. A model with an overall MTEB score of 62 but a retrieval score of 70 may be better for your RAG than a model at 66 overall but 64 in retrieval.
+
+<Callout type="paper" title="The Leaderboard Matters">
+Hugging Face maintains a public, constantly updated MTEB leaderboard. It's your source of truth for comparing models. Academic papers are often biased toward their own models — the leaderboard is neutral.
+</Callout>
+
+## Practical Considerations
+
+### Dimensions and Storage
+The number of dimensions directly impacts storage:
+- 384 dimensions x 4 bytes = 1.5 KB per embedding
+- 1M documents x 1.5 KB = **1.5 GB** of storage
+- With 3072 dimensions: **12 GB** for the same corpus
+
+Before choosing a model with 4096 dimensions, ask yourself if the quality gain justifies 8x more storage and search time.
+
+### Normalization
+Most models produce normalized vectors (L2 norm = 1). In that case, cosine similarity reduces to a simple dot product — an ultra-fast operation compatible with all vector databases.
+
+### Matryoshka Embeddings
+Some recent models allow you to **truncate** vectors: take the first 256 dimensions of a 1024-dimension vector. Quality degrades gradually, but the savings in storage and latency are massive. It's like a Russian nesting doll: each subset contains the essence of the information.
+
+### Embedding Quantization
+You can also compress embeddings themselves to INT8 or even binary (1 bit per dimension). The degradation is minor for retrieval, but the savings are enormous — a binary index takes up 32x less space than a float32 index.
+
+## Fine-tuning on Your Data
+
+For a specific domain (medical, legal, technical), fine-tuning an embedding model on your own data drastically improves retrieval quality. The model learns vocabulary and relationships specific to your domain.
+
+You'll need: a few thousand pairs (query, relevant document), a framework (Sentence Transformers), and an appropriate loss (MultipleNegativesRankingLoss).
+
+```python
+from sentence_transformers import SentenceTransformer, losses, models
+
+model = SentenceTransformer('bge-base')
+# Train with your pairs...
+```
+
+**Warning**: after fine-tuning, old embeddings are invalid. You must **re-index** your entire corpus with the new model.
+
+<Callout type="warning" title="Critical Re-indexing">
+If you change the embedding model, all old vectors become unusable (the vector spaces are incompatible). Plan for downtime or dual indexing. For a corpus of millions of documents, this is a non-trivial operational cost.
+</Callout>
+
+The quality of a RAG depends **50% on the embedding model**. Switching from a weak model to a good one often improves things more than any other downstream optimization. It's your first priority for investment.

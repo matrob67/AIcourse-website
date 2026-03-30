@@ -1,0 +1,168 @@
+---
+title: "RLVR: Reinforcement Learning with Verifiable Rewards"
+description: "RLVR uses automatically verifiable rewards to train LLM reasoning, eliminating the need for learned reward models and reducing the risk of reward hacking."
+---
+
+
+
+## The Problem with Imperfect Reward Models
+
+Classic RLHF relies on a **reward model**: a neural network trained on human preferences that assigns a quality score to each response. In theory, it's elegant. In practice, it's an **imperfect approximation**. And LLMs, optimized by RL to maximize this score, end up exploiting the reward model's flaws rather than genuinely improving.
+
+This is **reward hacking**: the model "cheats" by finding shortcuts that please the judge without producing better responses. For example, a reward model that slightly prefers long responses will push the LLM to produce verbose walls of text.
+
+The natural question: for tasks where you can **objectively verify** whether the answer is correct, why bother with an approximate reward model?
+
+<Callout type="info" title={"The Founding Idea of RLVR"}>
+In math, in code, in formal logic: an answer is **objectively correct or wrong**. 2+2 is 4, not 5. A program passes its tests, or it doesn't.
+
+Instead of a reward model that approximates quality, RLVR uses **exact automatic verification**: r=1 if correct, r=0 otherwise. No approximation, no subjective bias, no hacking possible.
+</Callout>
+
+## How It Works Concretely
+
+### The RLVR Pipeline
+
+1. The model receives a problem (mathematical, algorithmic, logical)
+2. It generates a complete reasoning followed by a final answer
+3. An **automatic verifier** evaluates the answer:
+   - **Math**: compares numerically with the correct answer
+   - **Code**: runs the solution against a test suite
+   - **Formal logic**: a proof checker verifies the proof
+4. Binary reward: $r = 1$ (correct) or $r = 0$ (incorrect)
+5. The RL algorithm uses this reward to update the model
+
+### Verifiers by Domain
+
+| Domain | Verification Method | Reliability |
+|---|---|---|
+| Simple arithmetic | Numerical comparison | 100% |
+| Algebra | Symbolic computation (SymPy) | ~99% |
+| Code | Test execution | ~95% (depends on test coverage) |
+| Formal proofs | Lean/Isabelle | 100% |
+| SAT logic | SAT solver | 100% |
+| Factual QA | Answer matching | ~90% |
+
+Reliability isn't always perfect, but it's **far superior** to that of a reward model trained on noisy human annotations.
+
+## RLVR in Action: The DeepSeek-R1 Case
+
+DeepSeek-R1 is the most spectacular example of RLVR applied at scale.
+
+### GRPO with Verifiable Rewards
+
+For each training problem:
+1. Generate $G$ different responses (typically 8 to 64)
+2. Automatically verify each response: $r_i \in \{0, 1\}$
+3. Compute each response's relative advantage: $A_i = \frac{r_i - \mu}{\sigma}$
+4. Update the policy: reinforce correct responses, penalize incorrect ones
+
+Good responses are amplified, bad ones are attenuated. Simple, effective, scalable.
+
+### The Fascinating Result: R1-Zero
+
+Here's RLVR's most surprising result. DeepSeek trained a model (R1-Zero) with **only** RLVR, without ever showing it a single chain-of-thought example. No SFT data with step-by-step reasoning. Just: "here's a problem, tell me the answer, you'll get a point if it's correct."
+
+And the model **spontaneously developed** structured reasoning:
+- Decomposition into numbered steps
+- Verification of its own intermediate calculations
+- Backtracking when a path leads nowhere
+- Exploration of alternative approaches
+
+<Callout type="paper" title={"Reasoning Emerges Naturally from Optimization"}>
+R1-Zero provides fascinating empirical evidence: structured chain-of-thought (Chain-of-Thought) is the **optimal strategy** for maximizing the probability of a correct answer. The model discovers it on its own through RL, without being taught. Step-by-step reasoning isn't just a convenient format --- it's the emergent solution to the optimization problem.
+</Callout>
+
+## The Advantages of RLVR
+
+### 1. Immunity to Reward Hacking
+
+The reward is **exact and non-manipulable**. Either the answer is 42 and the model says 42 (correct), or it says something else (incorrect). No gray zone, no possible exploitation of subtle biases in a reward model.
+
+### 2. Nearly Unlimited Scalability
+
+Generating problems with verifiable answers is easy to automate:
+- **Math**: algorithmic generators create millions of problems with solutions
+- **Code**: competitive programming platforms (Codeforces, LeetCode) provide problems with test suites
+- **Formal proofs**: proof assistants verify automatically
+
+No human annotators needed. The data pipeline is fully automated.
+
+### 3. Unambiguous Signal
+
+A binary reward (correct/incorrect) gives a crystal-clear learning signal. No subjectivity, no inter-annotator noise, no debates about "is this response worth 7/10 or 8/10?"
+
+### 4. Reduced Cost
+
+By eliminating human annotators, RLVR considerably reduces the cost and time of RL training.
+
+## Limitations to Know
+
+### Only Applicable to Verifiable Tasks
+
+This is the fundamental restriction: RLVR only works if you have a reliable automatic verifier. For creative, conversational, or subjective tasks, a learned reward model remains necessary. You can't automatically verify whether a poem is "beautiful" or an explanation is "clear."
+
+### Sparse (Binary) Signal
+
+The binary reward says "you failed" but doesn't say "why you failed" or "at which step you went wrong." The model knows its answer is wrong, but not what it should have done differently.
+
+This is why **PRMs** (Process Reward Models, which score each intermediate reasoning step) are a natural complement to RLVR.
+
+<Callout type="warning" title="Watch Out for Format Over-Optimization">
+A subtle trap: the model can learn to optimize the **format** of its answer rather than its **reasoning**. If the verifier compares character strings, the model can learn to produce the exact expected format without actually reasoning. Robust verifiers (numerical equivalence, semantic equivalence) mitigate this problem.
+</Callout>
+
+## In Practice: Combining RLVR and RLHF
+
+The best current systems don't choose between RLVR and RLHF --- they combine them:
+
+1. **Phase 1 --- RLVR**: train reasoning on verifiable tasks (math, code). The model learns to think correctly
+2. **Phase 2 --- RLHF/DPO**: align style, safety, and helpfulness on human preferences. The model learns to communicate pleasantly
+
+DeepSeek-R1 illustrates exactly this approach: pure RLVR to develop raw reasoning capabilities, then SFT and rejection sampling to polish the readability and style of responses.
+
+Two phases, two complementary methods, a result superior to either used alone.
+
+## Technical Corner: Generating Training Data
+
+### Synthetic Math Problems
+
+```python
+import random
+
+def generate_algebra_problem():
+    a = random.randint(1, 20)
+    b = random.randint(1, 50)
+    x = random.randint(1, 10)
+    c = a * x + b
+    problem = f"If {a}x + {b} = {c}, what is x?"
+    answer = x
+    return problem, answer
+```
+
+This type of generator can produce millions of unique problems with their exact solution. Vary the difficulty by adjusting the bounds and expression complexity.
+
+### Code Problems
+
+Use existing competitive programming problem banks (Codeforces, LeetCode, Project Euler) with their test suites as verifiers. Each problem comes with expected inputs/outputs that serve directly as a verifier.
+
+## The Future of RLVR
+
+The trajectory is clear: extend RLVR beyond math and code to new domains:
+- **Formal verifiers** for logic and proofs in more domains
+- **Code execution** as a verifier for increasingly varied tasks
+- **Simulations** as verifiers for planning and applied sciences
+- **Verification chains** for complex domains where no single verifier suffices
+
+<Callout type="tip" title={"The Future: Invest in Verifiers"}>
+The underlying trend is clear: **invest in high-quality verifiers** rather than in reward models. A perfect verifier + RLVR will always produce better results than an imperfect reward model + RLHF. The frontier of AI reasoning will be defined by the quality and coverage of available verifiers.
+</Callout>
+
+## Conceptual Importance
+
+RLVR represents a **paradigm shift** in LLM training:
+
+- **Before**: "Approximate response quality with a learned reward model."
+- **After**: "When objective truth is accessible, use it directly."
+
+It's a return to a fundamental AI principle: when you have access to a perfect evaluation function, use it instead of approximating it. Combined with PRMs for evaluating each intermediate step, RLVR + PRM forms the current optimal system for training reasoning.

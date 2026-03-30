@@ -1,0 +1,138 @@
+---
+title: "Agentic RAG: Routing and Orchestration"
+description: "Agentic RAG gives the LLM control of the retrieval pipeline: it decides when to search, where to search, and how to combine results for optimal answers."
+---
+
+## The Problem: The Classic RAG Pipeline Is Too Rigid
+
+With classic RAG, the flow is always the same. You ask a question. Boom: a vector search, then the LLM generates an answer. It's mechanical, predictable... and not always optimal.
+
+Imagine you ask the question: "What are the competitors of Mistral that raised funds in 2024, and how do their models compare?" A classic RAG does ONE search, retrieves a few passages, and tries to answer with what it has. But this question actually requires:
+- First identifying Mistral's competitors
+- Then searching for fundraising rounds for each
+- Then comparing their technical models
+- Finally synthesizing everything
+
+A rigid "one question = one search" pipeline is incapable of handling this complexity.
+
+**Agentic RAG** solves this by giving the LLM **control** of the pipeline. It becomes a conductor who dynamically decides: where to search? How many times? With what query? When to stop? When to reformulate?
+
+<Callout type="info" title={"The Analogy: From Jukebox to DJ"}>
+Classic RAG = jukebox: you press a button, it always plays the same song the same way. Agentic RAG = DJ: they listen to the room, adapt their selection, mix tracks, and adjust in real time based on the crowd's reaction. The result is infinitely more adapted to the context.
+</Callout>
+
+
+
+## Common Patterns
+
+### 1. Router RAG: An LLM That Chooses the Right Source
+
+Not all questions are equal. "What is the capital of France?" can be answered directly. "What is our client X's revenue?" requires the internal SQL database. "What's the latest news about GPT-5?" calls for a web search.
+
+```python
+def route_query(question):
+    # The LLM decides: internal doc? Web? SQL database?
+    decision = llm.classify(question, options=[
+        "internal_doc",
+        "web_search",
+        "sql_database",
+        "direct_answer"
+    ])
+    return sources[decision].search(question)
+```
+
+The LLM analyzes the question and routes to the most appropriate source. This avoids searching a document base when the answer is trivial, or doing a web search when the info is in your internal docs.
+
+### 2. Multi-Step RAG: Decompose and Search in Multiple Stages
+
+This is the most powerful pattern in Agentic RAG. For complex questions, the agent breaks the question into sub-questions and solves them sequentially:
+
+Question: "What competitors of Mistral raised funds in 2024?"
+
+Instead of a single search (which would yield mediocre results), the agent:
+1. Searches: "Mistral AI competitors" and identifies a list
+2. For each competitor found, searches: "[Name] fundraising 2024"
+3. Synthesizes results into a structured answer with amounts, dates, and investors
+
+Each step enriches the context of the next one. The final result is incomparably better than a single search.
+
+### 3. Adaptive Retrieval: Adapting to Difficulty
+
+The agent evaluates the question's complexity and adapts its effort:
+- Simple question ("What is pruning?"): 3 docs suffice, a single search
+- Complex question ("Compare pruning and distillation approaches for LLMs"): 10+ docs, multiple searches
+- Contradictory results found: search further to arbitrate and find a consensus
+
+It's the equivalent of a human who, faced with a difficult question, digs deeper instead of settling for the first answer found.
+
+### 4. Self-Correcting RAG: Reformulate if Results Are Poor
+
+The agent evaluates the quality of retrieved results. If the passages don't answer the question (low relevance), it **reformulates** its query and relaunches the search with different terms. It's like a researcher who, finding nothing with "pruning neural networks", tries "model compression weight removal".
+
+<Callout type="tip" title="Function Calling: The Technical Key">
+Agentic RAG relies on the **function calling** of modern LLMs. Retrieval is defined as a tool (function) that the LLM can call when it deems appropriate, with the parameters it chooses (query, source, number of results). The LLM autonomously decides when and how to use this tool, exactly like a developer calling an API.
+</Callout>
+
+## Implementation Frameworks
+
+**LlamaIndex**: offers specialized ready-to-use Query Engines
+- **Router Engine**: automatically routes to the right index based on the question
+- **Sub-Question Engine**: decomposes complex questions into sub-questions
+- **Retry Engine**: automatically reformulates if results are deemed insufficient
+
+**LangGraph**: for building custom decision graphs with fine-grained control
+
+```python
+from langgraph.graph import StateGraph
+
+graph = StateGraph(RAGState)
+graph.add_node("retrieve", retrieve_docs)
+graph.add_node("evaluate", check_if_relevant)
+graph.add_node("generate", write_answer)
+graph.add_node("reformulate", rewrite_query)
+
+# Conditionals: if good → generate, otherwise → reformulate
+graph.add_conditional_edges("evaluate", {
+    "good": "generate",
+    "bad": "reformulate",
+})
+```
+
+The advantage of LangGraph: the flow is explicit, debuggable, and you can add complex conditions (max number of reformulations, web fallback, etc.).
+
+## Progressive Escalation Pattern
+
+A robust pattern for production: cascading escalation.
+
+1. **Local search** (internal document base): fast, inexpensive
+2. If results insufficient: **Web search**: broader, a bit slower
+3. If still insufficient: **Multi-search decomposition**: powerful, more costly
+4. If still insufficient: **Admission of inability**: "I didn't find enough information to answer reliably"
+
+Each level is more powerful but also more costly and slower. The majority of questions resolve at level 1, keeping average costs low.
+
+<Callout type="warning" title={"Cost and Latency: Watch for Explosion"}>
+Each additional search = additional tokens = more expensive and slower. A basic question can go from 1 search ($0.02, 300ms) to 5 searches ($0.10, 3s). Without guardrails, an overzealous agent can run 15 searches for a simple question. Always define a **maximum budget** for iterations and tokens per request.
+</Callout>
+
+## Essential Metrics to Monitor
+
+- **Average number of steps**: how many searches before the answer? If it's always 1, your agent adds nothing over classic RAG. If it's always 10, it's probably too aggressive.
+- **Routing quality**: is the right tool/source selected? Measure the "correct choice" rate on a test dataset.
+- **Total latency**: end-to-end time, all searches included. Define an SLA.
+- **Escalation rate**: how often do you move to plan B or C? A high rate may indicate level 1 is poorly configured.
+
+## When to Use It (and When to Abstain)
+
+**Agentic RAG shines for:**
+- **Multiple sources**: internal docs + web + SQL database + external APIs
+- **Complex questions**: requiring decomposition and multi-step reasoning
+- **Critical quality**: when a bad answer is worse than no answer at all
+- **Unpredictable users**: who ask highly varied questions requiring different strategies
+
+**Stick with classic RAG for:**
+- Simple FAQ, single homogeneous corpus
+- Very high volume with tight budget (agentic costs more on average)
+- Ultra-critical latency (< 500ms)
+
+For simple cases, a well-configured classic RAG remains faster, more reliable, and cheaper. Agentic RAG comes into its own when the simplicity of classic RAG is no longer enough.

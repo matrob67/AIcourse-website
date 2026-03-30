@@ -1,0 +1,152 @@
+---
+title: "Function Calling: Design and Patterns"
+description: "Function calling allows LLMs to invoke structured functions with typed parameters. Understanding design, patterns, and best practices."
+---
+
+## What Is It, Concretely?
+
+An LLM can only do one thing: generate text. But in real life, you want it to do concrete stuff: search a database, run a calculation, send an email, book a flight. How do you get from text to action?
+
+That's where **function calling** comes in. The principle is simple: you describe the available functions to the LLM (name, description, expected parameters), and when it deems it appropriate to call one, it generates a structured JSON that says "I'm calling this function with these parameters." Your server-side application receives this JSON, executes the corresponding function, sends the result back to the LLM, and it incorporates it into its final response.
+
+<Callout type="info" title="Who Actually Executes?">
+The LLM never executes anything itself. It generates a **call specification**: `{"name": "get_weather", "arguments": {"city": "Paris"}}`. It's your application that executes it, retrieves the result, and sends it back to the LLM. The LLM is the brain that decides, your code is the hands that act.
+</Callout>
+
+## Anatomy of a Function Call
+
+### Describing a Function to the LLM
+
+The quality of the description directly determines the quality of usage by the LLM. Think of this description as public API documentation: clear, precise, with implicit examples in parameter names.
+
+```json
+{
+  "name": "get_weather",
+  "description": "Get the current weather for a city. Returns temperature and conditions.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "city": {
+        "type": "string",
+        "description": "City name (e.g., Paris, Tokyo)"
+      },
+      "unit": {
+        "type": "string",
+        "enum": ["celsius", "fahrenheit"],
+        "description": "Desired temperature unit"
+      }
+    },
+    "required": ["city"]
+  }
+}
+```
+
+### The Complete Flow in 4 Steps
+
+1. **User**: "What's the weather like in Paris?"
+2. **LLM** produces: `{"name": "get_weather", "arguments": {"city": "Paris", "unit": "celsius"}}`
+3. **Your app** executes the function, gets: `{"temp": 18, "condition": "cloudy"}`
+4. **LLM** receives the result and responds: "It's 18 degrees in Paris, cloudy weather."
+
+The LLM never accessed the internet. It just understood that the question required weather data, formulated the right request, and integrated the response into a natural sentence. All the "real work" is done by your code.
+
+
+
+## The Golden Rules of Design
+
+**Explicit names**: `search_company_database` is infinitely better than `query` or `tool1`. The LLM relies on the name to understand when to use the function.
+
+**Detailed descriptions**: this is your only chance to explain to the LLM what the function does, when to use it, and what it returns. Don't skimp.
+
+**Well-typed parameters**: strings, numbers, booleans, enums. The more constrained, the fewer mistakes the LLM will make. An `enum: ["celsius", "fahrenheit"]` is better than a `type: string` with "temperature unit."
+
+**Informative returns**: the result must help the LLM understand what happened.
+```json
+// Good: the LLM immediately understands
+{"status": "success", "results": [...], "count": 42}
+
+// Bad: the LLM doesn't know if it's empty or an error
+{"data": null}
+```
+
+<Callout type="tip" title="The 3 to 7 Tools Rule">
+An LLM works significantly better with 3 to 7 well-designed tools than with 50 vague ones. Too many tools = confusion, calls to the wrong tool, mixed-up parameters. Beyond 10 tools, consider a routing system or a selection hierarchy.
+</Callout>
+
+## Advanced Patterns
+
+### Parallel Calls
+
+Modern models can call multiple functions in parallel when they're independent:
+
+> **User:** "Weather in Paris and Tokyo?"
+> **LLM** &rarr; `[get_weather("Paris"), get_weather("Tokyo")]` -- both in parallel
+
+Your app executes both, returns the results, and the LLM composes a unified response. This is much faster than waiting for each call sequentially.
+
+### Sequential Calls (chained)
+
+Sometimes the result of one call is needed for the next:
+
+1. `search_user("John")` &rarr; `{id: 123}`
+2. `get_orders(user_id=123)` &rarr; `[...]`
+
+The LLM naturally handles this dependency: it waits for the first call's result before formulating the second.
+
+### Structured Output via Function Calling
+
+A little-known trick: using function calling to **force structured output**, even if the "function" doesn't execute anything. You define a fake function whose parameters correspond to the structure you want to extract:
+
+```json
+{
+  "name": "extract_entities",
+  "parameters": {
+    "properties": {
+      "persons": {"type": "array", "items": {"type": "string"}},
+      "organizations": {"type": "array"}
+    }
+  }
+}
+```
+
+The LLM fills in the parameters = you get a reliable structured JSON. This is more robust than asking "return a JSON to me."
+
+## Model Support
+
+| Model | Support | Parallel | Quality |
+|---|---|---|---|
+| GPT-5.4 | Native | Yes | Excellent |
+| Claude Sonnet 4.6 | Native | Yes | Excellent |
+| Mistral Large | Native | Yes | Very good |
+| Gemini 3.1 Pro | Native | Yes | Very good |
+
+<Callout type="paper" title="Native Always Beats Prompt Engineering">
+Native function calling relies on specific fine-tuning to generate valid JSON reliably. It's much more robust than asking the LLM in text to "produce JSON in this format." Parsing error rates drop drastically with native support.
+</Callout>
+
+## Common Errors (and How to Recover)
+
+1. **Wrong type parameters**: the LLM passes a string when a number is expected
+2. **Function hallucination**: the LLM invents a function that doesn't exist in your list
+3. **Wrong tool chosen**: the LLM selects the wrong tool for the task
+4. **Missing parameters**: forgetting a parameter marked as required
+
+**Recovery strategies**:
+- **Send the error back to the LLM**: in the majority of cases, it corrects itself on the second try
+- **Server-side validation**: check types and constraints before executing
+- **Fallback**: if a tool fails, offer an alternative approach
+
+<Callout type="warning" title="Security First">
+Function calling gives the LLM **real action power** on your system. Always validate parameters, limit permissions to the strict minimum, sandbox executions. An LLM manipulated by prompt injection could attempt to call dangerous functions with malicious parameters.
+</Callout>
+
+## Best Practices Summary
+
+1. Start with few tools (3-5), add progressively
+2. Test each tool with varied inputs, both valid AND malformed
+3. Document your tools like a public API: clear names, complete descriptions
+4. Log all calls for debugging and auditing
+5. Set timeouts on each execution
+6. Limit the number of calls per conversation to avoid infinite loops
+
+Function calling is the foundational building block of modern agents. Well designed, it's a simple and robust mechanism that transforms an LLM from "text generator" to "actor capable of interacting with the real world."

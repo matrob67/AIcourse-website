@@ -1,0 +1,126 @@
+---
+title: "Expert Choice vs Token Choice Routing"
+description: "In-depth analysis of routing strategies in MoE models: token choice routing, expert choice routing, and hybrid approaches for optimal balancing."
+---
+
+## Who chooses whom? The fundamental routing dilemma
+
+Let's go back to our medical practice with 8 specialists. All the patients arrive in the waiting room. The crucial question: **who decides who treats whom?**
+
+In the first approach, called **Token Choice**, it's the patient (the token) who chooses. They look at the 8 available specialists and select the 2 who seem most relevant for their problem. "I have chest pain, I want the cardiologist and the internist."
+
+The second approach, called **Expert Choice**, inverts the logic: it's the doctors (the experts) who examine the entire waiting room and each select the cases that best match their expertise. The cardiologist takes the 5 patients who appear to have heart problems, the dermatologist takes the 5 patients with skin symptoms.
+
+These two philosophies have profound implications on model quality, load balancing across experts, and computational efficiency. Understanding their respective trade-offs is essential for designing (or simply understanding) modern MoE architectures.
+
+<ImageWithSource
+  src="/images/admin/img-1774203073520.jpg"
+  alt="Comparison of Token Choice and Expert Choice routing strategies"
+  source="Bing"
+  sourceUrl="https://zhuanlan.zhihu.com/p/1929552311539184194"
+  caption="This image illustrates two routing strategies in Mixture-of-Experts architectures: Token Choice (left) where each token is assigned to experts based on affinity scores, and Expert Choice (right) where experts select tokens according to a fixed computational budget. These mechanisms optimize task distribution between experts."
+  size="large"
+/>
+
+## Token Choice Routing: the patient chooses their doctors
+
+### How it works
+
+This is the historical approach, used by Mixtral, Switch Transformer, and Grok. For each token, the *gating network* (a small neural network dedicated to routing) computes an affinity score with each expert, then selects the top K:
+
+The router starts by computing an affinity score between the token and each expert, applying a softmax over a linear projection:
+
+$$\text{RouterScore}(x) = \text{Softmax}(W_r \cdot x)$$
+
+It then selects the K experts with the highest scores:
+
+$$\text{SelectedExperts}(x) = \text{TopK}\!\big(\text{RouterScore}(x),\; k\big)$$
+
+The implementation is simple and well understood. Each token gets exactly K experts --- no more, no less. The computational cost per token is therefore perfectly predictable, which simplifies hardware optimization.
+
+### The big problem: routing collapse
+
+Without a regulation mechanism, the router naturally converges toward a lazy solution: it sends the vast majority of tokens to the same 2-3 "favorite" experts. The other experts, underused, never improve --- which further reinforces the router's bias toward the popular experts. It's a vicious cycle called **routing collapse**.
+
+<Callout type="warning" title="Routing collapse in numbers">
+Without a balancing loss, a MoE model can easily converge to a situation where 2 experts receive 80% of all tokens and the other 6 share the scraps. This is catastrophic: 75% of the model's parameters become essentially useless. The auxiliary balancing loss mitigates this problem, but it creates its own trade-off --- forcing balancing sometimes means sending a token to a less relevant expert, which slightly degrades quality.
+</Callout>
+
+### Token Dropping: when an expert is saturated
+
+When a very popular expert exceeds its *capacity factor* (the maximum token quota it can process in a batch), excess tokens are either abandoned (*dropped*) or routed via a residual layer without going through an expert. This is problematic because the model has no guarantee that dropped tokens are the least important ones. A key verb or a decisive number could be dropped, silently degrading quality.
+
+## Expert Choice Routing: the doctors choose their patients
+
+### The perspective inversion
+
+<ArxivLink id="2202.09368" title="Mixture-of-Experts with Expert Choice Routing" />
+
+Introduced by Zhou et al. at Google, Expert Choice **completely inverts the logic**. Instead of each token choosing its experts, each expert examines **all tokens in the batch** and selects the K tokens it wants to process:
+
+$$\text{Scores}_e = W_e \cdot X^T$$
+
+$$\text{SelectedTokens}_e = \text{TopK}(\text{Scores}_e,\; k)$$
+
+The result is elegant: **every expert processes exactly the same number of tokens**. Balancing is perfect by mathematical construction, without needing any auxiliary loss.
+
+### The concrete advantages of Expert Choice
+
+- **Guaranteed balancing**: every expert processes exactly its quota. No overload, no underutilization. The number one MoE problem is solved by design
+- **Zero token dropping**: all tokens are processed (some by more experts than others, but none are abandoned)
+- **No auxiliary loss**: training is simplified and the quality/balancing trade-off disappears
+
+<Callout type="info" title="Adaptive computation: an unexpected bonus">
+In Expert Choice, a token can be selected by 0, 1, 2, or several experts. Simple, frequent tokens (articles, prepositions, common words) tend to receive less expert attention, while complex tokens (rare technical terms, unusual proper nouns, ambiguous grammatical structures) receive more. The model naturally allocates **more computation to difficult cases** --- it's a form of adaptive computation that emerges without being explicitly programmed.
+</Callout>
+
+### The deal-breaking flaw: autoregressive inference
+
+Expert Choice has a major problem for generative LLMs. During token-by-token generation (as in ChatGPT), there's only **a single token** in the batch at each decoding step. How can an expert "choose among batch tokens" if there's only one? The selection mechanism degenerates completely.
+
+<Callout type="warning" title="Expert Choice and generation: not directly compatible">
+Expert Choice is excellent for training (processing entire sequences in parallel) and for encoding long prompts (prefill), but it doesn't work as-is for token-by-token autoregressive generation. Adaptations are needed: hybrid routing (Expert Choice during prefill, Token Choice during generation), processing in token chunks, or a pure fallback to Token Choice at inference.
+</Callout>
+
+## Direct comparison
+
+| Aspect | Token Choice | Expert Choice |
+|--------|-------------|---------------|
+| Balancing | Requires an auxiliary loss | Guaranteed by design |
+| Token dropping | Possible (tokens lost) | Impossible |
+| FLOPs per token | Fixed (exactly K experts) | Variable (0 to N experts) |
+| GPU implementation | Simple and optimized | More complex (irregular indexing) |
+| Autoregressive compatible | Yes, naturally | No, requires adaptations |
+
+## Alternative and hybrid approaches
+
+Research hasn't stayed stuck on these two options. Several approaches attempt to combine the advantages of both, or explore radically new directions.
+
+### DeepSeek's auxiliary-loss-free balancing
+
+DeepSeek-V3 found a particularly elegant solution. Each expert receives a **dynamic bias** that adjusts automatically during training: when an expert is too heavily solicited, its bias decreases (it becomes less attractive in routing scores); when it's underused, its bias increases. It's pure Token Choice, but with a built-in thermostat that maintains balance without the quality trade-off inherent in auxiliary losses.
+
+### Soft MoE (Google)
+
+**Soft MoE** eliminates discrete routing (send a token to an expert: yes or no) and replaces it with **continuous** routing. Tokens are combined into "slots" via learned weights before being sent to experts. Each expert processes a fixed number of slots, each slot being a weighted mix of multiple tokens. This avoids the discontinuity of binary routing while maintaining sparsity. Easier to differentiate for gradients, but conceptually more complex.
+
+### Hash Routing: radical simplicity
+
+The most minimalist approach: assign tokens to experts via a **deterministic hash function**. No learned routing network, no parameters to train, perfect balancing guaranteed by the statistical properties of the hash. The downside is obvious: the expert assigned by the hash isn't necessarily the most competent for that token. It's an extreme trade-off between simplicity and quality.
+
+### Hierarchical routing
+
+For architectures with a very large number of experts (256, 512, or more), single-level routing becomes computationally expensive (you need to score each expert). Two-level routing solves this problem: first choose a **group** of experts (among 16 groups, for example), then choose the expert within the selected group. The cost goes from O(N) to O(sqrt(N)), which becomes significant with hundreds of experts.
+
+<Callout type="tip" title="Which approach to choose in practice?">
+For a **generative LLM** (GPT, LLaMA, Mistral type), Token Choice with Top-2 and a dynamic balancing mechanism like DeepSeek's is the best current trade-off. For pure **encoding** tasks (embeddings, classification, summarization without generation), Expert Choice offers significant advantages. The golden rule: avoid the classic auxiliary loss whenever possible --- it systematically creates a quality/balancing trade-off that modern approaches know how to bypass.
+</Callout>
+
+## Impact on expert specialization
+
+The type of routing directly influences how experts specialize during training:
+
+- With **Token Choice**, experts tend to specialize by **semantic domain**: one expert becomes good at medicine, another at code, another at literary French. Specialization follows content
+- With **Expert Choice**, specialization tends to happen by **difficulty level** or **syntactic type**: some experts specialize on easy tokens (common words, basic grammatical structure), others on complex and rare tokens
+
+Both forms of specialization are useful, but for different reasons. Token Choice produces interpretable experts (you can say "this expert is the code specialist"), while Expert Choice produces more efficient computation allocation. Research on optimal routing is a very active field --- new approaches continue to emerge regularly.

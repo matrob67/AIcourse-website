@@ -1,0 +1,149 @@
+---
+title: "Model Merging: TIES-Merging"
+description: "TIES-Merging is an advanced model merging technique that resolves sign conflicts between task vectors, enabling efficient combination of skills from multiple fine-tuned models."
+---
+
+
+
+## The Crazy Idea: Merging Model Weights
+
+Imagine you want a model that's good at code, good at mathematical reasoning, AND good at conversation. The classic approach: fine-tune a single model on all three tasks (expensive, risk of catastrophic forgetting). The model merging approach:
+1. Fine-tune 3 models separately (each on its specialty)
+2. Merge their weights into a single model
+3. Get a model that combines all three skills
+
+Sounds too good to be true? It works. Not perfectly, but well enough that it's become an essential technique in the open-source community.
+
+<ArxivLink id="2306.01708" title="TIES-Merging: Resolving Interference When Merging Models (Yadav et al., 2023)" />
+
+<Callout type="info" title="Why it works">
+The central hypothesis: when you fine-tune a model on a task, the weight modifications occupy a relatively narrow **subspace** of the parameter space. If two different tasks modify sufficiently independent (orthogonal) subspaces, you can superimpose the modifications without them stepping on each other. It's like writing on two different sides of the same sheet of paper.
+</Callout>
+
+## Task Vectors: The Founding Concept
+
+A **task vector** is simply the difference between the weights of a fine-tuned model and the base model weights:
+
+$$\tau = \theta_{\text{fine\_tuned}} - \theta_{\text{base}}$$
+
+This vector captures "everything the fine-tuning learned." It's a compact representation of the acquired skill.
+
+To combine N models, the naive approach is to add the task vectors:
+
+$$\theta_{\text{merged}} = \theta_{\text{base}} + \sum_i \lambda_i \times \tau_i$$
+
+On paper, it's elegant. In practice, it works poorly. Performance often collapses compared to individual models.
+
+## The Problem: Noise and Sign Conflicts
+
+TIES identifies two fundamental problems in naive merging:
+
+1. **Redundant parameters**: the vast majority of weight modifications are tiny, statistical noise that contributes nothing. Adding them amplifies this noise.
+
+2. **Sign conflicts**: for the same parameter, one model wants to increase it (+0.3) while another wants to decrease it (-0.2). These opposing forces cancel out and destroy useful information. It's like pulling in opposite directions on the same rope.
+
+## TIES-Merging: Three Surgical Steps
+
+### Step 1: Trim
+
+Eliminate small changes that are just noise. Keep only the top-k% most important by magnitude (typically k=20%).
+
+Concretely: for each task vector, if the absolute value of a modification is below the threshold, it's set to zero. You go from millions of small noisy modifications to a few hundred thousand significant ones. It's like cleaning an image by removing background noise.
+
+### Step 2: Elect Sign (Conflict Resolution)
+
+For each parameter, determine the "majority sign" among all models.
+
+If 3 models want to increase a parameter and 1 model wants to decrease it, the 3 win. The minority model is set to zero for that parameter. It's a democratic vote: the majority rules.
+
+<Callout type="paper" title="Intuition">
+A parameter increased by 3 models and decreased by 1? It should probably be increased. Sign conflicts are THE main source of degradation during merging. Resolving them by majority vote is simple but remarkably effective.
+</Callout>
+
+### Step 3: Merge
+
+The cleaned task vectors (trimmed + sign conflicts resolved) are averaged and added to the base weights:
+
+$$\theta_{\text{merged}} = \theta_{\text{base}} + \lambda \times \text{mean\_nonzero}(\tilde{\tau}_1, \tilde{\tau}_2, \ldots, \tilde{\tau}_n)$$
+
+Note the `mean_nonzero`: you only average non-zero values (those that survived trimming and sign election). This avoids diluting important modifications with zeros.
+
+
+## Results: The Improvement Is Significant
+
+| Method | Average Accuracy |
+|---|---|
+| Individual models | 74.2% |
+| Simple average | 60.1% |
+| Task Arithmetic | 64.8% |
+| TIES-Merging | 69.7% |
+
+The simple average is catastrophic (-14 points compared to individual models). TIES recovers a large portion of the lost performance. The gap with individual models remains ~4.5 points, which shows that merging isn't free, but it's an acceptable price for having a single multi-skill model without additional training.
+
+<Callout type="tip" title="The density parameter (k)">
+k = percentage of parameters kept after trimming. k=20% is the default value. You can adjust it: too low and you lose useful information, too high and noise comes back to contaminate the merge. Experiment between 10% and 50%.
+</Callout>
+
+## Applications: Creating Super-Models
+
+The open-source community has enthusiastically adopted model merging. The typical process:
+
+1. Take a model strong in reasoning (fine-tuned on math/logic datasets)
+2. A model strong in code (fine-tuned on code)
+3. A model strong in conversation (fine-tuned on chat)
+4. Merge them with TIES
+5. Get a "super-model" that combines all three skills
+
+This has become one of the most popular strategies for creating competitive models on leaderboards. Many of the best open-source models are merges, not models trained from scratch.
+
+### LoRA Merging
+
+TIES can also merge **LoRA adapters** directly, without merging complete weights. This lets you accumulate skills via PEFT without touching the base model, offering remarkable flexibility.
+
+### MergeKit: The Reference Tool
+
+MergeKit (by Arcee AI) makes model merging accessible to everyone:
+
+```yaml
+merge_method: ties
+base_model: mistralai/Mistral-7B-v0.1
+parameters:
+  density: 0.2
+  normalize: true
+models:
+  - model: model_code
+    parameters:
+      weight: 1.0
+  - model: model_reasoning
+    parameters:
+      weight: 0.7
+  - model: model_chat
+    parameters:
+      weight: 0.5
+```
+
+You describe your merge in YAML, run the command, and MergeKit takes care of everything. The `weight` values control the relative importance of each source model.
+
+## Limitations to Keep in Mind
+
+### No Theoretical Guarantees
+
+Model merging relies on empirical assumptions (subspace orthogonality) that aren't always verified. Result quality is unpredictable a priori: you always need to evaluate empirically.
+
+<Callout type="warning" title="Evaluation is essential">
+Never deploy a merged model without rigorous testing. A merged model can excel on task A but regress severely on task B. Systematically test all the skills that matter.
+</Callout>
+
+### Same Architecture Required
+
+Merging is only possible between models of the **same architecture** and generally from the same base model. You can't merge a Mistral with a LLaMA: the parameters don't have the same meaning.
+
+## Impact: Democratizing Skill Scaling
+
+TIES and model merging have transformed the open-source ecosystem. On the Hugging Face leaderboard, a significant proportion of the best models are **merged**, not trained from scratch.
+
+This concretely means: without massive GPU clusters, without a colossal training budget, you can create a competitive model by intelligently combining existing ones. It's a powerful democratization.
+
+---
+
+**Essence**: TIES-Merging = model merging that eliminates noise and resolves sign conflicts. Lets you combine skills from multiple models into one, without additional training. Three steps: Trim, Elect sign, Merge.

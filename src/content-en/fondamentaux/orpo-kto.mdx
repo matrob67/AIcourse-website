@@ -1,0 +1,134 @@
+---
+title: "ORPO, KTO, and Alternatives"
+description: "Post-DPO alignment methods: ORPO (monolithic), KTO (unpaired data), SimPO, and their comparison."
+---
+
+## The Race to Simplify Continues
+
+DPO eliminated the reward model and RL. But researchers keep asking: can we simplify even further? And can we handle situations where data doesn't come in exactly the format DPO requires?
+
+Three methods deserve attention: **ORPO**, which merges SFT and alignment into a single step; **KTO**, which works without response pairs; and **SimPO**, which eliminates even the reference model.
+
+
+
+## ORPO: Why Do Two Steps When One Is Enough?
+
+### The Standard Pipeline and Its Hidden Cost
+
+Until now, alignment happens in two distinct phases:
+1. **SFT**: learn to follow instructions (training #1)
+2. **DPO or RLHF**: learn to prefer good responses (training #2)
+
+Two trainings = twice the compute time, twice the hyperparameters to tune, an intermediate SFT checkpoint to save and manage. What if we did both at the same time?
+
+### The ORPO Solution
+
+**ORPO** (Odds Ratio Preference Optimization) proposes exactly that: a unified loss that combines format learning (SFT) and preference learning in a single pass.
+
+The total loss is a sum of two terms:
+
+$$\mathcal{L}_{\text{ORPO}} = \mathcal{L}_{\text{SFT}}(y_w) + \lambda \cdot \mathcal{L}_{\text{OR}}(y_w, y_l)$$
+
+The first term `L_SFT` is the classic language modeling loss on the preferred response -- the model learns to produce this type of response. The second term `L_OR` penalizes the model when it assigns a higher probability to the rejected response than to the preferred one.
+
+This second term uses the **odds ratio** -- a classic measure in statistics, widely used in medicine and sports betting. The idea is simple: instead of directly comparing the probabilities of the two responses, you compare their **odds**. Odds are the ratio of "chances for / chances against" -- like when a bookmaker says "3 to 1." If the model gives 75% probability to a response, its odds are $0.75 / 0.25 = 3$ (3 chances for, 1 against).
+
+The odds ratio compares the odds of the two responses:
+
+$$\text{OR} = \frac{P(y_w|x) \;/\; (1 - P(y_w|x))}{P(y_l|x) \;/\; (1 - P(y_l|x))}$$
+
+If OR > 1, the model "bets" more on the good response. If OR < 1, it bets on the bad one and is penalized.
+
+<Callout type="info" title={"The Monolithic Advantage"}>
+ORPO doesn't need a separate reference model (unlike DPO). The original weights play that role implicitly. Result: a single model in memory, a single training run, and competitive performance with DPO on most benchmarks.
+</Callout>
+
+### In Practice
+
+The **Mistral-ORPO-7B** model showed that the approach produced quality results. Implementations in HuggingFace TRL support ORPO directly. It's particularly attractive for limited resources: you roughly halve the total alignment training time.
+
+## KTO: What If Your Data Isn't in Pairs?
+
+### The Real-World Problem
+
+DPO has a constraining prerequisite: for each prompt, you need *a chosen response AND a rejected response*. These pairs must come from the same prompt.
+
+But in real life, feedback data rarely looks like that. What you actually have:
+- A user clicks "thumbs up" or "thumbs down" on an individual response
+- An annotator marks a response "good" or "bad" without comparing it to another
+- Chat logs with satisfaction indicators -- but not structured as pairs
+
+**KTO** (Kahneman-Tversky Optimization) is designed for this case: it works with **individual labels** on isolated responses.
+
+### The Behavioral Economics Inspiration
+
+The name "Kahneman-Tversky" comes from the two psychologists (Daniel Kahneman, 2002 Nobel Prize in Economics, and Amos Tversky) who developed **prospect theory**. Their main discovery: humans are asymmetric when it comes to gains and losses.
+
+Losing $100 hurts twice as much as gaining $100 feels good. We're naturally more sensitive to losses than to gains.
+
+<Callout type="paper" title={"Asymmetry Built into the Loss"}>
+KTO integrates this asymmetry directly into its training objective. The model is penalized more strongly for producing bad responses than rewarded for producing good ones. This asymmetry better matches true human preferences than symmetric methods.
+</Callout>
+
+### The Mechanics
+
+The intuition before the formulas: for each response, KTO measures how much the current model prefers it relative to the reference model (the ratio $\pi / \pi_{\text{ref}}$, as in DPO). Then, it compares this to a **baseline** -- the model's average preference over the batch. It's like grading a student not on an absolute scale, but relative to the class average.
+
+For a **desirable** response `y_w` (label "good") -- the loss is low if the model prefers it *more than the average*:
+
+$$\mathcal{L}_{\text{KTO}}(y_w) = 1 - \sigma\left(\beta \left(\log \frac{\pi(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - D_{KL}^{\text{ref}}\right)\right)$$
+
+For an **undesirable** response `y_l` (label "bad") -- the loss is low if the model prefers it *less than the average*:
+
+$$\mathcal{L}_{\text{KTO}}(y_l) = 1 - \sigma\left(\beta \left(D_{KL}^{\text{ref}} - \log \frac{\pi(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right)$$
+
+The term $D_{KL}^{\text{ref}}$ is this baseline -- the average KL divergence (Kullback-Leibler) over the batch. Note that the formulas are symmetric but inverted: for good responses, we want a high ratio (above the baseline); for bad ones, we want a low ratio (below).
+
+Both formulas work on individual examples, not pairs. They can be freely mixed in a batch.
+
+<Callout type="tip" title="KTO for Industrial Data">
+For a company that has deployed a chatbot and collected thumbs up/down from users, KTO is often the best choice. This unpaired data is directly usable without transformation. Converting individual labels into artificial pairs (as required for DPO) introduces noise and bad matches.
+</Callout>
+
+## SimPO: Without a Reference Model at All
+
+**SimPO** (Simple Preference Optimization) pushes simplification even further: it **doesn't use a reference model**.
+
+DPO and KTO need a frozen reference model in memory to compute probability ratios. SimPO eliminates it entirely. Instead, it directly uses the **average log-probability** of the sequence as an implicit reward:
+
+$$r_{\text{SimPO}}(x, y) = \frac{1}{|y|} \log \pi(y|x)$$
+
+The length normalization by `|y|` is important: without it, the model would systematically prefer shorter responses (which mechanically have higher per-token probabilities).
+
+SimPO also adds a **margin term** gamma that imposes a minimum gap between the scores of good and bad responses:
+
+$$\mathcal{L}_{\text{SimPO}} = -\log \sigma\left(\beta \cdot (r(x, y_w) - r(x, y_l)) - \gamma\right)$$
+
+### SimPO Advantages
+
+- **Half the GPU memory**: a single model in memory instead of two
+- **Length bias eliminated**: length normalization is built in, not an added heuristic
+- **Competitive performance**: SimPO matches or surpasses DPO on several public benchmarks
+
+## Comparison Table: Choosing Your Method
+
+| Method | Required Data | Reference Model | Steps | Complexity |
+|---|---|---|---|---|
+| RLHF (PPO) | Pairs + annotations | Yes + RM + Value | SFT then RM then RL | Very high |
+| DPO | Preference pairs | Yes | SFT then DPO | Moderate |
+| ORPO | Preference pairs | No | Single (SFT + pref) | Low |
+| KTO | Individual labels | Yes | SFT then KTO | Moderate |
+| SimPO | Preference pairs | No | SFT then SimPO | Low |
+
+<Callout type="warning" title="No Universally Best Method">
+No method systematically dominates the others. The choice depends on the format of your available data, your GPU resources, and the target task. Rule of thumb: start with DPO (the most documented), switch to KTO if your data is unpaired, and explore ORPO or SimPO if you're looking to reduce compute costs.
+</Callout>
+
+
+## Emerging Trends
+
+**Iterative alignment**: rather than a one-pass alignment on static data, recent approaches (Online DPO, Self-Play) regenerate new data at each iteration. The model continuously improves as it gets better -- like an athlete training against increasingly strong opponents.
+
+**Multi-objective alignment**: today, we optimize a single objective (being helpful and safe). Recent work explores how to simultaneously balance multiple, sometimes contradictory objectives: helpfulness, honesty, safety, conciseness, originality. A single score is no longer enough.
+
+**SFT + alignment convergence**: ORPO showed that the two phases can be merged. This trend should continue -- training pipelines will become simpler and more unified as we better understand the interactions between these phases.

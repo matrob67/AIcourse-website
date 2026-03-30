@@ -1,0 +1,163 @@
+---
+title: "Numerical stability: overflow, underflow, log-sum-exp"
+description: "The numerical pitfalls of deep learning: floating-point representation, overflow, underflow, the log-sum-exp trick, and solutions to vanishing/exploding gradients."
+---
+
+## Numbers are not exact
+
+A computer doesn't manipulate real numbers. It manipulates approximations with limited precision. In deep learning, where you multiply millions of numbers together, these approximations can accumulate and cause catastrophes: values that explode to infinity, others that collapse to zero. Understanding these pitfalls is essential for training stable models.
+
+## Floating-point representation
+
+### The IEEE 754 format
+
+A floating-point number is stored as $(-1)^s \times m \times 2^e$, with a sign bit $s$, a mantissa $m$, and an exponent $e$.
+
+### Common formats in ML
+
+| Format | Bits | Mantissa | Exponent | Approximate range | Usage |
+|---|---|---|---|---|---|
+| Float32 (FP32) | 32 | 23 bits | 8 bits | $\pm 3.4 \times 10^{38}$ | Standard training |
+| Float16 (FP16) | 16 | 10 bits | 5 bits | $\pm 6.5 \times 10^{4}$ | Inference, mixed precision |
+| BFloat16 (BF16) | 16 | 7 bits | 8 bits | $\pm 3.4 \times 10^{38}$ | Training on modern TPU/GPU |
+
+### BFloat16: the deep learning compromise
+
+BFloat16 is a format invented by Google specifically for deep learning. It sacrifices precision (7 mantissa bits instead of 10 for FP16) but keeps the same range as FP32 (8 exponent bits). In deep learning, having a large range is more important than fine precision, because gradients and activations vary over several orders of magnitude.
+
+## Overflow: numbers too large
+
+### The problem
+
+When a computation produces a number larger than the maximum representable value, you get `inf` (infinity). This typically happens with exponentials of large numbers.
+
+### Example: naive softmax
+
+Let's compute softmax of $[1000, 1001, 1002]$:
+
+$$\text{softmax}(z_i) = \frac{e^{z_i}}{\sum_j e^{z_j}}$$
+
+$e^{1000}$ is on the order of $10^{434}$, well beyond the Float32 limit ($\approx 10^{38}$). Result: `inf / inf = NaN`. The computation is destroyed.
+
+### Example: exponential in the loss
+
+The binary cross-entropy $-\log(\sigma(z))$ with a logit $z = -100$ gives $\sigma(z) \approx 0$, and $\log(0) = -\infty$. Explosion.
+
+## Underflow: numbers too small
+
+### The problem
+
+When a computation produces a number smaller than the minimum representable value (but nonzero), it's rounded to zero. This happens with products of probabilities.
+
+### Example: product of probabilities
+
+If you multiply 1,000 probabilities of 0.01:
+
+$$\prod_{i=1}^{1000} 0.01 = 10^{-2000}$$
+
+In Float32, any number below $\approx 10^{-38}$ is rounded to zero. The product becomes exactly 0, and you lose all information about relative differences between terms.
+
+### Consequence in ML
+
+This is exactly why we use log-likelihood instead of likelihood. The log transforms the product into a sum: $\log(10^{-2000}) = -2000 \cdot \log(10) \approx -4605$, a perfectly representable number.
+
+## The log-sum-exp trick
+
+### The softmax problem
+
+We've seen that naively computing $e^{z_i}$ for large logits causes overflow. How do you compute softmax in a stable way?
+
+### The solution
+
+You use softmax's translation invariance: subtract the maximum of the logits before exponentiation.
+
+$$\text{softmax}(z_i) = \frac{e^{z_i - z_{\max}}}{\sum_j e^{z_j - z_{\max}}} \quad \text{with} \quad z_{\max} = \max_j z_j$$
+
+After subtraction, the largest exponent is 0 ($e^0 = 1$), and all others are negative (so between 0 and 1). No more overflow possible.
+
+### The log-sum-exp
+
+To compute $\log\left(\sum_j e^{z_j}\right)$ in a stable way:
+
+$$\text{LogSumExp}(z_1, \ldots, z_K) = z_{\max} + \log\left(\sum_j e^{z_j - z_{\max}}\right)$$
+
+This trick is used everywhere: in the cross-entropy loss, in language models, in variational inference. PyTorch and JAX implement it natively via `torch.logsumexp` and `jax.scipy.special.logsumexp`.
+
+### Golden rule
+
+Every time you see $\log(\sum \exp(\cdot))$ in a formula, think of the log-sum-exp trick. It's the most important numerical stability reflex in deep learning.
+
+## Gradient vanishing and exploding
+
+### The fundamental problem of deep networks
+
+During backpropagation, the gradient traverses layers by being multiplied by local derivatives at each layer. For a network with $L$ layers:
+
+$$\frac{\partial L}{\partial \theta_1} = \frac{\partial L}{\partial h_L} \cdot \frac{\partial h_L}{\partial h_{L-1}} \cdots \frac{\partial h_2}{\partial h_1} \cdot \frac{\partial h_1}{\partial \theta_1}$$
+
+It's a product of matrices. If each factor has eigenvalues slightly greater than 1, the product explodes exponentially. If they're slightly less than 1, the product collapses toward zero.
+
+### Vanishing gradient
+
+When the gradient becomes exponentially small going back toward the first layers:
+- The first layers barely learn anymore
+- The network behaves as if only the last layers were being trained
+- This is the historical problem that blocked deep networks for decades
+
+Saturating activation functions (sigmoid, tanh) worsen the problem: their derivative is close to zero for large values.
+
+### Exploding gradient
+
+The opposite problem: the gradient grows exponentially and weight updates become gigantic. Weights diverge, the loss explodes, training fails.
+
+## Solutions to vanishing/exploding gradient
+
+### Gradient clipping
+
+The most direct solution against gradient explosion: if the gradient norm exceeds a threshold, you reduce it:
+
+$$g \leftarrow g \cdot \frac{\text{max\_norm}}{\max(\|g\|, \text{max\_norm})}$$
+
+Used systematically in training RNNs and transformers. It's a simple but effective safeguard.
+
+### Xavier/He initialization
+
+Initialize weights with the right variance so that activations and gradients stay in a stable range across layers:
+
+- **Xavier** (for tanh/sigmoid): $W \sim \mathcal{N}\left(0, \frac{2}{n_{\text{in}} + n_{\text{out}}}\right)$
+- **He** (for ReLU): $W \sim \mathcal{N}\left(0, \frac{2}{n_{\text{in}}}\right)$
+
+The idea is that the variance of activations and gradients doesn't change from one layer to the next.
+
+### Batch normalization
+
+Normalize activations within each mini-batch:
+
+$$\hat{x}_i = \frac{x_i - \mu_B}{\sqrt{\sigma_B^2 + \epsilon}}$$
+
+By bringing activations back to zero mean and unit variance, you prevent values from drifting. The $\epsilon$ in the denominator is another example of a precaution against numerical instability (division by a number close to zero).
+
+### Layer normalization
+
+A variant of batch norm that normalizes over feature dimensions rather than over the batch. It's the standard norm in transformers, because it doesn't depend on batch size.
+
+### Residual connections (skip connections)
+
+The ResNet innovation:
+
+$$h_{l+1} = h_l + F(h_l)$$
+
+The gradient of the loss with respect to $h_l$ always contains a direct term (the "1" from the derivative of $h_l + F(h_l)$ with respect to $h_l$). Even if $\frac{\partial F}{\partial h_l}$ is small, the gradient has a direct path to the first layers. That's why networks with 100+ layers became possible.
+
+### Mixed precision training
+
+Use FP16 or BF16 for fast computations, but keep a copy of the weights in FP32 for gradient accumulations. This halves memory while maintaining numerical stability of updates.
+
+## Key takeaways
+
+- Floating-point numbers have limited precision and range: overflow and underflow are real dangers
+- BFloat16 sacrifices precision for range, a compromise suited to deep learning
+- The log-sum-exp trick is the fundamental technique for computing softmax and cross-entropy stably
+- Vanishing/exploding gradient is the central numerical problem of deep networks
+- Solutions combine clipping, adapted initialization, normalization, and skip connections
+- Numerical stability isn't an implementation detail: it's a necessary condition for training to work

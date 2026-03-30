@@ -1,0 +1,98 @@
+---
+title: "Paper: LoRA - Fine-Tune Without Recompiling Everything"
+description: "Microsoft 2021. Fine-tuning GPT-3 costs 280 GB of memory. LoRA: adapt just 0.3% of parameters. Same quality. 10,000x cheaper."
+---
+
+
+
+## The Problem: Fine-Tuning a Large Model Costs a Fortune
+
+You have a 70 billion parameter model. You want to adapt it to your domain: medical, legal, your writing style. Classic fine-tuning involves updating **all** 70 billion parameters.
+
+In practice, that requires about 280 GB of GPU memory (the weights in float16, plus the gradients, plus the optimizer states). That's a GPU cluster. Tens of thousands of dollars.
+
+And if you want to adapt the same model to 10 different tasks? You store 10 copies of 140 GB each. It's absurd.
+
+**LoRA** (Low-Rank Adaptation, Hu et al., Microsoft, 2021) solves all of this at once.
+
+<Callout type="info" title={"The efficiency revolution"}>
+LoRA makes fine-tuning large models possible on a **single GPU**. No cluster. No research budget. A student with an RTX 4090 can adapt a 7B parameter model. That's what made fine-tuning accessible to everyone.
+</Callout>
+
+## The Brilliant Idea: Updates Are Low-Rank
+
+The intuition behind LoRA is mathematically elegant. When you fine-tune a model, the changes to the weights (the "deltas") aren't arbitrary. They have a **low intrinsic rank**. In plain terms: the updates live in a subspace much smaller than the total parameter space.
+
+Instead of updating the full weight matrix $W$ (of dimensions $d \times d$), LoRA decomposes the update:
+
+$$\Delta W = B \times A$$
+
+- $B$ has dimensions $d \times r$
+- $A$ has dimensions $r \times d$
+- $r \ll d$ (the rank, typically between 4 and 64)
+
+To give a concrete example: if $d = 4096$ (typical for a modern LLM) and $r = 8$, you update $4096 \times 8 + 8 \times 4096 = 65\,536$ parameters instead of $4096 \times 4096 = 16\,777\,216$. That's **256x fewer parameters**.
+
+The analogy? Imagine you want to modify a 10-megapixel photo. Instead of redesigning every pixel, you describe the modifications with a few simple filters (brightness, contrast, color balance). The result is visually identical, but your "modification recipe" fits in a few bytes instead of 10 MB.
+
+## The Mechanism in Practice
+
+For each model layer you want to adapt:
+
+1. **Freeze W**: the original weight matrix receives no gradients, it stays intact
+2. **Add two small matrices A and B**: initialized so that $BA = 0$ initially (no initial perturbation)
+3. **The output becomes**: $y = Wx + BAx$ (the original plus the correction)
+4. **Train only A and B**: only these parameters receive gradients
+
+After training, the magic: you can **merge** the adaptations with the original weights. $W' = W + BA$. The resulting model has exactly the same architecture and the same inference speed as the original. No overhead in production.
+
+And if you want to adapt the same base model to 10 different tasks? You store 10 (A, B) pairs, each a few megabytes. You swap adapters in milliseconds. One base model, dozens of specializations.
+
+<Callout type="tip" title="Which layers to adapt?">
+LoRA can be applied to any weight matrix. The original study shows that the $Q$ (query) and $V$ (value) projections of attention give the best quality/cost ratio. In practice, adapting all layers (Q, K, V, O, FFN) with a small rank ($r = 8$) often works better than a few layers with a high rank.
+</Callout>
+
+## The Numbers Speak for Themselves
+
+On GPT-3 175B with rank $r = 4$:
+
+- **Trainable parameters**: 4.7 million (out of 175 billion)
+- **Reduction**: **10,000x** fewer parameters to train
+- **Performance**: equal to or better than full fine-tuning on several tasks
+- **Memory**: a single GPU is enough (instead of a cluster)
+- **Storage**: a few MB per adaptation (instead of hundreds of GB)
+
+How is it possible that 0.003% of parameters suffice? Because the pre-trained model has already learned the fundamental representations of language. Fine-tuning just "adjusts" them slightly. And these adjustments are low-rank: they only modify a small subspace of the weights.
+
+## The Variants: LoRA's Evolution
+
+**QLoRA** (Dettmers et al., 2023): the real revolution. Combines LoRA with 4-bit quantization of the base model. Result: fine-tuning a 65B parameter model on a **single 48 GB GPU** (an A6000 or an A100). It's QLoRA that truly democratized fine-tuning for the community.
+
+**DoRA** (Weight-Decomposed Low-Rank Adaptation): decomposes weights into a **magnitude** and **direction** component, then applies LoRA separately to each. More faithful to full fine-tuning behavior.
+
+**LoRA+**: uses different learning rates for matrices A and B, which accelerates convergence.
+
+**rsLoRA**: adjusts the scaling factor based on rank to improve stability.
+
+## The LoRA Ecosystem
+
+LoRA has become the **de facto standard for fine-tuning**. The ecosystem is massive:
+
+- **PEFT** (Hugging Face): the reference library for LoRA and other efficient fine-tuning methods
+- **Unsloth**: optimized LoRA fine-tuning, 2x faster
+- **Civitai**: thousands of community LoRAs for image generation (Stable Diffusion)
+- **Axolotl**: simplified fine-tuning framework
+
+## Practical Applications
+
+LoRA use cases are everywhere:
+
+- **Style personalization**: adapting an assistant's writing tone (formal, casual, technical)
+- **Domain specialization**: medical, legal, financial, scientific
+- **Instruction tuning**: turning a base model into a conversational assistant
+- **Image generation**: training custom visual styles on Stable Diffusion (an artist, a type of photo, a character)
+- **Multilingualism**: adapting an English-centric model to another language
+
+<Callout type="warning" title={"LoRA isn't a silver bullet"}>
+LoRA reduces cost, but not the need for good data. Poor-quality data will produce bad fine-tuning, regardless of the method. Too low a rank ($r = 1$ or $r = 2$) limits performance on complex tasks that require deep behavioral modifications. And catastrophic forgetting remains possible: by adapting the model to a new task, it can "forget" existing capabilities.
+</Callout>

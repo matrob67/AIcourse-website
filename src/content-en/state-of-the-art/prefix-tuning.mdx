@@ -1,0 +1,112 @@
+---
+title: "Prefix Tuning: Optimizing Continuous Prefixes"
+description: "Prefix tuning prepends trainable vectors to the keys and values of each attention layer, offering an elegant alternative to fine-tuning for conditional generation."
+---
+
+
+
+## The Wild Idea: Learned Prompts in Continuous Space
+
+When you write a prompt, you're limited to words in the vocabulary. You fumble with "Summarize this text concisely" vs "Give me a short summary" vs "Give me the gist." Each phrasing gives different results, and finding the optimal prompt is more art than science.
+
+Prefix tuning proposes a radically different approach: what if you could use arbitrary **continuous** vectors as a "prompt"? Vectors that don't exist in the vocabulary, that float freely in embedding space, and that you optimize via gradient descent to maximize performance on your task?
+
+That's exactly it. Magic vectors that the model learns to interpret, injected directly into the attention mechanism.
+
+<ArxivLink id="2101.00190" title="Prefix-Tuning: Optimizing Continuous Prompts for Generation (Li & Liang, 2021)" />
+
+<Callout type="info" title={"The Intuition"}>
+Classic prompt engineering is like searching for the right key on a finite keyring. Prefix tuning is like crafting a custom key by sculpting it atom by atom. The result isn't a readable word, it's a mathematical vector that "speaks" to the model better than any text could.
+</Callout>
+
+## How It Works: Vectors Injected at Every Layer
+
+Here's what distinguishes prefix tuning from simple prompt tuning: instead of adding vectors only at the model's input, you add them at **every attention layer** of the Transformer.
+
+For each layer, learned vectors are prepended to the keys and values:
+- `K' = [P_K ; K]` -- the key prefix comes before the real keys
+- `V' = [P_V ; V]` -- the value prefix comes before the real values
+
+$P_K$ and $P_V$ are matrices of size $(l \times d_{head})$ for each attention head, where $l$ is the prefix length. The real text tokens can "consult" the prefix via attention and find useful information for the task, like a guide planted at the beginning of each layer.
+
+### Stabilization via Reparameterization
+
+Optimizing these vectors directly via gradient descent turns out to be unstable: the loss oscillates, diverges, refuses to converge. The solution is a small engineering trick:
+
+1. Keep a matrix P of size $(l \times d)$
+2. Pass it through a small MLP: $P' = \text{MLP}(P)$
+3. After training, discard the MLP and keep only $P'$
+
+The MLP acts as an implicit regularizer that constrains the search space. It's like drawing with a guide rather than freehand: the result is cleaner.
+
+## Number of Parameters
+
+For $L$ layers, $H$ heads, and a prefix of length $l$:
+
+- **Prefix parameters**: $l \times d \times L \times 2$ (keys AND values, at each layer)
+
+Concrete example for GPT-2 Medium ($d=1024$, $L=24$, $l=10$):
+- Total: $10 \times 1024 \times 24 \times 2$ = **491,520 parameters** (0.12% of the model)
+
+That's remarkably compact. Half a million parameters to adapt an entire model.
+
+<Callout type="tip" title="Prefix Length: A Delicate Trade-off">
+A prefix that's too short (5 tokens) doesn't have enough capacity to encode the task. A prefix that's too long (500 tokens) eats into your context budget and risks overfitting. The typical range is 10-200 virtual tokens. It's a critical hyperparameter to test.
+</Callout>
+
+## Prompt Engineering vs Prefix Tuning
+
+| Aspect | Classic Prompt | Prefix Tuning |
+|---|---|---|
+| Space | Discrete tokens (words) | Continuous vectors (reals) |
+| Optimization | Manual, trial and error | Automatic, gradient descent |
+| Layers affected | Just the input embedding | **All** layers |
+| Readability | You can read the prompt | Completely opaque |
+| Performance | Variable by phrasing | Optimal for the task |
+
+The key difference is that prefix tuning acts at **all layers** simultaneously. A classic prompt influences the model only via the input, and its influence dilutes through the layers. Prefix tuning maintains its influence from start to finish of the network.
+
+## Empirical Results
+
+The original paper tests on conditional generation:
+- **Table-to-text** (E2E, WebNLG): transforming structured data into text
+- **Summarization** (XSUM): summarizing news articles
+
+With only 0.1% trainable parameters, prefix tuning achieves performance comparable to full fine-tuning on these tasks.
+
+<Callout type="paper" title="A Surprise Advantage with Little Data">
+With only 100 to 500 training examples, prefix tuning often **outperforms** full fine-tuning. The explanation is intuitive: few parameters = natural regularizer against overfitting. When you have little data, having fewer parameters to optimize is an advantage.
+</Callout>
+
+## Ideal Use Case: Massive Multi-Task
+
+Imagine a service that needs to handle 1,000 different tasks (legal summarization, technical translation, code generation, etc.). With full fine-tuning, you'd need 1,000 copies of the model. With prefix tuning, you keep a single model in memory and simply swap the prefix (a few KB) depending on the task. This is one of the scenarios where prefix tuning shines the most.
+
+## The Limits
+
+### It Reduces Your Available Context
+A 100-token prefix on a 2,048-token window means 5% of your context budget is lost. On tasks with long documents, that's a problem.
+
+### Expressiveness Limited to Attention Mechanisms
+The prefix only modifies the model through attention: it influences which tokens receive attention and how. For deep adaptations (new language, radical domain change), this influence remains too indirect.
+
+<Callout type="warning" title={"Training Is Trickier Than LoRA"}>
+Prefix tuning is notoriously sensitive to hyperparameters. A slightly too high learning rate makes training diverge. It's more fragile than LoRA, which benefits from the structure of its low-rank matrices as a natural regularizer. Plan extra time for tuning.
+</Callout>
+
+### Performance on Large Modern LLMs
+On 7B+ models, prefix tuning generally underperforms LoRA. The adaptation space via attention alone is too limited for very deep architectures. Prefix tuning was designed in the GPT-2/T5 era, and scaling up is less favorable to it.
+
+## Place in the Ecosystem
+
+Prefix tuning is **conceptually important**: it paved the way for prompt tuning and demonstrated that you could adapt a model without touching its weights. In practice, it's rarely the first choice today (LoRA dominates), but it remains relevant for:
+
+- **Thousands of tasks** served by a single model
+- **Ultra-constrained storage** (the prefix is extraordinarily compact)
+- **Conditional generation** with a fixed output format
+
+Available in Hugging Face's PEFT via `PrefixTuningConfig`.
+
+---
+
+**Insight**: Prefix tuning poses a fascinating question: can you adapt a model entirely via "continuous prompts" rather than by modifying its weights? The answer is yes, with limits. LoRA wins in practice, but prefix tuning wins in conceptual elegance and extreme compactness.

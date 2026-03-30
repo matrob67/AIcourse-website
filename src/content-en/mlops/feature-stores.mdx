@@ -1,0 +1,140 @@
+---
+title: "Feature Stores: Feast and Tecton"
+description: "Centralize your ML features. Avoid training-serving skew. Feast for small projects, Tecton for the enterprise."
+---
+
+## The problem: your features are everywhere and inconsistent
+
+ML model **features** are its input variables. For a fraud detection model, that might be "average transaction amount over the last 7 days," "number of transactions in the last hour," "distance between purchase location and usual address."
+
+In real-world companies, without centralized management, it's chaos:
+
+- **Massive duplication**: three different teams compute the same "7-day average amount" feature with three slightly different implementations. Result: three incompatible versions of the same thing.
+- **Training-serving skew**: the feature is calculated one way during training (batch Python on Spark) and another way in inference (real-time Java service). The results differ subtly. The model receives data it never saw during training.
+- **Non-reproducibility**: impossible to reconstruct exactly the features used by a model deployed 6 months ago
+- **Prohibitive latency**: recomputing all features for each real-time inference request is too slow for a service that needs to respond in 50ms
+
+<Callout type="info" title="Training-serving skew: ML's most insidious production bug">
+It's the classic nightmare: your model has 95% accuracy in offline evaluation, but 80% in production. Why? The computation logic of a feature differs between the batch training pipeline (Python/Spark) and the real-time inference service (Java/Go). The model receives slightly different inputs in production, and its performance collapses with no visible error in the logs.
+</Callout>
+
+## What exactly is a Feature Store?
+
+A feature store is a centralized system that manages the entire feature lifecycle: definition, computation, storage, and serving. Its fundamental goal is to guarantee that the **same features**, computed the **same way**, are served consistently for both training (batch) AND inference (real-time).
+
+### Typical architecture
+
+1. **Definition and transformation**: each feature is defined once, with its computation logic. A single source of truth.
+2. **Dual storage**:
+   - **Offline store**: a data warehouse (BigQuery, Snowflake, Parquet) for batch training. Contains the complete history.
+   - **Online store**: an ultra-fast cache (Redis, DynamoDB) for real-time inference. Contains only the most recent values.
+3. **Unified serving**: a single API retrieves features, whether for building a training dataset or serving a real-time prediction
+
+### Key concepts to master
+
+- **Feature**: a computed variable with an explicit name, e.g., `avg_transaction_amount_7d`
+- **Feature View**: a logical group of features that go together (all transaction features for a user)
+- **Entity**: the object the features relate to (a user, a product, a transaction)
+- **Point-in-time join**: the guarantee that you only use data that was **actually available at prediction time**. Without this, you have data leakage: the model "cheats" by using future information during training.
+
+## Feast: the open-source feature store
+
+**Feast** (Feature Store) is the most popular open-source project in this category. Created at Gojek/Google, it's now maintained by Tecton.
+
+### Declaration and deployment
+
+```python
+# Define your features once
+@dataset
+def my_features(entity_df):
+    return features_from_database()
+
+# feast apply: deploys the definition
+# feast materialize: pushes values into the online store
+```
+
+### Supported backends
+
+- **Offline store**: BigQuery, Snowflake, Redshift, Parquet files, Spark
+- **Online store**: Redis, DynamoDB, SQLite, Cassandra, PostgreSQL
+- **Registry**: centralized catalog of all available features, consultable by all teams
+
+### Feast's strengths
+
+- Open source and free, deployable on your own infrastructure
+- Simple to start: you can begin with Parquet files + SQLite locally, with no infrastructure
+- Multi-backend: switch backends without modifying your application code
+- **Native point-in-time join**: this is the critical feature. Feast guarantees no future data leaks into your training features.
+
+### Honest limitations
+
+- No native real-time streaming: features are materialized in batch, not computed continuously
+- Materialization orchestration is your responsibility (Airflow, cron, etc.)
+- Feature monitoring is basic
+
+<Callout type="tip" title="Start small, scale later">
+Feast can run with Parquet files and a local SQLite database. That's more than enough for prototyping and small teams. When the need grows, you migrate to Redis + BigQuery without changing a single line of application code. This progressiveness is Feast's strength.
+</Callout>
+
+## Tecton: the managed feature store for the enterprise
+
+**Tecton** was created by the founders of Feast (who had built Uber's internal feature store). It's the enterprise, managed, and complete version.
+
+### What Tecton adds over Feast
+
+- **Real-time transformations**: continuous computation on streaming data flows (Spark Streaming, Kinesis). The "number of transactions in the last 5 minutes" feature is continuously updated.
+- **On-demand transformations**: computed at the exact moment of the request. For example, the distance between the user's current GPS position and the store.
+- **Automatic orchestration**: Tecton automatically schedules and executes batch (daily), streaming (continuous), and on-demand (per-request) transformations
+- **Complete monitoring**: alerts on feature quality, data freshness, statistical anomalies
+- **Governance**: per-feature permissions, complete audit trail, end-to-end lineage
+
+### The 3 unified computation modes
+
+- **Batch**: "average transactions over 30 days," recalculated daily
+- **Streaming**: "sum of purchases in the last hour," continuously updated
+- **On-demand**: "current time of day," calculated on each request
+
+The elegance of Tecton: you define the feature once, and Tecton manages all three execution modes automatically. Same source of truth, zero training-serving skew, regardless of mode.
+
+<Callout type="paper" title={"Unifying computation modes: a massive gain"}>
+Before feature stores, companies typically maintained three implementations of each feature: a batch Python script, a Spark Streaming job, and a Java on-demand service. Three different codebases, three sources of bugs, three risks of divergence. Tecton reduces this to a single definition.
+</Callout>
+
+### Tecton's strengths
+
+- Native and performant real-time streaming
+- Automatic orchestration and monitoring, zero ops
+- Enterprise integration (SSO, RBAC, audit trail)
+- Dedicated technical support
+
+### Limitations
+
+- Paid SaaS with significant cost (not suited for small budgets)
+- Vendor lock-in: migrating away from Tecton takes work
+- Overkill for small teams or projects without a real-time component
+
+## Comparison: who to choose based on your context
+
+| Criteria | Feast | Tecton |
+|---|---|---|
+| **Type** | Open source, self-hosted | Managed SaaS |
+| **Batch** | Yes | Yes |
+| **Streaming** | Limited (via plugins) | Native and performant |
+| **On-demand** | No | Yes |
+| **Orchestration** | Manual (Airflow, etc.) | Automatic |
+| **Monitoring** | Basic | Advanced with alerts |
+| **Cost** | Free (+ your infra) | $$$$ |
+| **Ideal for** | SMBs, prototyping, small teams | Enterprise, critical real-time |
+
+<Callout type="warning" title={"Do you really need a feature store?"}>
+Not all ML projects need one. If your model has simple features (no temporal component), no real-time serving, and you work in a small team: a classic preprocessing pipeline with Parquet files is enough. A feature store becomes valuable when multiple teams share features, when real-time is necessary, or when training-serving skew is an identified risk.
+</Callout>
+
+## Notable alternatives
+
+- **Hopsworks**: open source with native Spark and Flink, built-in feature monitoring
+- **SageMaker Feature Store**: AWS managed, integrated with the SageMaker ecosystem
+- **Vertex AI Feature Store**: GCP managed, integrated with Vertex AI
+- **Databricks Feature Store**: integrated with the Databricks platform, direct access from notebooks
+
+The trend is clear: every cloud provider and ML platform now offers an integrated feature store. The concept has proven its value and is now part of the standard enterprise ML stack.

@@ -1,0 +1,199 @@
+---
+title: "LLM-as-a-Judge: Evaluating with an LLM"
+description: "Using a powerful LLM to evaluate another model's outputs --- faster and more scalable than human evaluation, with its own biases to be aware of."
+---
+
+## The Problem: How to Evaluate an LLM at Scale?
+
+You've fine-tuned a model, changed your prompt, plugged in a new pipeline. The responses look better... but "look better" is not an evaluation protocol.
+
+Historically, two options were available to measure the quality of an LLM's outputs:
+
+- **Human evaluation**: annotators read the responses and rate them. It's the gold standard, but it's slow, expensive, and doesn't scale. Evaluating 10,000 responses with humans means weeks of work and thousands of dollars.
+- **Classic automatic metrics**: BLEU (BiLingual Evaluation Understudy), ROUGE (Recall-Oriented Understudy for Gisting Evaluation), METEOR. These metrics compare n-grams between the generated response and a reference. The problem? They're far too superficial. Two responses can say exactly the same thing with different words, and BLEU will give a terrible score. Conversely, a response can share lots of words with the reference while being factually wrong.
+
+LLM-as-a-Judge is the idea of bridging this gap: using a **powerful LLM** (GPT-4, Claude, Mistral Large) as an automatic judge to evaluate the quality of another model's responses. The judge understands meaning, context, nuances --- exactly what BLEU and ROUGE don't.
+
+<Callout type="info" title={"Why It Works"}>
+The latest generation of LLMs has developed a remarkable ability to evaluate text quality: relevance, factual accuracy, clarity, style. We leverage this ability to automate what previously required a qualified human.
+</Callout>
+
+## How It Works in Practice
+
+The principle is simple. You give the LLM judge:
+1. The **original prompt** (the question or instruction given to the model being evaluated)
+2. The model's **response** to evaluate
+3. Explicit **evaluation criteria** (helpfulness, accuracy, safety, style...)
+4. Optionally, a **reference response** (gold standard)
+
+The judge analyzes the response according to the requested criteria and produces a score, a ranking, or a qualitative judgment.
+
+```python
+# Simplified LLM-as-Judge example with a pointwise prompt
+judge_prompt = """Evaluate the following response on a scale of 1 to 10.
+
+Criteria:
+- Factual accuracy (0-10)
+- Relevance to the question (0-10)
+- Clarity and structure (0-10)
+
+Question: {question}
+Response: {response}
+
+Give a score for each criterion and an overall score.
+Briefly justify each score.
+"""
+```
+
+The judge's prompt is crucial. A vague prompt gives inconsistent evaluations. A prompt with precise criteria, clear scales, and scoring examples gives results that strongly correlate with human judgment.
+
+## The Three Evaluation Patterns
+
+### Pointwise: Rating a Single Response
+
+The judge receives **a single response** and assigns it a score (typically 1 to 10) on one or more criteria. It's the simplest and most common pattern.
+
+```
+Prompt → Response A → Score: 7/10
+```
+
+**Advantages**: simple to set up, each response is evaluated independently, easy to parallelize.
+
+**Disadvantages**: LLMs tend to give high scores to everyone (leniency bias). A score of 7/10 doesn't mean much if all responses get between 6 and 8.
+
+### Pairwise: Comparing Two Responses
+
+The judge receives **two responses** to the same question and must choose the better one. No absolute score --- just a relative judgment: "A is better than B" or "B is better than A."
+
+```
+Prompt → Response A vs Response B → Winner: B
+```
+
+**Advantages**: much more discriminating than pointwise. Humans also find it easier to compare than to rate in absolute terms. It's the format used by Chatbot Arena to rank models.
+
+**Disadvantages**: the number of comparisons explodes with the number of models (combinatorics). And above all, there's the **position bias** (more on that just below).
+
+### Reference-Based: Comparing to a Gold Standard
+
+The judge receives the response to evaluate **and** a reference response considered correct. It evaluates how well the response aligns with the reference.
+
+```
+Prompt → Response A + Reference → Alignment score: 8/10
+```
+
+**Advantages**: more objective evaluation, anchored to a ground truth.
+
+**Disadvantages**: requires producing reference responses (expensive in human annotation). And a good response can be very different from the reference while being perfectly correct.
+
+<Callout type="tip" title={"Which Pattern to Choose?"}>
+**Pairwise** if you're comparing two models or two prompt versions --- it's the most reliable. **Pointwise** if you want to score a large volume of responses quickly (data filtering, production monitoring). **Reference-based** if you have gold standard responses available (annotated evaluation datasets).
+</Callout>
+
+## The LLM Judge's Biases
+
+LLM-as-a-Judge isn't perfect. It has its own systematic biases that you need to know about and mitigate.
+
+### Position Bias
+
+In pairwise evaluation, the judge tends to **prefer the response presented first**. It's an artifact of the model's attention: the first response receives preferential treatment in the context.
+
+**Mitigation**: run two evaluations by swapping the response order (A/B then B/A) and average the results. If the judge says "A wins" in both orders, the result is reliable. If the verdict changes with order, it's a sign the difference is too small to be significant.
+
+### Self-Preference Bias
+
+A model tends to **rate its own responses higher** than those of another model. GPT-4 as judge rates GPT-4 as candidate more generously than Claude, and vice versa. This bias is documented and measurable.
+
+**Mitigation**: use a different model as judge. If you're evaluating Mistral outputs, use Claude or GPT-4 as judge, not Mistral itself.
+
+### Verbosity Bias
+
+LLM judges tend to **prefer longer responses**, even when a short and concise answer would be objectively better. A three-paragraph response will often be rated higher than a two-sentence response, at equal quality.
+
+**Mitigation**: include in the judge's prompt an explicit instruction like "A concise and correct response should be rated as well as a detailed correct response. Length is not a quality criterion."
+
+### Style Bias
+
+LLM judges favor well-structured responses with bullet points, headings, markdown formatting. A continuous prose response saying exactly the same thing will be rated lower.
+
+**Mitigation**: if you don't want style to influence the judgment, ask the judge to focus solely on factual content and relevance.
+
+<Callout type="warning" title={"Don't Overestimate the Correlation"}>
+GPT-4 as judge correlates at about 80% with human preferences. That's good, but it also means one in five evaluations diverges from human judgment. For critical decisions (production deployment, final model selection), always supplement with targeted human evaluation.
+</Callout>
+
+## Correlation with Human Judgment
+
+The key question: does the LLM judge actually agree with humans?
+
+Studies show that GPT-4 achieves about **80% concordance** with human annotators in pairwise evaluation. For comparison, two human annotators agree with each other about 80-85% of the time. The LLM judge is therefore almost as reliable as an individual human.
+
+Some important nuances:
+- Correlation is better on **clearly good or clearly bad** cases. On ambiguous cases (both responses are similar quality), the LLM judge is less reliable.
+- Correlation depends on the **domain**. The judge is excellent at evaluating clarity, structure, general usefulness. It's less reliable for judging factual accuracy in specialized domains (medicine, law, finance).
+- The quality of the **judge's prompt** enormously influences results. A well-designed prompt with precise criteria and scoring examples can improve correlation by 10-15 points.
+
+## Concrete Use Cases
+
+### Evaluation During Training
+
+During model fine-tuning, you can use an LLM judge to evaluate intermediate checkpoints without waiting for a full human evaluation. The judge provides quick feedback on training progress.
+
+### Training Data Filtering
+
+Before training a model on synthetic or collected data, you use an LLM judge to **filter out low-quality examples**. The judge rates each (prompt, response) pair and you only keep those above a quality threshold. This is a common step in building instruction tuning datasets.
+
+### A/B Testing Models
+
+You have two versions of your model or two prompting strategies. Instead of mobilizing human annotators, you submit response pairs to an LLM judge in pairwise mode to quickly determine which version is better.
+
+### Reward Signal for RL
+
+The LLM judge can serve as a **reward model** in a reinforcement learning pipeline (RLHF, Reinforcement Learning from Human Feedback, or variants). Instead of training a separate reward model, you directly use the judge's scores as a reward signal. This is sometimes called RLAIF (Reinforcement Learning from AI Feedback).
+
+### Production Monitoring
+
+In a deployment context (e.g., Mistral Forge), an LLM judge can evaluate model responses **in real-time** to detect quality degradation, hallucinations, or off-topic responses. It's richer than simple latency or error rate monitoring.
+
+<Callout type="info" title={"The Judge in Mistral Forge"}>
+In the context of model serving on Mistral Forge, the "Judge" feature allows automatic evaluation of a deployed model's outputs. The judge analyzes each response in real-time according to configurable criteria (safety, relevance, format) and raises alerts if quality drops below a defined threshold.
+</Callout>
+
+## Tools and Benchmarks
+
+Several tools standardize the use of LLM-as-a-Judge:
+
+### Alpaca Eval
+
+An automatic evaluation benchmark that uses GPT-4 as judge to compare responses from instruction-tuned models. The evaluated model responds to 805 instructions, and the judge compares each response to a reference (GPT-4 Turbo). The result is a **win rate**: the percentage of times the model is judged better than the reference.
+
+**Alpaca Eval 2.0** uses pairwise mode with position swapping to reduce position bias, and weights results to reduce length bias.
+
+### MT-Bench
+
+A benchmark of 80 multi-turn questions (two-turn conversations) covering 8 categories: reasoning, mathematics, coding, writing, extraction, STEM (Science, Technology, Engineering, Mathematics), humanities, and role-playing. The judge (GPT-4) assigns a score from 1 to 10 in pointwise mode.
+
+The multi-turn aspect is interesting: it evaluates the model's ability to **maintain coherence** across multiple exchanges, not just produce a good isolated response.
+
+### Arena-Hard
+
+A subset of hard prompts extracted from Chatbot Arena (the human-voted model comparison platform). Arena-Hard uses automatic pairwise evaluation and strongly correlates with Chatbot Arena's Elo rankings, while being much cheaper to run.
+
+## Best Practices
+
+To maximize the reliability of LLM-as-a-Judge:
+
+1. **Use a powerful judge model**: GPT-4, Claude 3.5 Sonnet, or Mistral Large. Small models are mediocre judges --- they lack the reasoning capacity for nuanced evaluations.
+
+2. **Write a precise judge prompt**: explicit criteria, a clear rating scale, examples of what a 3/10 vs. an 8/10 looks like. The more precise the prompt, the more reproducible the evaluations.
+
+3. **Always swap the order** in pairwise: two passes with A/B then B/A, and average. This is non-negotiable.
+
+4. **Don't use a model to judge itself**: avoid self-bias by choosing a different judge from the model being evaluated.
+
+5. **Calibrate on a small human sample**: have 50-100 examples evaluated by humans AND by the judge, measure the correlation, and adjust the judge's prompt if the correlation is too low.
+
+6. **Ask for justification**: force the judge to explain its score before giving it (chain-of-thought). Scores accompanied by justifications are more consistent and more reliable.
+
+<Callout type="tip" title={"Tip: The Judge's Chain-of-Thought"}>
+Ask the judge to reason step by step before giving its final score. For example: "First analyze factual accuracy, then relevance, then clarity. Then give your overall score." Scores produced after explicit reasoning are significantly more stable and better correlated with human judgment.
+</Callout>

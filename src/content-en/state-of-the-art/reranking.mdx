@@ -1,0 +1,138 @@
+---
+title: "Reranking: Cross-Encoders and ColBERT"
+description: "Reranking refines initial retrieval results using more powerful models (cross-encoders, ColBERT) to reorder candidates by relevance."
+---
+
+
+
+## The Problem: Initial Retrieval Is Imperfect
+
+You've done your retrieval: embeddings, vector search, maybe some BM25. You get back 20 candidate documents. The problem? The ranking is approximate. The most relevant document for your question might be at position 8 instead of position 1.
+
+A **reranker** takes these 20 candidates and **reorders** them with a more powerful and precise model. Result: the right document moves to the top of the list, and the LLM receives the most relevant documents to generate its answer.
+
+It's a **two-stage** architecture: first a fast but imprecise retrieval (20-100 candidates), then a slow but precise reranking (top 5-10).
+
+<ArxivLink id="2004.12832" title="ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT (Khattab & Zaharia, 2020)" />
+
+<Callout type="info" title="The Fundamental Speed-Precision Tradeoff">
+**Bi-encoder** (retrieval): the query and document are encoded **separately** into vectors, then compared by cosine similarity. Very fast (we pre-encode all documents). But imprecise: the two vectors never "talk" to each other directly.
+
+**Cross-encoder** (reranking): the query and document are encoded **together** in the same Transformer. Much slower (one forward pass per pair). But very precise: the model sees the fine-grained interaction between every word of the question and every word of the document.
+
+Reranking combines the best of both: the speed of the bi-encoder for rough sorting, the precision of the cross-encoder for refinement.
+</Callout>
+
+## Cross-Encoders: Precision at the Cost of Speed
+
+A cross-encoder takes the query and document **concatenated** as input:
+
+`[CLS] your_question [SEP] the_document [SEP]`
+
+Everything goes through a Transformer that understands the **interaction** between the question and document. The `[CLS]` token is projected onto a relevance score between 0 and 1.
+
+Why is this so much more precise than a bi-encoder? Because the Transformer sees every word of the question and every word of the document **at the same time**. It can capture subtle nuances: the question is about "Python the language" and the document is about "python the snake" -- a bi-encoder would confuse the two (similar embeddings), a cross-encoder distinguishes them immediately thanks to cross-context.
+
+### Why You Can't Use It Everywhere
+
+The price is simple: a cross-encoder must process each query-document pair individually. For a corpus of 1 million documents, that's 1 million forward passes per query. Totally impractical.
+
+Hence the strategy: use the cross-encoder **only to rerank** the top 20 to 50 candidates from the initial retrieval.
+
+### Popular Models
+
+| Model | Size | NDCG (BEIR) | Speed |
+|---|---|---|---|
+| ms-marco-MiniLM | 22M | 49 | Fast |
+| BGE-reranker-v2 | 568M | 54 | Slow |
+| Cohere Rerank v3 | ? | 56 | API |
+
+<Callout type="tip" title="Pragmatic Choice Based on Latency">
+Tight latency budget? MiniLM on 20 candidates adds about 20ms. Nearly imperceptible.
+Maximum quality required? BGE-reranker on 50-100 candidates, about 300ms overhead. Reserve for cases where precision is critical.
+</Callout>
+
+## ColBERT: The Elegant Compromise Between Speed and Precision
+
+ColBERT occupies a **fascinating sweet spot** between bi-encoders and cross-encoders. Its idea: instead of encoding an entire document into ONE single vector (bi-encoder), you generate **one vector per token of the document**. Same for the query.
+
+The relevance score is calculated via **MaxSim** (Maximum Similarity): for each query token, you find the most similar document token, then sum:
+
+$$\text{score} = \sum_i \max_j \text{sim}(\text{query\_token}_i,\ \text{doc\_token}_j)$$
+
+It's like asking: "For each word in my question, does at least ONE word in the document answer it well?" Then you aggregate the answers.
+
+**The advantages**:
+- Documents are **pre-encoded** (like a bi-encoder): they can be indexed offline
+- The interaction between query and document is **fine-grained** (like a cross-encoder): each query token interacts with each document token
+- It scales on large corpora thanks to pre-computed document embeddings
+
+**The downsides**:
+- Storage explodes: one vector per token instead of one per document. For a corpus of 1M documents of 200 tokens each, that's 200M vectors.
+- Indexing and search are more complex.
+
+### ColBERT v2 and RAGatouille
+
+ColBERT v2 solves the storage problem with **residual quantization** that compresses embeddings by 30 to 50x. The **RAGatouille** library makes usage trivial:
+
+```python
+from ragatouille import RAGPretrainedModel
+
+RAG = RAGPretrainedModel.from_pretrained("colbertv2.0")
+RAG.index(documents, index_name="my_index")
+results = RAG.search("my question", k=10)
+```
+
+## The Optimal Production Pipeline: Three Stages
+
+1. **Query** arrives
+2. **Hybrid Retrieval** (BM25 + Dense) &rarr; Top 50-100 candidates
+3. **Cross-encoder Reranking** &rarr; Top 5-10 documents
+4. **LLM** generates the answer from the top documents
+
+### Stage 1: Hybrid Retrieval (fast)
+You combine lexical search (BM25, keyword-based) and dense search (embeddings, meaning-based). The two are complementary: BM25 is strong on exact terms, dense is strong on semantics. In a few milliseconds, you have 50-100 candidates.
+
+### Stage 2: Reranking (precise)
+The cross-encoder scores and reorders candidates. Acceptable latency: 50 to 200ms depending on the model and number of candidates.
+
+### Stage 3: Generation
+The LLM generates its answer based on the top 5 reranked documents. The quality of context provided to the LLM is drastically better than with retrieval alone.
+
+```python
+from sentence_transformers import CrossEncoder
+
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+pairs = [(query, doc) for doc in retrieved_docs]
+scores = reranker.predict(pairs)
+reranked = sorted(zip(retrieved_docs, scores), key=lambda x: -x[1])
+```
+
+## Measurable Quality Impact
+
+| Configuration | Recall@5 | Quality |
+|---|---|---|
+| Dense only | 72% | Good |
+| Dense + BM25 hybrid | 79% | Better |
+| Hybrid + Reranker | 87% | Excellent |
+
+<Callout type="paper" title="Reranking = Best Return on Investment">
+Adding a reranker costs little: 50ms of latency and about ten lines of code. The gain in recall is huge: 8 to 10 additional points. It's the improvement with the best return on investment in the entire RAG pipeline. If you make only one optimization, make it this one.
+</Callout>
+
+## Practical Considerations
+
+### How Many Candidates to Rerank?
+- **20-30**: lightweight cross-encoder, minimal latency. The default choice.
+- **50-100**: powerful reranker, maximum quality. For critical cases.
+- **100+**: diminishing returns. The marginal gain no longer justifies the cost.
+
+### Watch Out for the Bottleneck
+The reranker can become the **bottleneck** of the pipeline. If reranking accounts for 80% of total query time, you need to either reduce the number of candidates, use a lighter model, or parallelize.
+
+<Callout type="warning" title="Monitor End-to-End Latency">
+A fast RAG pipeline (200ms total) with slow reranking (500ms) = a pipeline that's now slow. Always measure the impact of reranking on total latency, and adjust the number of candidates and model choice accordingly.
+</Callout>
+
+Reranking has become **standard** in production RAG systems. The combination of hybrid retrieval + cross-encoder reranking is the recommended pipeline to maximize result quality while maintaining acceptable latency.

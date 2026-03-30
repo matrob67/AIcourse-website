@@ -1,0 +1,122 @@
+---
+title: "PEFT Methods Comparison: A Practical Guide"
+description: "Comparative synthesis of Parameter-Efficient Fine-Tuning techniques: LoRA, QLoRA, DoRA, Adapters, Prefix Tuning, Prompt Tuning, IA3. When to use what?"
+---
+
+
+
+## The PEFT Spectrum: From Ultra-Light to Full
+
+PEFT isn't a single technique. It's a **family** of techniques, each with its own trade-off between the number of trained parameters, result quality, and memory cost. Think of it as a slider: on the left, you barely touch the model (Prompt Tuning, a few thousand parameters). On the right, you touch almost everything (full fine-tuning). In between, a range of methods offering different sweet spots depending on your use case.
+
+<Callout type="info" title="The Central Question">
+You have a GPU, a model, and data. How many parameters to train? Ultra-few to go fast and stay lightweight? A lot to maximize quality? The perfect universal trade-off doesn't exist, but there is an optimal trade-off for **your** specific case.
+</Callout>
+
+## The Comparison Table: All the Numbers
+
+| Method | Parameters (7B) | VRAM | Quality | Inference Latency | Complexity |
+|---|---|---|---|---|---|
+| Full fine-tuning | 7B (100%) | ~120 GB | 100% | None | Simple |
+| LoRA r=16 | ~7M (0.1%) | ~16 GB | 95-99% | None (fusion) | Simple |
+| QLoRA r=16 | ~7M (0.1%) | ~6 GB | 93-98% | None | Simple |
+| DoRA r=16 | ~7M (0.1%) | ~17 GB | 96-99% | Minimal | Medium |
+| Adapters m=64 | ~20M (0.3%) | ~16 GB | 94-98% | Increased | Medium |
+| Prefix tuning l=20 | ~1M (0.01%) | ~14 GB | 85-95% | Reduced context | Medium |
+| Prompt tuning k=20 | ~80K (0.001%) | ~14 GB | 80-95% | Reduced context | Simple |
+| IA3 | ~600K (0.009%) | ~14 GB | 85-93% | Negligible | Simple |
+
+Look closely at the "Quality" column. LoRA at r=16 achieves 95-99% of full fine-tuning quality with only 0.1% of the parameters. That's an absolutely remarkable ratio. Conversely, Prompt Tuning is ultra-lightweight but can drop to 80% quality on certain tasks.
+
+## Scenario 1: Consumer GPU (RTX 4090, 24 GB)
+
+**Answer: QLoRA, hands down.**
+
+This is the most common case for individual practitioners and small teams. The recipe:
+1. Load the model in 4-bit (NF4 format)
+2. Apply LoRA r=16 to r=32 on the attention layers
+3. Enable gradient checkpointing to save memory
+
+Result: you fine-tune a 7B to 13B model on a single consumer GPU. That's wild. It was literally impossible in 2021. The 4-bit quantization divides the model's memory footprint by about 4, and LoRA adds only a few megabytes of trainable parameters.
+
+### QLoRA vs LoRA: What's the Gap?
+QLoRA is LoRA applied to a model quantized to 4-bit. Quality is slightly lower (93-98% vs 95-99%) because quantization introduces irreversible noise into the base model's weights. But VRAM is nearly divided by 3. For a consumer GPU, it's clearly the best trade-off.
+
+## Scenario 2: Professional GPU (A100/H100, 40-80 GB)
+
+**Answer: LoRA or DoRA**
+
+With more memory, you can load the model in FP16/BF16 (not quantized), which preserves full weight precision:
+- **LoRA r=16-64**: the default choice, performant and well understood
+- **DoRA**: if maximum quality is critical (adds a magnitude/direction decomposition)
+- You can fine-tune 30B to 70B models, which is out of reach for consumer GPUs
+
+## Scenario 3: Thousands of Micro-Tasks
+
+**Answer: IA3 or Prompt Tuning**
+
+You have 5,000 different classification tasks, each with little data, and you want one adapter per task? Storage becomes the limiting factor.
+- **IA3**: ~600K parameters per task, works well in few-shot learning
+- **Prompt tuning**: ~80K parameters per task, but requires a sufficiently large model to be effective
+
+Each adapter is a few hundred KB. You can store thousands and load them on the fly.
+
+## Scenario 4: Deep Adaptation
+
+**Answer: High-rank LoRA or full fine-tuning**
+
+You want to adapt the model to an entirely new language? An ultra-specialized domain (biomedical, legal)? Here, lightweight methods aren't enough, because the model needs to acquire fundamentally new knowledge.
+- LoRA r=64 to r=128 applied to **all** layers (not just attention)
+- Full fine-tuning if the compute budget allows
+- Consider continued pre-training before supervised fine-tuning
+
+<Callout type="tip" title="Rule of Thumb">
+Your task resembles what the model already knows how to do (conversation, summarization, classification)? r=8-16 is more than enough. You're asking the model for something fundamentally new (new language, new domain)? Go up to r=32-64 or higher.
+</Callout>
+
+## Powerful Combinations
+
+### QLoRA + DoRA
+The best quality/memory ratio on consumer GPUs. Simple to activate: add `use_dora=True` to your LoraConfig. DoRA decomposes each update into magnitude and direction, which improves convergence.
+
+### LoRA + Gradient Checkpointing
+Gradient checkpointing recomputes activations instead of storing them in memory during the backward pass. Combined with LoRA, this lets you fine-tune significantly larger models on the same hardware.
+
+### Multi-LoRA
+Train multiple LoRA adapters for the same task with different seeds or hyperparameters. Add them together for ensembling. It's a simple strategy to boost robustness with no extra inference cost (after fusion).
+
+## Key Decision Factors
+
+### By Data Volume
+- **< 100 examples**: IA3 or Prompt Tuning (the implicit regularization from few parameters prevents overfitting)
+- **100 - 10K examples**: LoRA r=8-16
+- **10K - 100K examples**: LoRA r=16-64 or DoRA
+- **> 100K examples**: High-rank LoRA or full fine-tuning
+
+### By Adaptation Type
+- **Classification / entity extraction**: r=4-8 (surface-level tasks)
+- **Instruction tuning**: r=16-32 (adapting conversational behavior)
+- **RLHF/DPO alignment**: r=16-64 (modifying model preferences)
+- **Domain shift**: r=64+ or full fine-tuning (new knowledge)
+
+<Callout type="warning" title="Pitfall: Don't Over-Minimize the Rank">
+Systematically choosing the method with the fewest possible parameters is a common mistake. A slightly higher rank costs very little in additional memory but provides a welcome safety margin. LoRA r=16 is rarely a bad default choice.
+</Callout>
+
+## Universal Best Practices
+
+1. **Start with LoRA r=16** on Q, K, V projections and MLP linear layers. It's the right choice in 90% of situations.
+2. **Evaluate rigorously**. Always compare with the non-fine-tuned base model and relevant baselines.
+3. **Watch for overfitting**. Few trainable parameters means the model can overfit quickly on small datasets.
+4. **Test the fusion**. After LoRA, merge the weights and verify there's no regression compared to the non-merged adapter.
+5. **Keep the base model**. Adapter modularity is a major advantage: you can roll back, combine, or swap easily.
+
+## The 2024-2025 Consensus
+
+PEFT evolves fast. New methods appear regularly (GaLore, LISA, etc.). But the solid community consensus:
+
+**QLoRA with a reasonable rank (r=16-32)** offers the best trade-off for 95% of use cases. It's accessible, performant, and simple to implement. PEFT (Parameter-Efficient Fine-Tuning) refers to the set of techniques that allow adapting a model by training only a fraction of its parameters.
+
+---
+
+**TL;DR**: Consumer GPU? QLoRA. Professional GPU? LoRA at full precision. Thousands of micro-tasks? IA3. Need maximum quality? DoRA. When in doubt, start with LoRA r=16: you can hardly go wrong.

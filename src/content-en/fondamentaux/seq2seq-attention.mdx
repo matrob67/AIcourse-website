@@ -1,0 +1,197 @@
+---
+title: "Seq2Seq and the Attention Mechanism (Bahdanau)"
+description: "The encoder-decoder architecture for sequence-to-sequence tasks, and the attention mechanism that transformed sequence processing."
+---
+
+## The challenge: transforming one sequence into another
+
+Many problems in AI involve **transforming one sequence into another** of a different length. A few examples:
+
+- **Translation**: "Le chat noir dort" → "The black cat sleeps" (4 words → 4 words, but it could have been 3 or 5)
+- **Summarization**: a 500-word article → a 30-word summary
+- **Dialogue**: a question → a response of unpredictable length
+- **Transcription**: a 10-second audio sequence → an 8-word sentence
+
+The fundamental problem: the input and output don't have **the same length**, and there is **no obvious word-to-word correspondence**. A standard RNN produces an output at each time step, which works when input and output are synchronized. But for translation? Word order changes, words are added or removed, grammar is different.
+
+A new architecture was needed. Enter the **sequence-to-sequence** (seq2seq) model.
+
+<ImageWithSource
+  src="/images/admin/img-1774043648169.png"
+  alt="Diagram of a seq2seq model with attention"
+  source="https://opensource.googleblog.com/2017/04/tf-seq2seq-sequence-to-sequence-framework-in-tensorflow.html"
+  caption="This diagram illustrates how a sequence-to-sequence (seq2seq) model with attention mechanism works. The encoder transforms the input sequence into context vectors, while the decoder generates the output sequence using these vectors via attention."
+  size="large"
+/>
+
+## Encoder-Decoder: two networks, one bridge
+
+### The idea (2014, Sutskever/Vinyals/Le at Google)
+
+The seq2seq architecture separates the problem into two distinct parts handled by two different networks:
+
+**The encoder**: reads the source sequence word by word and **compresses** it into a fixed-size vector called the **context vector**. This is the last hidden state of the encoder RNN/LSTM. This vector is supposed to capture the entire "meaning" of the source sentence.
+
+**The decoder**: takes this context vector as a starting point and generates the target sequence **autoregressively** -- that is, word by word, using each generated word as input to predict the next one.
+
+### Step-by-step walkthrough
+
+Let's take a concrete example of French → English translation:
+
+1. The encoder (an LSTM) processes "Le chat noir dort" token by token, updating its hidden state at each word
+2. The encoder's final hidden state = the **context vector** = a compressed summary of the entire source sentence
+3. This vector initializes the decoder's hidden state
+4. The decoder receives a special \<START\> token as input
+5. It predicts the first word: "The"
+6. "The" is fed back as input, the decoder predicts "black"
+7. "black" → predicts "cat", "cat" → predicts "sleeps"
+8. The decoder stops when it predicts the \<END\> token
+
+It's elegant: the encoder "understands" the source, the decoder "writes" the target. The two are connected by a single vector.
+
+A detail that seems trivial but is actually crucial: the **order** in which you present data to a seq2seq model drastically changes its performance. Vinyals et al. showed that even for tasks where the input is a **set** (not an ordered sequence), the encoding and decoding order has an enormous impact. This counterintuitive result has deep implications: the model is not as order-agnostic as one might think, and finding the right ordering can be as important as the architecture itself.
+
+<ArxivLink id="1511.06391" title="Order Matters: Sequence to Sequence for Sets (Vinyals et al., 2015)" />
+
+<Callout type="info" title={"The bottleneck"}>
+Everything the encoder understood about "Le chat noir dort sous la grande table en bois massif" must fit into a **single vector** of 500 or 1000 dimensions. For a short sentence, that's fine. For an entire paragraph? The first words get "forgotten" in favor of the last ones. It's like trying to summarize an entire book in a single sentence: details are inevitably lost. This bottleneck is the **fundamental** problem of vanilla seq2seq, and it's exactly what attention will solve.
+</Callout>
+
+## Bahdanau Attention (2014)
+
+### The revolutionary insight
+
+Bahdanau had a simple but profound idea: instead of forcing all the information through a single vector, let the decoder **look directly at the source sequence** at each generation step.
+
+The metaphor is natural: when you translate a sentence, you don't memorize the entire sentence first before starting to write. You consult the source text **as you go**. To translate "noir", you look at the corresponding word in the source. To translate "dort", you look at a different place.
+
+That's exactly what the attention mechanism does: at each word the decoder generates, it "looks at" all the encoder's hidden states and decides which ones are most relevant for its current prediction.
+
+<ArxivLink id="1409.0473" title="Neural Machine Translation by Jointly Learning to Align and Translate" />
+
+<ImageWithSource
+  src="/images/admin/img-1774043744270.png"
+  alt="Diagram of seq2seq architecture with attention"
+  caption="This diagram illustrates the seq2seq (sequence-to-sequence) architecture with attention mechanism. The sources are first encoded via a recurrent network, then decoded targeting the output with attention over the hidden states."
+  size="large"
+/>
+
+### Mathematics of attention
+
+At each decoding step $t$, the attention mechanism computes four things:
+
+**1. Alignment scores**: for each source word $j$, we compute a score indicating its relevance:
+$$
+e(t, j) = a(s_{t-1},\; h_j)
+$$
+
+Here, $s_{t-1}$ is the decoder's state at the previous step, $h_j$ is the encoder's state for source word $j$, and $a$ is a small neural network (the "attention model"). This score answers the question: "how important is source word $j$ for the prediction I'm about to make?"
+
+**2. Attention weights**: we normalize the scores with a softmax:
+$$
+\alpha(t, j) = \frac{\exp(e(t, j))}{\sum_k \exp(e(t, k))}
+$$
+
+This transforms the raw scores into a **probability distribution** over the source words. For example: "I'm looking 70% at the word 'noir', 20% at the word 'chat', 10% at the word 'dort'". All weights are positive and sum to 1.
+
+**3. Context vector**: we compute a weighted average of the encoder's hidden states:
+$$
+c(t) = \sum_j \alpha(t, j) \cdot h_j
+$$
+
+This is a **selective extraction**: instead of compressing everything into a fixed vector, we create a context vector that is **different at each step**, focused on the relevant parts of the source. This is the heart of the innovation.
+
+**4. Prediction**: the context vector $c(t)$ is combined with the decoder state $s_t$ to predict the next word. The decoder now has access to a targeted view of the source, plus its own internal state.
+
+<Callout type="tip" title="Magical visualization">
+The attention weights $\alpha(t, j)$ naturally form a **heatmap** when displayed. For translation, you can literally see the alignments: when the decoder generates "black", it looks at "noir"; when it generates "the", it looks at "le". And all of this **without supervision**! The model learns on its own which words correspond to which words. These visualizations were one of the reasons for the meteoric success of attention: for the first time, you could "see" what the model was doing.
+</Callout>
+
+### Bahdanau's additive attention
+
+Bahdanau's specific implementation uses a small neural network to compute the scores:
+
+$$
+e(t, j) = v^T \cdot \tanh(W_a \cdot s_{t-1} + U_a \cdot h_j)
+$$
+
+This is called "additive" attention because the transformations of $s$ and $h$ are **added** (not multiplied). The parameters $v$, $W_a$, $U_a$ are learned during training. The tanh introduces a non-linearity, and $v^T$ projects the result into a scalar (the score).
+
+It's more expressive than a simple dot product because the attention network has its own learnable parameters, but also more computationally expensive.
+
+## Luong Attention (2015): simplified variants
+
+A year after Bahdanau, Luong proposes simpler and faster variants.
+
+### Dot-product attention
+
+$$
+e(t, j) = s_t^T \cdot h_j
+$$
+
+Just the dot product between the decoder state and the encoder state. No extra parameters, no dedicated attention network. Extremely fast. The intuition: two similar vectors (same direction in space) have a high dot product, thus a high attention score.
+
+### General attention
+
+$$
+e(t, j) = s_t^T \cdot W_a \cdot h_j
+$$
+
+A compromise: the dot product goes through a learnable weight matrix $W_a$. More expressive than the pure dot-product, but less costly than Bahdanau's additive attention.
+
+### Bahdanau vs Luong
+
+| Aspect | Bahdanau | Luong |
+|--|--|--|
+| Decoder state used | $s_{t-1}$ (previous step) | $s_t$ (current step) |
+| Attention model | Additive (neural network) | Dot-product or general |
+| Extra parameters | More numerous | Fewer |
+| Speed | Slower | Faster |
+
+In practice, performances are close. Luong is more efficient and simpler to implement, which explains its popularity. But most importantly, it's Luong's dot-product attention that served as the basis for the **Transformer**: the scaled dot-product attention from "Attention Is All You Need" is a direct generalization of this idea.
+
+<Callout type="paper" title={"The evolution toward the Transformer"}>
+Attention is the most influential contribution of this period. Its evolution:
+1. **2014**: helper mechanism in seq2seq (Bahdanau) -- a complement to the RNN
+2. **2015**: simplified variants (Luong) -- dot-product attention emerges
+3. **2017**: central and sole mechanism of the Transformer -- no more RNN at all
+
+The title of the Transformer paper, "Attention Is All You Need", summarizes this trajectory. We went from "attention helps RNNs" to "attention replaces RNNs".
+</Callout>
+
+## Pointer Networks: when the output vocabulary is the input itself
+
+A fascinating extension of attention in the seq2seq framework: **Pointer Networks**. Instead of generating words from a fixed vocabulary, the decoder uses the attention mechanism to **point to a position in the input sequence**. The attention weights become the output distribution directly. This is revolutionary for combinatorial problems like sorting, shortest path search, or convex hull, where the "right answer" is a rearrangement of the input elements, not a dictionary word. This idea paved the way for using deep learning on combinatorial optimization problems.
+
+<ArxivLink id="1506.03134" title="Pointer Networks (Vinyals et al., 2015)" />
+
+## Global vs local attention
+
+**Global attention**: the decoder looks at **all** the words of the source sequence at each step. This is the default approach. The cost is proportional to the source length: $O(n)$ per decoding step, so $O(n \times m)$ total (where $m$ is the target length).
+
+**Local attention**: the decoder only looks at a **window** around an estimated position. Less expressive but faster, especially for very long sequences. It's a precursor of sliding window attention mechanisms found in modern architectures like Longformer.
+
+For sentences of reasonable length (< 100 tokens), global attention is standard. For documents of thousands of tokens, local or windowed variants become necessary.
+
+## Why this matters
+
+Bahdanau attention is one of the most influential concepts in the history of deep learning. Understanding this mechanism gives you:
+
+- **The foundations of the Transformer**: the Transformer's self-attention is a direct generalization of seq2seq attention
+- **The "Query-Key-Value" intuition**: in Bahdanau attention, the decoder state plays the role of "query", the encoder states are the "keys" and "values". That's exactly the Transformer's vocabulary.
+- **A universal paradigm**: the idea of "selectively looking at what's relevant" appears everywhere: spatial attention in vision, graph attention on graphs, cross-attention in multimodal models (CLIP, DALL-E)
+
+## The colossal legacy
+
+- **Machine translation**: surpassed classical statistical systems that had dominated for decades
+- **Self-attention**: when a sequence applies attention to itself, you get the foundation of Transformers
+- **Multi-domain attention**: spatial attention in computer vision, graph attention on graphs
+- **Multimodal**: cross-attention between text and images in CLIP, DALL-E, and generation models
+
+<Callout type="info" title="The paradigm shift">
+Before attention: "compress the entire input into a single vector, then generate from that summary". After attention: "consult the source directly at each step, focusing on what's relevant". This is a fundamental paradigm shift: from blind compression to selective access. That's why all modern models use attention in one form or another.
+</Callout>
+
+## Final summary
+
+Seq2seq = an encoder that understands the source + a decoder that generates the target. The problem: everything passes through a single vector. Attention solves this by letting the decoder selectively look at the encoder at each step. Bahdanau invented it with additive attention, Luong simplified it with dot-product, and the Transformer generalized it into self-attention. It's the fundamental building block of everything that transforms sequences today: translation, summarization, dialogue, code generation.

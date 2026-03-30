@@ -1,0 +1,110 @@
+---
+title: "Batch API"
+description: "Asynchronous batch processing with the Mistral API: cost optimization, high-volume operations, and usage patterns for batch processing."
+---
+
+
+
+## Batch API: High-Volume Processing, Not in a Rush
+
+You have 100,000 documents to classify. In real time, each request is expensive and you're limited in throughput. The **Batch API** is the solution: you send a file containing all your requests, wait a few hours, and retrieve the results with a **25 to 50% discount on costs**.
+
+It's the same model, the same response quality, but in asynchronous mode and cheaper. In exchange, you accept a delay of a few hours instead of a few seconds.
+
+### Real-Time vs Batch: Two Complementary Modes
+
+**Standard API (real-time)**:
+- Response in seconds
+- Standard cost per token
+- Subject to rate limits (number of requests per minute)
+- Ideal for: chatbots, interactive interfaces, applications where the user waits for a response
+
+**Batch API**:
+- Response in a few hours (24h maximum guaranteed)
+- 25 to 50% cheaper per token
+- No practical rate limits (send tens of thousands of requests)
+- Ideal for: mass analysis, model evaluation, high-volume content generation
+
+The analogy: the standard API is like sending a package via express (fast, expensive). The Batch API is like standard shipping (slower, cheaper). The package arrives the same, just not at the same time.
+
+<Callout type="info" title={"The Economics of Batch in Numbers"}>
+100,000 real-time requests are expensive and take hours because of rate limits. In batch, you save 30 to 50% on token costs, and there are no rate limits to manage. For organizations processing millions of tokens per day, that represents thousands of euros in savings per month.
+</Callout>
+
+### How It Works in Practice
+
+The workflow is simple and linear:
+
+1. **Prepare a JSONL file**: each line of the file contains an independent request
+2. **Upload the file**: via the API or the Mistral console
+3. **Launch the batch**: the system returns a batch identifier
+4. **Wait**: processing takes a few hours (24h maximum guaranteed)
+5. **Retrieve the results**: a JSONL output file with all responses
+
+**JSONL format** (one request per line):
+
+```json
+{"custom_id": "req_001", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "mistral-small-latest", "messages": [{"role": "user", "content": "Summarize: ..."}]}}
+```
+
+The `custom_id` field is your identifier: it lets you match each response with the original request. Choose descriptive IDs ("invoice_12345", "support_ticket_678") to make result processing easier.
+
+### Real Use Cases Where Batch Excels
+
+**Mass classification**: you have 500,000 customer reviews to classify by sentiment and theme. In real time, it would take days and cost a fortune. In batch, it's processed in a few hours for a fraction of the cost.
+
+**Document summarization**: 10,000 news articles to summarize with title and key point extraction. Batch is the natural approach: the results aren't urgent, but the volume is significant.
+
+**Entity extraction**: 100,000 contracts from which you need to extract dates, amounts, party names. A repetitive and high-volume task, perfect for batch.
+
+**Translation**: 50,000 product listings to translate into 5 languages. The volume is enormous, the urgency is low. Batch cuts the cost in half.
+
+**Model evaluation**: you fine-tuned a model and want to test it on a set of 5,000 test cases. Submit everything in batch, analyze the results in bulk. It's more reliable and cheaper than manual unit tests.
+
+<Callout type="tip" title="A/B Prompt Comparison via Batch">
+Can't decide between two prompt phrasings? Prepare two JSONL files with the same 5,000 examples but different prompts. Submit both as batches. Compare the results systematically. It's much more rigorous than manually testing on a few cases.
+</Callout>
+
+### Batch Best Practices
+
+**Ideal batch sizes**: between 1,000 and 50,000 requests per batch.
+- Too small (under 100): you don't really benefit from the savings
+- Too large (over 100,000): wait time grows and if something goes wrong, you risk losing the entire batch
+
+**Error handling**: individual requests can fail within a batch (prompt too long, filtered content, etc.). The results file indicates the status of each request. Plan a mechanism to resubmit failures.
+
+**Idempotence**: design your pipeline to be idempotent, meaning reprocessing a batch should not create duplicates in your database. If the batch fails midway, you need to be able to relaunch without side effects.
+
+**Monitoring**: track the status of your batches via the API. Set up alerts if a batch exceeds the expected time. A stuck batch may indicate a system issue.
+
+### Detailed Comparison
+
+| Aspect | Real-time | Batch |
+|--------|-----------|-------|
+| Latency | Seconds | Hours |
+| Cost/token | Standard | 25-50% cheaper |
+| Optimal volume | 1-1000 req/min | 1000-100k+ req/batch |
+| Use case | Chat, interactive interfaces | Mass processing |
+| Rate limits | Yes (to manage) | No (practically) |
+| Results | Synchronous | Asynchronous |
+
+<Callout type="warning" title={"Batch Is NOT for Real-Time"}>
+The Batch API is not suitable for interactive applications (chatbots, real-time assistants). The delay is measured in hours, not seconds. For any interaction where a human is waiting for a response, use the standard API.
+</Callout>
+
+### Architecture of a Production Batch Pipeline
+
+A mature batch pipeline in production looks like this:
+
+1. **Collector**: accumulates requests over time (Redis queue, SQS, Kafka)
+2. **Assembler**: groups requests into optimally sized JSONL files (e.g., every 2 hours or every 10,000 items)
+3. **Submitter**: sends batches to the Mistral API and stores the IDs
+4. **Poller**: checks batch status periodically (every 5 minutes)
+5. **Processor**: retrieves completed results and processes them (parsing, validation)
+6. **Storage**: saves results to the database or data lake
+
+This kind of pipeline runs continuously and automatically processes incoming volumes without human intervention.
+
+---
+
+**The Batch API** is the cost-effective tool for high-volume processing. Same model, same quality, but 25 to 50% cheaper when urgency isn't a factor.

@@ -1,0 +1,224 @@
+---
+title: "BERT variants: RoBERTa, ALBERT, DeBERTa, DistilBERT"
+description: "Each variant improves BERT in a different way: training recipe, compression, attention. Understanding how to make progress in NLP."
+---
+
+## After BERT: the rush of variants
+
+After October 2018, it's a party. Everyone wants their own version of BERT. But four truly noteworthy variants taught us different lessons about how to build better language models.
+
+
+## RoBERTa: the secret recipe (or: BERT was poorly trained)
+
+### The humbling discovery
+
+**RoBERTa** (Robustly Optimized BERT Pretraining Approach, Facebook, 2019) does something weird: it **changes nothing** about BERT's architecture. Zero modifications. Same number of layers, same dimensions, everything identical.
+
+And yet: **it breaks BERT's records**.
+
+Why? Because BERT was **under-optimized**. The training choices were suboptimal. With a better recipe, same architecture = much better.
+
+### The 4 changes (and why)
+
+**1. NSP disappears**
+
+BERT had two training objectives: MLM (masked language modeling) and NSP (next sentence prediction). The RoBERTa authors showed that NSP contributed nothing -- worse, it introduced noise that degraded representations. By removing it, performance improves significantly.
+
+**2. Dynamic vs static masking**
+
+BERT masked tokens **once** at the start of training, then reused the same masking at every epoch. RoBERTa changes the masking **at every epoch**: the model sees the same sentences but with different masked words each pass. Result: the model sees 10 times more variations, producing more robust representations.
+
+**3. Much more data**
+
+BERT was trained on 16 GB of text (BookCorpus + Wikipedia). RoBERTa uses 160 GB by adding CC-News, OpenWebText, and Reddit data -- 10 times more. Performance follows scaling laws: more data = better model, predictably.
+
+**4. More aggressive training**
+
+RoBERTa uses batches 8 times larger (2,560 instead of 256) to better exploit available compute, and trains for more steps for more complete convergence.
+- Longer training on the same data -> "compression" via resampling
+
+### The lesson
+
+It's humbling: the best improvements don't come from new ideas. They come from **doing the basics better**. Watch out for papers that start with "we change one small thing and it works!" -- often it's just better baseline training.
+
+**Result**: RoBERTa reaches ~88% on GLUE (vs 81% for BERT). A huge gap. It remains one of the best encoders to this day.
+
+
+
+<Callout type="paper" title={"The importance of ablations"}>
+RoBERTa tests **each** change separately: data, masking, batch size, etc. That's called an ablation study. It's boring, but **that's how you truly learn** what matters. Too many papers throw in "everything plus the kitchen sink" all at once.
+</Callout>
+
+## ALBERT: intelligent compression
+
+### The problem: BERT is huge
+
+BERT-large = 340 million parameters. That's 400 MB to load in memory. It doesn't fit:
+- On a phone (typically 2-4 GB of free RAM)
+- Barely on a small GPU (8 GB of VRAM)
+- On edge devices: impossible
+
+**ALBERT** (A Lite BERT, Google 2020) says: "We can do better. Drastically."
+
+### Technique 1: factorized embeddings (the invisible waste)
+
+In BERT, the **embedding table** (which transforms tokens into vectors) has the same dimensions as the hidden layers: 30,000 words x 768 dimensions = 23 million parameters!
+
+But the embedding sees no context. It's just a lookup table. Why use 768 dimensions? It's pure waste.
+
+ALBERT cleverly decouples:
+- Small embedding (128 dimensions)
+- Linear projection from 128 -> 768 dimensions
+
+Result: 23M -> 4M parameters just for embeddings. 80% less. Zero performance loss (because there was nothing to lose).
+
+### Technique 2: parameter sharing (the real trick)
+
+Here, ALBERT does something counter-intuitive: **all 12 Transformer layers share exactly the same weights**.
+
+It's as if you applied the same "block" (self-attention + MLP) 12 times in a row. Instead of 12 x 768 dimensions x layers = 300M params, you have just 1 x version.
+
+| Model | Layers | Parameters |
+|---|---|---|
+| BERT-large | 12 distinct layers | 340M params |
+| ALBERT | 1 layer reused 12 times | 23M params |
+
+**ALBERT-xxlarge**: 223 million parameters but with depth equivalent to BERT-large.
+
+Trade-off: inference remains slow (still 12 layers to compute), but storage and memory = tiny. Perfect if you can keep a model running 24/7, but not if you need to copy it a thousand times.
+
+### SOP: learning when NSP fails
+
+ALBERT replaces the NSP objective (which, as a reminder, doesn't work well) with **SOP** (Sentence Order Prediction):
+
+Instead of asking "Are these two sentences consecutive?", ask: "Are these two sentences in the right order?"
+
+It's harder (not just "is it consecutive?" but "is it in the right order?"). Result: stronger learning signal, better performance.
+
+<Callout type="tip" title="Parameters vs compute">
+ALBERT drastically reduces parameters (storage/memory) but keeps compute similar (inference). Sometimes you need the first, not the second. Important to distinguish.
+</Callout>
+
+## DeBERTa: attention becomes surgical
+
+### The observation
+
+**DeBERTa** (Decoding-enhanced BERT, Microsoft 2021) notices something: in standard BERT, **content** (what a word means) and **position** (where it is in the sentence) get mixed in attention. Why not separate them?
+
+It's subtle, but logical. "Cat" has a meaning ("feline"), independent of its position. "At distance 3" is a distance concept, independent of the word. Why add them together and mix them?
+
+### Disentangled attention: the solution
+
+Instead of having **a single vector per token** that you carry everywhere, DeBERTa has **two**:
+
+- **Content vector**: represents the word's meaning ("cat" = [felinity, smallness, domesticity])
+- **Position vector**: represents the relative position ("3 positions to the left" = [0, 0, 0, -1, ...])
+
+Now, in the attention computation, DeBERTa decomposes the score:
+
+$$
+\text{Score}(i \to j) = \underbrace{C_i \cdot C_j}_{\text{meaning vs meaning}} + \underbrace{C_i \cdot P_j}_{\text{meaning vs distance}} + \underbrace{P_i \cdot C_j}_{\text{distance vs meaning}}
+$$
+
+Rather than BERT's standard formula:
+
+$$
+\text{Score} = (C_i + P_i) \cdot (C_j + P_j)
+$$
+
+### Why is it better?
+
+Example: "The [token_j] sleeps far away". [token_j] is 3 positions away.
+
+- Token_j attracts attention through meaning (it's an animal, as "sleeps" attracts animals)
+- Token_j attracts attention through distance (close, within the "local window" of the sentence)
+
+Both signals are important but **different**. Modeling them separately allows DeBERTa to precisely weigh "I'm interested in meaning" vs. "I'm interested in proximity." BERT blurs the two.
+
+### The result
+
+DeBERTa **surpassed human performance** on SuperGLUE (January 2021). It remained the best encoder for a long time. The lesson: small architectural refinements (even counter-intuitive ones) can pay off enormously.
+
+<Callout type="paper" title={"Architectures aren't 'converged'"}>
+Even beyond BERT, there's room for improvement. Fine tweaks to attention, positional encoding, etc. can double performance. It's a reminder that model design isn't 'solved'.
+</Callout>
+
+## DistilBERT: shining in deployment
+
+### The realistic problem
+
+BERT-base = 110 million parameters = 400 MB file. That's heavy for:
+- Mobile apps (3G network, limited battery)
+- Edge devices (routers, watches, cars)
+- Servers under load (need to serve 1,000 requests/sec, each BERT adds latency)
+
+When you have millions of users, 400 MB x 1 million instances = 400 TB of memory. Extremely costly.
+
+### The solution: distillation (learning from the best)
+
+**DistilBERT** (Hugging Face, 2019) uses a technique called **knowledge distillation**.
+
+Idea: take a large model (teacher = BERT), train a small model (student) to imitate it.
+
+The trick: the student doesn't just copy the **hard answers** (the predicted class). It learns the teacher's **complete probabilities**. Classic example with binary classification (spam / not spam):
+
+| Source | Prediction |
+|---|---|
+| BERT (teacher) | 78% spam, 22% legit |
+| Hard answer (argmax) | SPAM |
+| DistilBERT (student) learns | "BERT isn't 100% sure. It says 78%." |
+
+These **soft probabilities** contain precious information. BERT hesitates between "cat" and "dog"? That's normal (close concepts), and DistilBERT learns that hesitation. It creates a more nuanced model, not just frozen answers.
+
+**In technical terms**: instead of the standard objective (hard classification), DistilBERT minimizes the KL divergence (Kullback-Leibler, a measure of distance between probability distributions) between BERT's distributions and DistilBERT's.
+
+### Practical results
+
+- **6 layers** instead of 12 (2x less deep)
+- **66M parameters** instead of 110M (-40%)
+- **60% faster** at inference
+- **97% of BERT's performance** (almost no loss)
+
+| Model | Size | Latency | Notes |
+|---|---|---|---|
+| BERT | 400 MB | 40 ms/request | Reference |
+| DistilBERT | 240 MB | 16 ms/request | -40% memory, -60% latency, -3% performance |
+
+That's the "sweet spot" for industrial deployment.
+
+### Distillation: a universal technique
+
+The concept works for any model:
+- **TinyBERT**: distills BERT even more aggressively (4 layers)
+- **Student-Teacher** for GPT and Claude
+- **Model compression** standard in industry
+
+<Callout type="info" title="When to use distillation">
+Use DistilBERT when: latency/memory are critical (mobile, edge, high-volume serving), and you tolerate 3-5% performance loss. For tasks where 99% accuracy vs 97% = serious impact (medical diagnosis), use full-sized BERT. Choose the right tool for the context.
+</Callout>
+
+## Summary table
+
+| Model | Innovation | Parameters | Performance vs BERT |
+|---|---|---|---|
+| RoBERTa | Training recipe | 355M | Superior |
+| ALBERT | Factorization + sharing | 12M (xxlarge) | Equivalent |
+| DeBERTa | Disentangled attention | 390M | Well superior |
+| DistilBERT | Distillation | 66M | 97% of BERT |
+
+## Why this matters
+
+Each variant teaches a completely different lesson:
+
+- **RoBERTa**: training better (recipe, data, patience) beats architectural innovations
+- **ALBERT**: you can drastically compress through factorization and parameter sharing
+- **DeBERTa**: fine architectural details (disentangling content/position) pay off enormously
+- **DistilBERT**: you can compress via distillation and keep 97% of performance
+
+These four lessons form the **toolkit for optimizing modern models**. Even today, when you want to deploy a model:
+- Look at RoBERTa's techniques (how to train well)
+- Look at ALBERT (can we compress?)
+- Look at DeBERTa (can we refine the architecture?)
+- Look at DistilBERT (can we distill?)
+
+Decoder-only LLMs (GPT, Claude) now dominate for generation. But for **targeted comprehension** (classification, extraction, similarity), BERT encoders remain the champions. And these optimizations continue to apply.

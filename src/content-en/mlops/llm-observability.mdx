@@ -1,0 +1,149 @@
+---
+title: "LLM Observability: LangSmith, Arize, Langfuse"
+description: "Understand what your LLM applications are doing: tracing, metrics, debugging. Observe to optimize."
+---
+
+## Why LLM Observability Is Different from Classic Monitoring
+
+LLM applications are not standard web services. They're **complex chains**: document retrieval (RAG), prompt construction, LLM call, response parsing, tool calls, and potentially several iterations of all that. When a response is bad, the problem can come from any link in the chain.
+
+**LLM observability** goes well beyond traditional monitoring (is the service responding? what's the latency?). It lets you **understand the content** of each step: which documents were retrieved by the RAG? Did the prompt sent to the LLM contain the right information? How many tokens were consumed? Is the response relevant to the provided context?
+
+It's the difference between knowing your car is running (monitoring) and understanding why it's consuming too much fuel or taking the wrong route (observability).
+
+<Callout type="info" title={"The three pillars of LLM observability"}>
+1. **Tracing**: follow the complete path of a request through all components
+2. **Metrics**: quantitatively measure performance (latency, costs, tokens, error rate)
+3. **Evaluation**: judge response quality automatically (LLM-as-Judge) or via human feedback
+</Callout>
+
+## Tracing: X-Raying Every Request
+
+A **trace** captures the complete execution of a user request, from start to finish. It's composed of **spans** (steps) organized hierarchically:
+
+- **User request** (root span)
+  - **Retrieval** span: document search in the vector store
+  - **Prompt building** span: prompt construction with documents and history
+  - **LLM call** span: model call (the most time-expensive)
+  - **Parsing** span: extracting information from the response
+  - **Tool call** span: call to an external tool (API, database)
+
+### What Each Span Captures
+
+- **Input/Output**: the data entering and leaving each step. For an LLM span, that's the complete prompt and the complete response.
+- **Latency**: execution time of each step. Essential for identifying bottlenecks.
+- **Metadata**: model used, temperature, max_tokens, and any relevant parameter
+- **Tokens**: number of input and output tokens. This is what determines cost.
+- **Estimated cost**: calculated from the number of tokens and the model's pricing
+- **Errors**: stack traces, error messages, HTTP status codes
+
+### The Questions Tracing Answers
+
+Tracing transforms vague problems into precise diagnostics:
+
+- "Why is the response bad?" &rarr; The retrieved RAG documents were irrelevant (the retrieval failed, not the LLM)
+- "Why is the latency high?" &rarr; The LLM call takes 5 seconds because the prompt is 15,000 tokens
+- "Why are costs exploding?" &rarr; The system prompt was modified and now generates 10x more tokens
+- "Why is the model hallucinating?" &rarr; The RAG context doesn't contain the requested information, the LLM is making things up
+
+Without tracing, each of these problems requires hours of debugging. With tracing, the cause is visible in a few clicks.
+
+## LangSmith: LangChain's Complete Platform
+
+**LangSmith** is the most complete observability platform for LLM applications. Developed by the LangChain team, it offers tracing, evaluation, monitoring, and prompt management.
+
+### Production Tracing
+
+- **Auto-instrumentation**: if you use LangChain, everything is traced automatically with no extra code
+- **Universal SDK**: instrument any application (no need for LangChain) via the Python/JS SDK
+- **Hierarchical visualization**: navigate through spans with the full content of each step
+- **Advanced search**: filter by metadata, latency, costs, user feedback, tags
+
+### The Traces-to-Evaluation Workflow
+
+This is the most powerful LangSmith pattern:
+1. Identify a problematic production trace (incorrect response, hallucination)
+2. Add it to an **evaluation dataset** with the expected correction
+3. Use this dataset to test future versions of your prompt or pipeline
+4. Production bugs automatically become test cases
+
+Over time, you build an evaluation dataset that reflects your application's real problems, not artificial cases.
+
+<Callout type="tip" title={"Tracing is continuous debugging in production"}>
+Don't think of tracing as mere monitoring. It's a permanent debugging tool. Every trace is a data source for improving your system. The best LLM teams spend time every week analyzing problematic traces and extracting improvements from them.
+</Callout>
+
+## Arize AI: Embeddings and RAG Specialist
+
+**Arize AI** is an ML/LLM observability platform with unique strengths in embeddings analysis.
+
+### What Sets Arize Apart
+
+- **Embeddings analysis**: UMAP/t-SNE visualization of query and document embeddings. You literally see clusters of similar queries and identify those that don't match well with documents.
+- **RAG analysis**: automatic evaluation of retrieved document relevance, with detailed per-query metrics
+- **Drift detection**: detects changes in embedding distributions over time. If user queries evolve, your RAG needs to adapt.
+
+### Phoenix (Open Source)
+
+Arize maintains **Phoenix**, an open source tool for local LLM observability. It offers tracing, evaluation, embeddings analysis, and a web interface. It's an excellent starting point for teams that want observability without a SaaS commitment.
+
+<Callout type="paper" title={"Embeddings analysis for debugging RAG"}>
+Projecting query and document embeddings in 2D visually reveals retrieval problems. You see clusters of user queries with no nearby documents in the vector store: these are gaps in your knowledge base. You see documents that are never matched: these are useless content. It's a powerful diagnostic tool that metrics alone can't offer.
+</Callout>
+
+## Langfuse: The Open Source Alternative
+
+**Langfuse** is an **open source** LLM observability platform that gained popularity thanks to its simplicity and transparent model.
+
+### Key Features
+
+- **Tracing**: via Python/JS SDK or native integrations (LangChain, LlamaIndex, OpenAI SDK)
+- **Scores**: flexible system to attach evaluations to traces (automatic or manual)
+- **Prompt management**: prompt versioning and deployment directly from the interface
+- **Datasets**: build evaluation datasets from production traces
+- **Analytics**: cost, latency, quality dashboards, with filters and aggregations
+
+### The Open Source Advantage
+
+- **Self-hosted**: deploy on your own infrastructure (Docker, Kubernetes). Your data never leaves your servers.
+- **Full control**: traces containing sensitive data stay with you, not with a third party
+- **Extensible**: open API for integrating with your internal tools
+
+## Platform Comparison
+
+| Criterion | LangSmith | Arize AI | Langfuse |
+|---|---|---|---|
+| **Type** | Proprietary SaaS | SaaS + Phoenix OSS | Open source + Cloud |
+| **Tracing** | Excellent | Very good | Very good |
+| **Evaluation** | Advanced (datasets, auto) | Advanced (RAG focus) | Good |
+| **Embeddings analysis** | No | Yes, unique strength | No |
+| **Prompt management** | Yes | No | Yes |
+| **Self-hosted** | No | Phoenix (limited) | Yes, fully |
+| **Cost** | $$$ | $$$ | Free (self-hosted) |
+
+<Callout type="warning" title="Traces contain sensitive data">
+Traces capture your complete prompts and LLM responses. They potentially contain PII (users' personal data), confidential business information, or regulated data. Before sending your traces to a cloud SaaS, verify GDPR compliance and your security policies. Self-hosted solutions (Langfuse, Phoenix) offer full control over data.
+</Callout>
+
+## Practical Implementation: Where to Start
+
+### What to Trace at Minimum
+
+- Every **LLM call**: model used, tokens consumed, latency, estimated cost
+- Every **retrieval**: search query, returned documents, similarity scores
+- The **inputs/outputs** of each component in the chain
+- **User feedback**: thumbs up/down, manual corrections, reports
+
+### Key Metrics to Monitor
+
+- **Latency**: P50, P95, P99 (not just the average, outliers matter)
+- **Costs**: per request, per user, per day. With alerts on anomalies.
+- **Quality**: average score of automatic evaluations (LLM-as-Judge) and user feedback
+- **Error rate**: percentage of requests that fail technically
+- **Retrieval relevance**: similarity scores of retrieved RAG documents
+
+### Non-Blocking Architecture
+
+Tracing must be **transparent to the user**. Sending traces must never slow down the application. Modern SDKs use asynchronous sends with buffering: traces are accumulated in memory and sent in batches in the background. If the observability backend goes down, the application continues to function normally -- traces are simply lost.
+
+LLM observability is classic monitoring adapted to the specifics of language-model-based applications. It's an investment that pays for itself from the first analyzed traces: every bug found through tracing is a bug that wouldn't have been found otherwise.

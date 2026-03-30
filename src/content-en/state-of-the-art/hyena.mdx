@@ -1,0 +1,118 @@
+---
+title: "Hyena: Long Convolutions"
+description: "Exploring Hyena and its implicit long convolutions as a sub-quadratic alternative to attention for sequence modeling."
+---
+
+## The DNA problem
+
+Stanford's Hazy Research team asked a very concrete question: can you analyze entire genomic sequences with language models?
+
+An average human gene is ~27,000 bases. A complete chromosome has several hundred million. Standard attention with O(L^2) complexity is completely out of the question at this scale --- for a 100 million base chromosome, you'd need to compute 10^16 pairwise interactions. Even SSMs and standard convolutions struggle at this size.
+
+Their answer: **Hyena**, a mechanism based on convolutions that cover the entire sequence --- not just a few neighboring tokens like classic convolutions --- while remaining sub-quadratic in complexity.
+
+<ArxivLink id="2302.10866" title="Hyena Hierarchy: Towards Larger Convolutional Language Models" />
+
+
+
+## Convolutions: filters that read the entire sequence
+
+### Short convolutions vs long convolutions
+
+In NLP, classic convolutions use **short kernels**: a filter that looks at 3, 5, maybe 7 tokens at a time. It's like looking at the world through a narrow slit --- very effective for local patterns (n-grams, syntactic motifs), but unable to capture a relationship between two words separated by 1,000 tokens.
+
+**Attention** solves this problem by directly comparing every token to all others --- a complete panoramic view. Powerful, but O(L^2) in cost.
+
+Hyena proposes a third way: convolutions whose **kernel covers the entire sequence**. A kernel of size L can theoretically encode a dependency between any two tokens, no matter how far apart. And thanks to FFT, such a convolution is computed in **O(L log L)** --- much less than quadratic attention.
+
+<Callout type="info" title="FFT: the Swiss army knife of sequential computation">
+The Fast Fourier Transform (FFT) is an algorithm that computes the convolution between two sequences of length L in O(L log L) instead of O(L^2). For L = 1,000, that's 100 times fewer operations. For L = 1,000,000 (a chromosome), it's 50,000 times fewer. That's why any architecture targeting very long sequences uses FFT at some point --- it's the mathematical tool that makes scaling possible.
+</Callout>
+
+## The Hyena operator: convolutions + hierarchical gating
+
+### The basic structure
+
+The Hyena operator of order N combines N long convolutions with interleaved **multiplicative gates**. It's a systematic alternation: convolve (propagate information along the sequence), then gate (filter what's relevant), then convolve again, then gate again.
+
+$$
+y = x_1 \odot \bigl(h_1 * \bigl(x_2 \odot \bigl(h_2 * \cdots \bigl(x_N \odot (h_N * v)\bigr) \cdots\bigr)\bigr)\bigr)
+$$
+
+In this formula, the vectors `v, x_1, ..., x_N` are linear projections of the input, meaning different "views" of the same sequence. The filters `h_1, ..., h_N` are long convolutions of size L. The symbol `odot` denotes element-wise multiplication (this is the *gating* operation, which selectively filters information), while `*` denotes convolution, computed efficiently via FFT.
+
+To read the formula, start from the inside: `h_N * v` propagates information along the sequence, `x_N odot` selectively filters this information, then `h_(N-1) *` propagates again, `x_(N-1) odot` filters again, and so on. Each layer of this hierarchy refines and enriches the representation.
+
+### Why gating is crucial
+
+Without gating, stacking convolutions would be useless. The reason is mathematical: linear convolutions are composable. `h1 * (h2 * x)` is strictly equivalent to `(h1 * h2) * x` --- a single larger convolution. Stacking 10 linear convolutions with nothing between them amounts to having just one.
+
+Multiplicative gating `x odot y` breaks this linearity and introduces **non-linear interactions** between sequence positions. That's what gives Hyena expressiveness potentially close to attention --- the ability to combine information in a contextually adapted way.
+
+<Callout type="tip" title={"Analogy with attention"}>
+An order-2 Hyena can be interpreted as a form of approximate attention: the `v` projection plays the role of values, the `h *` convolution propagates information contextually (analogous to attention scores), and the `x odot` gating plays the role of filtering by queries. Without all three components together, you don't capture complex interactions between positions --- it's their combination that creates the expressiveness.
+</Callout>
+
+## Implicit convolutions: a filter without storing its weights
+
+A convolutional filter of size L covering the entire sequence would have L parameters --- potentially millions. Storing all of that in memory would be expensive and inflexible if L changes between training and inference. Hyena uses an elegant solution: **implicit convolutions** where the filters are **generated on demand** by a small neural network.
+
+$$
+h(t) = \text{Window}(t) \cdot \text{MLP}_\phi(t)
+$$
+
+A small MLP (2-3 hidden layers) takes position `t` as input and produces the filter value at that position. The `Window(t)` function --- typically an exponential decay --- ensures that the filter naturally attenuates with distance, encoding the inductive bias that nearby interactions matter more than distant ones.
+
+<Callout type="paper" title="Advantages of implicit filters">
+Implicit filters have a remarkable property: they generate kernels of **arbitrary length** with a fixed number of parameters. The MLP has exactly the same size whether the sequence is 1,000 or 100,000 tokens --- only the input changes, not the network. Furthermore, the natural regularity of an MLP "smooths" the filter, avoiding overfitting to noisy patterns. It's elegant and economical.
+</Callout>
+
+## Implementation via FFT
+
+Each long convolution follows the standard FFT protocol in four steps:
+
+1. $\hat{h} = \text{FFT}(h)$ -- transform the filter to frequency domain
+2. $\hat{x} = \text{FFT}(x)$ -- transform the input to frequency domain
+3. $\hat{y} = \hat{h} \odot \hat{x}$ -- point-wise multiplication (convolution in frequency domain)
+4. $y = \text{IFFT}(\hat{y})$ -- back to time domain
+
+The deep insight: convolution is expensive in the time domain (O(L^2)), but transforms into simple multiplication in the frequency domain. FFT makes the round trip in O(L log L).
+
+Total complexity for an order-N Hyena operator:
+
+| Operation | Complexity |
+|-----------|------------|
+| Linear projections | O(L * d^2) |
+| Convolutions via FFT | O(N * L * log(L) * d) |
+| Gating | O(N * L * d) |
+| Total | O(L * d^2 + N * L * log(L) * d) |
+
+Compared to standard attention O(L^2 * d), Hyena is advantageous when the sequence is much longer than the hidden dimension --- typically for genomics (L = 100K+) or long-duration audio (L = 500K+).
+
+## Results and limitations
+
+### Where Hyena excels
+
+On standard language modeling benchmarks (~1B parameters), Hyena is competitive with same-size Transformers. The perplexity gap is small on common tasks --- proof that long convolutions with gating are a viable alternative.
+
+On **very long sequences** (genomics, long-duration audio, full document analysis), Hyena truly shines. Its sub-quadratic complexity allows processing sequences of hundreds of thousands of tokens that Transformers simply can't reach without drastic approximations.
+
+<Callout type="warning" title="Practical limitations of Hyena">
+Despite its theoretical advantages, Hyena has concrete practical limits. FFTs are not as well optimized on modern GPUs as matrix multiplications (matmul) --- NVIDIA GPU tensor cores are designed for matmul, not FFT. The theoretical complexity gap doesn't always translate into real speed gains on current-length sequences (< 10K tokens). Moreover, Hyena hasn't been validated beyond ~1B parameters for language. Mamba and selective SSMs have since captured more attention in the community, particularly thanks to better hardware implementations.
+</Callout>
+
+## Variants and extensions
+
+**H3 (Hungry Hungry Hippos)**: Hyena's direct predecessor. Combines two SSM layers with a multiplicative gate between them. H3 established the fundamental principle: gating between sequential operators drastically increases expressiveness, transforming individually weak components into a powerful ensemble.
+
+**StripedHyena** (Together AI): a hybrid model alternating Hyena layers with standard attention layers. Competitive at 7B parameters, StripedHyena demonstrates that the hybrid principle (efficient layers + a few attention layers) works just as well with long convolutions as with SSMs.
+
+**Hyena for vision**: the architecture has been adapted for Vision Transformers, where 2D long convolutions can replace self-attention on high-resolution images --- allowing processing of much larger images without quadratic cost.
+
+## Hyena's place in the ecosystem
+
+Hyena played an important trailblazer role in exploring alternatives to attention. It proved that long convolutions with hierarchical gating are a viable and performant approach --- not just a theoretical curiosity. The ideas of implicit filters (generating the kernel on the fly with a small MLP) and hierarchical gating (alternating convolutions and gates for expressiveness) continue to influence modern architectures.
+
+<Callout type="info" title="Position within the sub-quadratic family">
+Hyena belongs to the family of models based on long convolutions, alongside S4 (which produces its convolutions via state equations) and RWKV (based on linear recurrent attention). All three share the goal of sub-quadratic processing but arrive there via different paths: Hyena uses explicit convolutions via FFT, S4 uses implicit convolutions derived from state equations, and RWKV uses exponential-decay recurrence. This diversity of approaches nurtured a rich research program that culminated in Mamba and hybrid architectures.
+</Callout>

@@ -1,0 +1,139 @@
+---
+title: "Monitoring and Data Drift: When Things Break Silently"
+description: "Your model is tanking in production and nobody notices. Detect data drift before your users do."
+---
+
+## The Model That Slowly Dies
+
+You deploy an excellent model. The metrics are looking great. Everyone's happy. Then, week after week, users start complaining. Accuracy has collapsed. But nobody noticed because there was no monitoring.
+
+This is **data drift**: the distribution of production data has changed compared to the training data. Your model was trained on one world, but it's now operating in a different one. It's like a student who studied for the high school math final and ends up at a college exam: the subject has evolved, but they stayed at the same level.
+
+According to internal studies at Google, models lose on average 1-2% of performance per month in production. Without regular retraining, that's a 10-20% drop in one year. Silently.
+
+<Callout type="info" title="The real cost of undetected drift">
+If you discover the problem through user complaints, it's already too late. The damage is done: lost trust, lost revenue, reputational harm. Detecting drift **before** users do is the entire purpose of ML monitoring. It's the difference between preventing a fire and putting out a fire.
+</Callout>
+
+## Types of Drift
+
+### Data Drift (Covariate Shift)
+
+**Data drift** (or covariate shift) refers to a change in the distribution of **input data** (features) between training and production. The relationship between features and the target remains the same, but the features themselves change.
+
+**Concrete examples**:
+- A real estate pricing model trained on Paris data suddenly receives requests for rural properties: the surfaces, prices per square meter, and characteristics are completely different
+- Users of an e-commerce site change demographics over time (younger, more international)
+- An IoT sensor gradually falls out of calibration, and measurements drift by a few percent each month
+
+### Concept Drift
+
+**Concept drift** is more insidious: it's a change in the **relationship between features and the target**. Even if the input data has the same distribution, the correct answer has changed.
+
+**Concrete examples**:
+- A spam detection model: spammers constantly adapt their techniques. What was spam yesterday doesn't look like today's spam.
+- A demand forecasting model: purchasing behavior changes with seasons, trends, economic crises
+- A credit scoring model: solvency criteria evolve with the economic climate. During a crisis, the same income no longer guarantees the same repayment ability.
+
+<Callout type="paper" title="The crucial distinction between data drift and concept drift">
+Data drift and concept drift require different responses. Data drift can often be resolved by retraining on more recent data (the model learns the new distribution). Concept drift may require a change in features, architecture, or even problem formulation. Identifying the type of drift is the first step toward effective correction. It's like medicine: the right diagnosis before the right treatment.
+</Callout>
+
+### Prediction Drift
+
+**Prediction drift** is a change in the distribution of the model's **predictions**. It's often a visible symptom of underlying data drift or concept drift. If a binary classification model that typically predicted 50/50 suddenly starts predicting 70% positives, something has changed in the data or the concept. It's the easiest alarm signal to detect.
+
+### Label Drift (Prior Probability Shift)
+
+**Label drift** is a change in the distribution of the **target variable** itself. For example, the proportion of fraudulent transactions goes from 1% to 3%. The model, trained on a 1% base, is poorly calibrated for a 3% reality.
+
+## Detecting Drift
+
+### Statistical Methods
+
+Several statistical tests allow you to quantify drift:
+
+- **Kolmogorov-Smirnov (KS) test**: tests whether two continuous distributions are statistically different. Simple, interpretable, and widely used. Works well for numerical features.
+- **Chi-squared test**: the equivalent for categorical variables. Tests whether observed frequencies differ significantly from reference frequencies.
+- **Population Stability Index (PSI)**: measures the shift between two distributions. PSI < 0.1 = stable, 0.1-0.2 = moderate change, > 0.2 = significant drift. It's the most used metric in production.
+- **Jensen-Shannon Divergence**: a symmetric measure of distance between two distributions, bounded between 0 and 1. Easier to interpret than KL-divergence.
+- **Wasserstein Distance**: the "earth mover's" distance between distributions. Intuitively, it's the minimum amount of "earth" to move to transform one distribution into another. Particularly sensitive to location shifts.
+
+### Comparison Windows
+
+Drift is detected by comparing two data windows:
+- **Reference vs Production**: compare current production data with the training dataset. It's the most natural comparison.
+- **Sliding window**: compare the last week with the previous week. Detects gradual changes.
+- **Page-Hinkley**: a sequential test that detects mean changes over time. Suited for real-time monitoring.
+
+<Callout type="tip" title="Choosing the right window size">
+The detection window size is a classic tradeoff: a window that's too small generates false positives (statistical noise is confused with drift), a window that's too large detects drift too late (the damage is already done). In practice, start by comparing daily or weekly windows with the reference data. Then adjust based on the false positive rate.
+</Callout>
+
+## Monitoring Metrics
+
+### Data Metrics (Always Available)
+
+- **Feature distributions**: histograms, quantiles, mean, standard deviation
+- **Missing values**: percentage of nulls per feature (a sudden increase indicates an upstream problem)
+- **Cardinality**: number of unique values for categorical variables (a new category not seen during training?)
+- **Correlations**: does the correlation matrix between features remain stable?
+
+### Model Metrics (Always Available)
+
+- **Prediction distribution**: breakdown of predicted scores or classes
+- **Confidence**: distribution of confidence scores (softmax). If the model suddenly becomes very uncertain on many requests, that's a signal.
+- **Latency**: model response time (p50, p95, p99)
+- **Throughput**: number of predictions per second
+- **Error rate**: percentage of failed requests (timeouts, server errors)
+
+### Performance Metrics (When Labels Are Available)
+
+- **Accuracy, Precision, Recall, F1**: standard classification metrics
+- **MAE, RMSE**: regression metrics
+- **AUC-ROC**: model discrimination capability
+- **Calibration**: do the predicted probabilities correspond to actual frequencies? A model that predicts 80% probability should be right 80% of the time.
+
+<Callout type="warning" title="The big challenge: delayed labels">
+In production, labels (ground truth) are often not immediately available. For a churn prediction model, you don't know if the customer actually churned until 30 days later. For a loan default model, you have to wait for the loan maturity. Without labels, you can only monitor input data and predictions, not actual performance. That's why proxy metrics (confidence, prediction distribution) are so important.
+</Callout>
+
+## Monitoring Tools
+
+### Evidently AI
+
+**Evidently** is an open source Python library, the most popular for ML monitoring:
+- Rich drift report generation (interactive HTML or JSON for automation)
+- Automated data and prediction quality tests (integrable into a CI/CD pipeline)
+- Tracking dashboards via Grafana
+- Free and self-hosted
+
+### NannyML
+
+**NannyML** specializes in a difficult problem: estimating model performance **without having labels**. It uses techniques like CBPE (Confidence-Based Performance Estimation) to estimate model accuracy from its confidence scores. This is particularly useful when labels arrive with weeks or months of delay.
+
+### Arize AI
+
+**Arize** is a comprehensive ML monitoring SaaS platform:
+- Automatic drift detection on all features
+- Root cause analysis: when performance degrades, Arize identifies which feature drifted
+- Embeddings drift for NLP and vision models (detects changes in vector space)
+- Integration with popular serving frameworks
+
+### WhyLabs
+
+**WhyLabs** offers lightweight monitoring based on statistical profiling:
+- Compact distribution profiles via the open source whylogs library (a few KB per profile, even for millions of rows)
+- Automatic alerts on detected anomalies
+- Integration with feature stores and data pipelines
+
+## Monitoring Strategy: Where to Start
+
+A complete ML monitoring strategy is built in layers:
+
+1. **Baseline**: establish reference distributions from training data. This is your comparison point.
+2. **Alerts**: configure thresholds on key metrics (PSI > 0.1, P99 latency > 200ms, error rate > 1%). Start wide, refine over time.
+3. **Dashboards**: visualize trends in real time. A dashboard that nobody looks at is useless: integrate it into your daily routine.
+4. **Escalation**: define clear procedures when drift is detected. Who gets alerted? What's the process? Automatic retraining, rollback, or manual investigation?
+5. **Feedback loop**: collect production labels as soon as possible to validate actual performance (and not just proxies)
+6. **Automation**: automatically trigger retraining when drift exceeds a threshold. That's the ultimate maturity level, but start with the previous steps first.

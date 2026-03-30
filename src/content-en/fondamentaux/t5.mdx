@@ -1,0 +1,205 @@
+---
+title: "T5: Text-to-Text Transfer Transformer"
+description: "T5 unifies all NLP tasks under a single format: transforming text into text. One model for all, span corruption, and a systematic study that changed research."
+---
+
+## The elegant idea: everything is text-to-text
+
+Imagine a single model that solves all these tasks:
+- **Sentiment**: read "Excellent movie!" and generate "positive"
+- **Translation**: read "Hello" and generate "Bonjour"
+- **Summarization**: read a 1,000-word article and generate 3 lines
+- **Sentence similarity**: read "Sentence A" and "Sentence B" and generate "0.95" (a numerical score, as text)
+- **Extraction**: read "Pierre lives in Paris" and generate "Pierre | Paris"
+
+Same architecture. Same training process. Zero task-specific component.
+
+**T5** (Text-to-Text Transfer Transformer, Google 2020) poses this simple and elegant idea: **all NLP tasks are just text-to-text transformations**. Classification? The model generates the label as a word. Translation? The model generates the translation. Summarization? The model generates the summary. Everything fits into the same mold.
+
+Before T5, each NLP (Natural Language Processing) task required a specialized "head": a classification layer for sentiment, a sequence layer for translation, a span layer for extraction. T5 eliminates all these heads and replaces them with a single decoder that generates text. Radically simple.
+
+<ArxivLink id="1910.10683" title="Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer" />
+
+### How it works in practice
+
+The key: a **text prefix** that indicates the task to perform, followed by the input text. The model reads everything and generates the answer:
+
+| Input | Output |
+|---|---|
+| `sentiment: Excellent movie!` | `positive` |
+| `translate English to French: Hello` | `Bonjour` |
+| `summarize: [1,000-word article]` | `[3-line summary]` |
+| `stsb: Sentence A \|\|\| Sentence B` | `3.8` (similarity on 0-5 scale) |
+
+The task is encoded **in the text**, not in the architecture. No switch, no special mode, no dedicated layer. Just a different prefix. It's this uniformity that makes T5 so elegant.
+
+<Callout type="tip" title={"Advantages of text-to-text unification"}>
+- **A single model** to train, deploy, and maintain (no need for N architectures for N tasks)
+- **Natural multi-task learning**: tasks are mixed during training, and the model learns to switch between them
+- **Flexibility**: adding a new task? Invent a new prefix, no need to modify the architecture
+- **Transfer**: a model trained on sentiment + translation + summarization generalizes better on each task than separate specialized models, because tasks reinforce each other
+</Callout>
+
+## Architecture: the hybrid encoder-decoder
+
+T5 uses the complete **encoder-decoder** architecture from the original Transformer (the one from the "Attention Is All You Need" paper), unlike BERT (encoder-only) or GPT (decoder-only):
+
+- **Encoder**: reads the input text with **bidirectional** attention (each word sees all others). It "understands" the complete context of the input and produces a rich representation.
+- **Decoder**: generates the output text token by token with **causal** attention (each word only sees previous words), plus **cross-attention** to the encoder. It "speaks" while constantly consulting the encoder's understanding.
+
+It's a natural division of labor:
+- **BERT** (encoder-only): excellent for understanding, but can't generate text
+- **GPT** (decoder-only): excellent for generating, but processes input and output in a single stream, without structured compression
+- **T5** (encoder-decoder): comprehension via the encoder + generation via the decoder. The best of both for structured transformation tasks.
+
+### The variants (and why sizes matter)
+
+| Variant | Parameters | Typical usage |
+|---|---|---|
+| T5-Small | 60M | Quick prototyping, laptop, little data |
+| T5-Base | 220M | Good performance/cost balance, consumer GPU |
+| T5-Large | 770M | State-of-the-art on benchmarks, pro GPU |
+| T5-11B | 11 billion | Maximum performance, requires multi-GPU |
+
+### Relative positional embeddings: the technical trick
+
+BERT and GPT use **absolute** position embeddings: each position (0, 1, 2, 3...) has its own learned vector. The problem: if the model is trained on 512-token sequences, it's never seen position 513 and doesn't know what to do with it.
+
+T5 uses **relative position embeddings**: instead of encoding "I'm at position 42," each attention head learns how to handle "the word at distance 1 from me" vs "the word at distance 5 from me." It's the relative distance between two words that matters, not their absolute position in the sequence.
+
+The concrete advantage: T5 can **generalize to longer sequences** than those seen during training. BERT trained on 512 tokens struggles if you give it 1,000. T5 handles this much better, because relative distances stay the same regardless of total length.
+
+<Callout type="info" title="Encoder-decoder vs decoder-only: when to choose what?">
+For **structured transformation** tasks (translation, summarization, extraction), encoder-decoder is more efficient. The encoder "compresses" the input into a dense representation, the decoder "decompresses" into output. It's like a compiler: parsing (encoder) then generation (decoder).
+
+For **universal flexibility** (conversation, free generation, reasoning), decoder-only wins. That's why GPT and conversational LLMs dominate, while T5 remains specialized on structured tasks.
+</Callout>
+
+## Technical corner: training via "span corruption"
+
+BERT masks **individual tokens** (one word at a time). T5 innovates by masking **entire spans** (contiguous sequences of words):
+
+| Step | Text |
+|---|---|
+| Original | "The black cat sleeps on the couch" |
+| Masked spans | "The `<extra_id_0>` sleeps on `<extra_id_1>`" |
+| Target to generate | "`<extra_id_0>` black cat `<extra_id_1>` the couch" |
+
+Each `<extra_id_0>`, `<extra_id_1>`, etc. is a unique special token (a "sentinel") that marks the location of a masked span. The model must reconstruct what's missing.
+
+### Why spans instead of individual tokens?
+
+1. **Shorter target and faster training**: predicting "black cat" (2 tokens in one block) is more compact than predicting each masked token separately with all its context. The target text is typically 4x shorter than the original text, which considerably speeds up training.
+
+2. **Semantic coherence**: masking "black cat" (a coherent concept) forces the model to **reason about groups of words**, not isolated words. This is more relevant for tasks like summarization or generation, where the model must produce coherent sentences, not just fill in blanks.
+
+3. **Closer to generation**: T5 is an encoder-decoder model designed to generate text. Masking spans and reconstructing them is much closer to the actual generation task than predicting an isolated word. Pre-training directly prepares the model for what it will do during fine-tuning.
+
+### The C4 corpus: the silent reference
+
+T5 is trained on **C4** (Colossal Clean Crawled Corpus): 750 GB of English text from Common Crawl, carefully filtered:
+- Duplicate removal (deduplication)
+- Removal of offensive content (basic heuristics)
+- Cleaning of raw HTML and technical artifacts
+
+C4 became an **essential reference** for LLM pre-training. Almost all large models (GPT-3, BLOOM, LLaMA, Llama 2) use C4 or derived corpora in their data mix.
+
+<Callout type="info" title="Quality vs size: T5's choice">
+Rather than 10 TB of raw web (enormous amounts of noise, duplicates, low-quality content), T5 chooses 750 GB of filtered web. Less but much better. The result: training that's more efficient than a 10x larger but unfiltered corpus. This lesson -- data quality trumps quantity -- has been validated many times since (Chinchilla, LLaMA, Phi).
+</Callout>
+
+## The real contribution: systematic ablations
+
+The T5 paper is important, but not primarily for the T5 model itself. Its true value is in the **systematic research** it conducts.
+
+The authors methodically test **dozens of training decisions**, one by one, isolating each variable:
+
+| Decision | Options tested |
+|---|---|
+| Architecture | Encoder-decoder (T5), Decoder-only (GPT-style), Prefix LM |
+| Pre-training objective | MLM (BERT-style), Span corruption, Denoising |
+| Span size | 3 words, 8 words, 15 words average |
+| Data volume | 10 GB, 100 GB, 750 GB |
+
+For each variable, they measure the precise impact on performance. This isn't "look at our cool idea!", it's "here's the measurable impact of each design choice." Main result: encoder-decoder architecture is better than decoder-only for transformation tasks, and span corruption beats individual token masking.
+
+### The lesson: scientific ablation
+
+This methodical approach ("ablation study") became the **standard** in serious NLP research. Rather than presenting a monolithic model and saying "it's better," you decompose each decision and measure its isolated effect. It revealed that many "innovations" are actually better data or better hyperparameters, not new architectures. The T5 paper changed NLP research culture toward more experimental rigor.
+
+## FLAN-T5: the super-model (instruction tuning)
+
+**FLAN-T5** (Google 2022) pushes T5 even further: you take T5 and fine-tune it on **hundreds of different NLP tasks**, but formulated as **natural instructions** rather than cryptic prefixes:
+
+> **Classic T5 input**: `sentiment: Excellent!`
+>
+> **FLAN-T5 input**: "Determine the sentiment of the following text. Reply with 'positive' or 'negative'. Text: Excellent restaurant!"
+>
+> **Output**: "positive"
+
+FLAN-T5 has seen hundreds of different instructions during training: translation ("Translate from French to English..."), summarization ("Summarize the following text in 3 sentences..."), Q&A ("Answer the following question..."), classification, extraction, logical reasoning.
+
+**The result**: FLAN-T5 generalizes remarkably well in **zero-shot**. You give it a completely new task (never seen during training) formulated as a natural instruction, and it understands and responds correctly most of the time. It's as if the model learned **the general pattern** of "how to interpret and execute an instruction," beyond the specific tasks seen during training.
+
+<Callout type="tip" title="Instruction tuning vs in-context learning">
+Two complementary approaches to adapt a model to new tasks:
+
+**Instruction Tuning** (FLAN-T5):
+- Fine-tune the model on many varied instructions
+- Expensive at training time, but the resulting model is very robust
+- Excellent zero-shot generalization (no examples needed in the prompt)
+
+**In-Context Learning** (GPT-3/4):
+- No fine-tuning, examples are provided directly in the prompt
+- Expensive in tokens (examples eat up context), sometimes less robust
+- Instant adaptation without retraining
+
+The two are complementary: FLAN-T5 for reliability and efficiency in production, a generalist LLM (GPT-4, Claude) for flexibility and on-the-fly adaptation.
+</Callout>
+
+## Encoder-decoder vs decoder-only: the strategic choice
+
+Two philosophies for LLMs, with distinct strengths and weaknesses:
+
+### T5 (encoder-decoder)
+**Strengths**:
+- Excellent for **transforming** text (translation, summarization, extraction)
+- The encoder understands the complete input before the decoder starts generating
+- More "targeted" generation: the decoder knows exactly what to produce
+
+**Weaknesses**:
+- Two modules = more complex to train at very large scale
+- Less flexible for free dialogue or open-ended generation
+- More structured architecture = less adaptable
+
+### GPT (decoder-only)
+**Strengths**:
+- Simple architecture: a single stack of layers, direct flow
+- Scales easily to 175B+ parameters
+- Flexible: does everything (classification, generation, summarization, dialogue) in a single mode
+
+**Weaknesses**:
+- Less efficient for structured transformations (translation)
+- The absence of separate encoding means less prior understanding of the input
+
+### The industry's choice
+
+2018-2022: encoder-decoder (T5) and encoder-only (BERT) competed seriously with decoder-only (GPT).
+
+2022+: decoder-only crushed the alternatives. Why? Because **universal flexibility beat targeted efficiency**. A single LLM that does everything is more useful than a translation expert. And decoder-only scaling proved technically simpler than encoder-decoder scaling.
+
+But encoder-decoder keeps its niche: specialized NLP production systems (machine translation, industrial summarization, information extraction), where structure helps and flexibility isn't needed.
+
+## Why this matters
+
+T5 brings three lasting contributions to the field:
+
+1. **Conceptual unification**: showing that all NLP tasks can be viewed as text-to-text radically simplifies system design. It's an idea that directly influenced modern LLMs.
+
+2. **Span corruption**: demonstrating that masking contiguous groups of words is better than masking individual tokens changed pre-training practices.
+
+3. **Systematic ablation**: the T5 paper established the standard for good NLP science: rigorous ablations, controlled measurements, reproducibility.
+
+FLAN-T5 adds a fourth lesson: instruction tuning gives powerful zero-shot access without needing a huge prompt.
+
+T5 remains an excellent choice for specialized production systems (translation, summarization, extraction) today. But for "one LLM for everything," decoder-only has won.

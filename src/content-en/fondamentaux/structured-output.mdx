@@ -1,0 +1,189 @@
+---
+title: "Structured Output"
+description: "Getting structured outputs from LLMs: JSON mode, function calling, constrained generation, and formal grammars."
+---
+
+## The Need for Structure
+
+LLMs generate free-form text by nature. That's perfect for conversation, but it becomes a nightmare when you want to integrate their responses into a program. Imagine you ask an LLM to extract the sentiment and entities from a customer review. It might respond "The sentiment is positive and the mentioned entities are Paris and the Eiffel Tower," or "Positive. Entities: Paris, Eiffel Tower," or with a paragraph of explanation. Your `JSON.parse()` code doesn't know what to do with all of that.
+
+**Structured output** encompasses the techniques that constrain an LLM's output to a predefined, parseable format: JSON, XML, function calls, or any other structured schema. It's an absolutely essential building block for creating reliable applications around LLMs. Without it, you're building on sand -- each call to the model can break your pipeline because the response format changed.
+
+
+
+## JSON Mode
+
+### The Principle
+
+**JSON mode** is the most common form of structured output. The model is constrained to produce output that is valid JSON, optionally conforming to a predefined schema.
+
+```json
+{
+  "sentiment": "positive",
+  "confidence": 0.92,
+  "entities": ["Paris", "Eiffel Tower"],
+  "summary": "The text describes a positive tourist visit to Paris."
+}
+```
+
+### API-side Implementation
+
+Major LLM providers offer a native JSON mode. This is fundamentally different from "asking for JSON in the prompt" -- the model is constrained at the generation level itself:
+
+- **OpenAI**: parameter `response_format: { type: "json_object" }` for free JSON, or `response_format: { type: "json_schema", json_schema: {...} }` for schema-conforming JSON
+- **Anthropic**: via instructions in the system prompt, prefixing the response with `{`, and function calling tools
+- **Open source**: libraries like `outlines`, `guidance`, `lm-format-enforcer` that constrain generation at the logits level
+
+<Callout type="info" title="JSON Schema vs Free JSON">
+Basic JSON mode guarantees that the output is syntactically valid JSON, but not its internal structure. The model could return `{"foo": 42}` when you expect `{"sentiment": "positive"}`. JSON schema mode goes further: it guarantees the JSON follows a precise schema -- the right field names, the right types (string, number, boolean), values from an allowed set (enum). It's the difference between "any JSON" and "exactly the JSON my code expects." In production, this is essential.
+</Callout>
+
+### The Pitfalls of JSON by Prompting
+
+Before native JSON modes existed, you simply asked the model to respond in JSON in the prompt. Common problems:
+
+- The model adds explanatory text before or after the JSON
+- Trailing commas make the JSON invalid
+- Quotes aren't properly escaped in strings
+- The model "forgets" to close braces or brackets
+- Types aren't respected (a number returned as a string)
+
+Native JSON mode eliminates most of these problems by constraining generation at the decoder level.
+
+## Function Calling
+
+### The Concept
+
+**Function calling** (or tool use) is perhaps the most important advance for production LLM applications. The principle: instead of simply generating text, the model can decide to **call a function** defined by the developer, generating a structured call with the right arguments.
+
+This is what enables an LLM to do concrete things in the real world: search the web, query a database, send an email, trigger an action. The developer defines a set of functions with their signatures:
+
+```json
+{
+  "name": "get_weather",
+  "description": "Gets the weather for a city",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "city": { "type": "string", "description": "City name" },
+      "unit": { "type": "string", "enum": ["celsius", "fahrenheit"] }
+    },
+    "required": ["city"]
+  }
+}
+```
+
+When the user asks "What's the weather like in Lyon?", the model generates:
+
+```json
+{ "name": "get_weather", "arguments": { "city": "Lyon", "unit": "celsius" } }
+```
+
+<Callout type="tip" title="The LLM as an Intelligent Router">
+Function calling transforms the LLM into an **intelligent router**: it understands the user's request in natural language and translates it into a structured call to the right function with the right parameters. This is the foundation of AI agents and RAG (Retrieval-Augmented Generation) systems.
+</Callout>
+
+### The Complete Workflow
+
+1. The user sends their request
+2. The LLM decides whether to call a function (and which one)
+3. The LLM generates the call arguments
+4. The application executes the function and gets the result
+5. The result is sent back to the LLM
+6. The LLM formulates a response in natural language
+
+### Multiple and Parallel Calls
+
+Recent models support:
+- **Sequential calls**: the result of one call informs the next
+- **Parallel calls**: multiple functions called simultaneously
+- **Dynamic choice**: the model decides not to call a function if it can answer directly
+
+## Constrained Generation
+
+
+
+### The Fundamental Problem
+
+Reminder: an LLM generates tokens one by one, sampling at each step from the probability distribution over the entire vocabulary (about 32,000 to 128,000 possible tokens). To guarantee structured output, you must **constrain** this sampling: at each step, you calculate which tokens are "legal" (i.e., compatible with the expected format), and set the probability of all other tokens to zero. This is **constrained decoding** -- you modify the logits (the raw scores before conversion to probabilities) before sampling.
+
+For example, if the JSON being generated is `{"sentiment": "posi`, the only legal tokens are those that could continue a JSON string. The token `}` would be blocked (the string isn't closed), but `tive"` would be allowed.
+
+### Formal Grammars
+
+The most elegant and powerful technique for implementing constrained decoding is the use of **formal grammars** (typically context-free grammars in EBNF -- Extended Backus-Naur Form -- notation or regular expressions) to define allowed output formats.
+
+For example, to guarantee valid JSON:
+
+```bnf
+root   ::= object
+object ::= "{" pair ("," pair)* "}"
+pair   ::= string ":" value
+value  ::= string | number | object | array | "true" | "false" | "null"
+...
+```
+
+At each generation step, you calculate which tokens are compatible with the grammar in the current parser state, and mask all other tokens (by setting their probability to zero).
+
+<Callout type="paper" title="The Outlines Library">
+**Outlines** is a Python library that implements grammar-constrained generation for open-source models. It compiles the grammar into a finite automaton that efficiently guides sampling. The performance overhead is minimal since masking is a simple operation on logits.
+</Callout>
+
+### Regex as Constraints
+
+For simpler formats, a **regular expression** can suffice:
+
+```python
+# Guarantee a date format
+pattern = r"\d{4}-\d{2}-\d{2}"
+
+# Guarantee a yes/no answer
+pattern = r"(yes|no)"
+
+# Guarantee an email
+pattern = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+```
+
+### JSON Schemas as Constraints
+
+A JSON schema can be compiled into a formal grammar. This is what native JSON schema API modes do: the schema is converted into generation constraints that guarantee conformance.
+
+## Trade-offs and Limitations
+
+### Content Quality vs Structure
+
+A crucial point that beginners often forget: constraining the structure **absolutely does not** guarantee the quality of the content. A perfectly valid JSON, conforming to the schema, with the right types everywhere, can contain completely wrong, hallucinated, or incoherent values. Structure is necessary but not sufficient for reliability. It's like having a well-filled form with false information.
+
+<Callout type="warning" title="Valid Structure != Correct Content">
+A model constrained to respond in JSON with a "sentiment" field of type enum ["positive", "negative", "neutral"] will always produce one of these three values. But the chosen value may be incorrect. Constrained generation solves the form problem, not the substance problem.
+</Callout>
+
+### Impact on Generation
+
+Structural constraints can slightly affect the quality of free text inside structured fields. The model must "plan" its generation while accounting for upcoming constraints, which can limit its creativity or fluency.
+
+### Latency
+
+Grammar-constrained generation adds computational overhead at each decoding step (calculating valid tokens). In practice, this overhead is generally negligible (<5%) but can become significant with very complex grammars.
+
+## Practical Applications
+
+### Information Extraction
+
+This is the most widespread use case: extracting structured data from free text (emails, reports, articles, customer reviews) by defining a precise JSON schema. For example, automatically extracting the name, address, and amount from each invoice received by email.
+
+### Agents and Tools
+
+Function calling is the foundation of **AI agents**: autonomous systems that use an LLM to decide which actions to take. The LLM receives a user request, decides whether to search the web, query a database, or send an email, then generates the appropriate function call. Without reliable structured output, agents would be impossible -- every malformed function call would break the chain.
+
+### Data Pipelines
+
+LLMs can be integrated into data processing pipelines where each step expects a specific input format and produces a specific output format. Structured output guarantees that the LLM's output is compatible with the next pipeline step, whether it's a database, an API, or another model.
+
+### Validation and Robustness
+
+In production, constrained generation lets you **guarantee** that the output is always parseable, eliminating an entire category of bugs (the infamous "JSON parse errors" at 3 AM). Combined with semantic validation (checking that values make sense), it forms the foundation of reliable, deployable LLM applications.
+
+<Callout type="tip" title={"The Golden Rule in Production"}>
+In production, never trust an LLM's free output. Always use some form of structured output (JSON schema, function calling, grammar) and validate the result programmatically before using it. That's the difference between a demo and a reliable product.
+</Callout>

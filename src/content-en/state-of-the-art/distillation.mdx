@@ -1,0 +1,77 @@
+---
+title: "Model Distillation"
+description: "Knowledge distillation transfers knowledge from a large teacher model to a small student model, enabling compact and fast models with preserved performance."
+---
+
+## The Problem: A Large Model Is Slow and Expensive
+
+Imagine a brilliant university professor who charges $500 an hour. You can't put them in front of every student 24/7. But if that professor spends time **training an assistant**, that assistant can answer 80% of questions for a fraction of the cost. That's exactly the principle of distillation.
+
+You have a model like GPT-5.4 that reasons at a high level, but it's expensive via API and takes 2 seconds per response. Your RAG pipeline needs fast and economical answers. Solution: create a **small student model** that learns from the large **teacher** model.
+
+<ArxivLink id="1503.02531" title="Distilling the Knowledge in a Neural Network (Hinton et al., 2015)" />
+
+<Callout type="info" title="The model's hidden probabilities">
+A model doesn't just produce an answer: it gives **probabilities for every possible token**. When it classifies a cat image, it might say: cat 90%, tiger 7%, lion 2%, dog 1%. These small probabilities contain **pedagogical gold** — they reveal that "a cat looks a bit like a tiger" — information that the raw label "cat" doesn't capture at all. Distillation exploits this richness.
+</Callout>
+
+## How It Works: The Magic of Temperature
+
+The distillation loss combines two learning signals:
+
+$$\mathcal{L} = \alpha \cdot \text{CE}(\text{true answer},\, \text{student answer}) + (1 - \alpha) \cdot \text{KL}(\text{teacher distribution} \| \text{student distribution})$$
+
+The first term is classic: the student learns the right answer. The second is the magic of distillation: the student learns to **mimic the complete distribution** of the teacher, not just its final answer.
+
+The **key trick**: the **temperature T**. Normally (T=1), the model produces very concentrated probabilities: cat 0.90, tiger 0.07, lion 0.02. With T=4, the probabilities flatten: cat 0.45, tiger 0.25, lion 0.15. The small probabilities become visible and exploitable. It's like putting on infrared glasses to see hidden heat — the entire similarity structure between classes appears.
+
+<Callout type="tip" title="Optimal temperature in practice">
+T=3 to T=5 works well in most cases. Too low (T=1): the distillation signal is too "hard," nuances disappear. Too high (T=10): everything becomes uniformly blurry and the signal loses its value. Adjust on your data.
+</Callout>
+
+
+
+## For LLMs: Two Approaches Depending on Access
+
+### Approach 1: Copy the Answers (Black-Box)
+You only have access to the teacher model via an API (GPT-5.4, Claude Sonnet 4.6)? No problem. The recipe:
+1. Generate 100K+ questions representative of your use case
+2. Send them to the teacher, collect its answers
+3. Fine-tune a small open-source model on these (question, answer) pairs
+
+This is how **Alpaca** and **Vicuna** were created: small models trained on GPT-4's responses (in 2023). The teacher remains a black box, but its responses transmit part of its knowledge.
+
+### Approach 2: Mimic the Logits (White-Box)
+If you have access to the teacher's weights (open-source models), you can go further: directly compare **probability distributions** token by token between teacher and student. It's mathematically richer than just copying the final answer, because the student also learns the teacher's "hesitations."
+
+<Callout type="paper" title="Warning: loss of depth">
+Studies show that black-box distillation copies the **style** of the teacher but not necessarily the **depth of its reasoning**. The Orca project worked around this problem by asking the teacher to generate **chain-of-thought** (step-by-step reasoning). The student doesn't just learn "the answer is 42" but "here's how I arrive at 42." This is much more effective for reasoning tasks.
+</Callout>
+
+## In Practice: Orders of Magnitude
+
+To distill a 7B into a 3B:
+- **Dataset**: 100K-500K quality examples
+- **Training time**: a few hours on 4-8 GPUs
+- **Quality loss**: ~10-20% depending on task complexity
+- **Speed gain**: 2-3x in inference
+
+You can also **stack** compressions: GPT-5.4 → Mistral-7B (distilled) → Mistral-7B-4bit (quantized) = a model **8x lighter** that retains about 70% of original quality. Distillation and quantization are complementary: the first reduces the number of parameters, the second reduces the size of each parameter.
+
+<Callout type="warning" title="Before distilling from an API">
+OpenAI and other providers **contractually prohibit** using their outputs to train competing models. Read the terms of use carefully. On the other hand, open-source models like LLaMA, Mistral, or Qwen: no restrictions (still check the specific license though).
+</Callout>
+
+## When to Distill?
+
+Distillation is the right choice when:
+- You have an excellent large model but your inference budget is limited
+- Your use case is **specialized** (the student doesn't need to know everything, just your domain)
+- Latency matters (real-time chatbot, RAG pipeline with multiple calls)
+
+It's **not** the right choice when:
+- You need the teacher's full reasoning capability (no shortcut possible)
+- Your domain is too varied to be covered by a reasonable distillation dataset
+- The teacher's terms of use prohibit it
+
+Distillation isn't a silver bullet but a **smart tradeoff**: you lose 10-20% quality to gain 2-3x speed and divide costs by 5-10. For production RAG, it's often an excellent deal.

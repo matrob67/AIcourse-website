@@ -1,0 +1,120 @@
+---
+title: "Flash Attention 2"
+description: "Study of Flash Attention 2, the evolution of the original algorithm with improved parallelism and optimizations specific to Ampere and Hopper GPUs."
+---
+
+## From Flash Attention 1 to Flash Attention 2
+
+Flash Attention 1 had solved the fundamental problem: making attention linear in memory through tiling. But in terms of raw GPU utilization, there was still a lot of performance left on the table. Flash Attention 1 reached about 50-70% of the GPU's theoretical throughput, meaning a significant portion of compute units remained idle.
+
+Flash Attention 2, published by Tri Dao in 2023, tackles precisely this problem. The goal: approach 70-90% theoretical utilization by optimizing parallelism and work distribution within the GPU.
+
+<ArxivLink id="2307.08691" title="FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning" />
+
+## Key optimizations
+
+### Reducing non-matmul operations
+
+To understand this optimization, you need to grasp a crucial point about modern GPUs. GPUs like the A100 or H100 have **Tensor Cores**, specialized units that accelerate matrix multiplications (matmul) by a factor of 16x. But all other operations (additions, scalar multiplications, comparisons) run on classic CUDA cores, which are much slower.
+
+<Callout type="info" title="Tensor Cores and matmul">
+Imagine a 16-lane highway (the Tensor Cores) reserved for matrix multiplications, and a single-lane country road (the CUDA cores) for everything else. The highway throughput is enormous, but if your computation constantly alternates between the highway and the country road, you waste a ton of time on exits and entrances.
+</Callout>
+
+Flash Attention 1 contained rescaling operations (online softmax correction) interleaved with matmuls. These back-and-forth trips between Tensor Cores and CUDA cores wasted time. Flash Attention 2 reorganizes the computation to group rescaling operations and minimize these interruptions in the inner loop.
+
+### Parallelism on the sequence dimension
+
+In Flash Attention 1, the outer loop iterated over K/V blocks and the inner loop over Q blocks. This is natural, but it limits parallelism when the number of attention heads isn't enough to keep all the GPU's streaming multiprocessors busy.
+
+Flash Attention 2 **reverses the loops**: the outer loop iterates over Q blocks, the inner over K/V. This seemingly minor change allows parallelizing on the **sequence** dimension in addition to the head dimension. Result: the GPU is better saturated, especially for models with few attention heads or long sequences.
+
+### Work partitioning between warps
+
+A GPU threadblock contains several **warps** (groups of 32 threads that execute in parallel). How work is distributed between warps has a direct impact on performance.
+
+<Callout type="paper" title="Warp partitioning">
+Flash Attention 1 partitioned K and V across warps, which required costly synchronization after each block (warps had to combine their results). Flash Attention 2 partitions Q across warps, allowing each warp to work independently on different rows of the output. Result: no more intra-block synchronization needed, each warp advances at its own pace.
+</Callout>
+
+## Performance results
+
+### Speedup compared to Flash Attention 1
+
+| GPU | Speedup FA2 vs FA1 | % of theoretical FLOP |
+|-----|--------------------|--------------------|
+| A100 (FP16) | 1.5-2x | 50-73% |
+| A100 (BF16) | 1.5-2x | 50-73% |
+
+### Comparison with standard attention
+
+For a 2K token sequence on A100, the numbers speak for themselves:
+
+- **Standard PyTorch attention**: ~30 TFLOP/s
+- **Flash Attention 1**: ~120 TFLOP/s
+- **Flash Attention 2**: ~220 TFLOP/s
+- **Theoretical A100**: 312 TFLOP/s (FP16)
+
+Flash Attention 2 is **7 times faster** than standard attention and approaches 70% of the hardware's theoretical maximum.
+
+### Scaling with sequence length
+
+An important point: Flash Attention 2 maintains near-constant throughput in TFLOP/s even for very long sequences, thanks to efficient tiling. Where standard attention explodes in memory and time, FA2 stays stable.
+
+<Callout type="tip" title={"Practical impact on training"}>
+Flash Attention 2 reduces end-to-end LLM training time by 20-40% compared to Flash Attention 1, and by 3-5x compared to standard attention. This isn't just an academic optimization: it translates directly into GPU cost savings and the ability to iterate faster on experiments.
+</Callout>
+
+## Optimized causal masking support
+
+### Skipping masked blocks
+
+In causal attention (each token only sees previous tokens), roughly half the blocks in the attention matrix are entirely masked (future tokens). Flash Attention 2 detects these blocks and **skips them completely**, offering an additional ~2x speedup for causal attention compared to bidirectional attention.
+
+### Custom masks
+
+Version 2 also supports custom masking patterns (like sliding window attention) via user-defined masking functions, offering significant architectural flexibility.
+
+## Multi-GPU and variable-length support
+
+### Variable-length sequences
+
+In practice, batches contain sequences of different lengths. Flash Attention 2 handles this efficiently via a **packing** (varlen) format: sequences are concatenated end-to-end and start/end indices indicate the boundaries. No more need for costly padding.
+
+### Variable head dimensions
+
+Support for non-standard head dimensions (not just 64 or 128), giving more freedom in model architectural design.
+
+## Ecosystem integration
+
+### PyTorch SDPA
+
+Flash Attention 2 is the default backend for `torch.nn.functional.scaled_dot_product_attention` on compatible GPUs. In practice, if you're using a recent version of PyTorch on an Ampere or newer GPU, you're already benefiting from FA2 transparently.
+
+### Hugging Face
+
+Hugging Face Transformers models automatically enable Flash Attention 2 when the package is installed, via the argument `attn_implementation="flash_attention_2"`. Adoption is virtually transparent for the user.
+
+<Callout type="warning" title="GPU compatibility">
+Flash Attention 2 requires NVIDIA GPUs with compute capability >= 8.0: Ampere (A100, A10G, RTX 3090/4090) or Hopper (H100). Older GPUs (V100, T4) cannot use FA2's optimizations, although FA1 remains available for them.
+</Callout>
+
+## Improved backward pass
+
+Training is a forward pass followed by a backward pass. Flash Attention 2 applies the same optimization principles to the backward:
+
+- Increased parallelism on the sequence dimension
+- Better warp partitioning
+- Optimized softmax rematerialization (recompute rather than store)
+
+The backward pass reaches 60-70% of theoretical throughput, compared to 30-40% for Flash Attention 1. This is crucial since the backward pass is often the training bottleneck.
+
+## Impact and adoption
+
+Flash Attention 2 has become a foundational and nearly universal component in training and inference of modern LLMs. Its massive adoption has contributed to extending context windows (from 2K to 128K+ tokens), significantly reducing training costs, and generally accelerating NLP research.
+
+The hardware-aware optimizations it embodies -- designing algorithms based on specific hardware capabilities -- have become an essential design paradigm in deep learning.
+
+<Callout type="info" title="Toward Flash Attention 3">
+Flash Attention 2 laid the groundwork for the optimizations exploited by Flash Attention 3 on Hopper GPUs (H100/H200), which introduce new hardware features like asynchronous pipelining and FP8 support. These advances are detailed in the next section.
+</Callout>

@@ -1,0 +1,101 @@
+---
+title: "Ring Attention: fitting 1 million tokens across multiple GPUs"
+description: "Ring Attention: distribute the sequence across 8 GPUs, each sees a piece. Communicate in a ring so everything talks to everything. Result: enormous contexts."
+---
+
+
+
+## The problem: a huge sequence, a tiny GPU
+
+You want to process 1 million tokens. Your A100 GPU has 80 GB of memory. Even using Flash Attention and all possible optimizations, the memory required for the KV cache of a million tokens far exceeds the capabilities of a single GPU.
+
+The classic solution: distribute the sequence across multiple GPUs. Each GPU takes a chunk. But the problem with standard distributed attention is that each token must potentially interact with **all** other tokens. That means each GPU must send its data to all others (all-to-all communication), which is extremely expensive in network bandwidth.
+
+Ring Attention proposes an elegant solution: instead of sending everything to everyone at once, **circulate** the data in a ring.
+
+<ArxivLink id="2310.01889" title="Ring Attention with Blockwise Transformers for Near-Infinite Context" />
+
+## The ring algorithm
+
+The most apt analogy: imagine 8 people sitting in a circle, each holding a sheet with notes. Each person needs to read the notes of **all** the others to write their summary. Instead of everyone photocopying and distributing their notes to everyone (chaos), you circulate the sheets around the circle. Each person reads the sheet in front of them, takes notes, then passes it to their left neighbor. After 7 rounds, everyone has read all the sheets.
+
+Concretely, arrange the GPUs in a logical circle. Each GPU holds a **chunk** of the sequence (its queries Q) and initially a chunk of keys/values (K/V).
+
+**Step 1**: GPU #0 computes attention of its Q with its current K/V. **In parallel**, it sends its K/V to GPU #1 and receives K/V from GPU #7.
+
+**Step 2**: GPU #0 redoes the computation with the newly received K/V (those from GPU #7). Sends this block to #2, receives the one from #6.
+
+And so on for `P-1` steps (for P GPUs). At the end, each GPU has seen all the K/V from the complete sequence and has computed exact attention for its tokens.
+
+### The clever trick: overlapping compute and communication
+
+The secret of Ring Attention's efficiency: while GPU #0 **computes** attention with the current K/V chunk, it **sends and receives** the next chunk in parallel on the communication bus (NVLink).
+
+It's like reading a book while reaching out to grab the next one from the shelf -- you don't waste any waiting time between the two operations.
+
+<Callout type="paper" title="Efficient overlapping">
+As long as the computation time for a block > network transfer time for a block, communication is effectively "free" -- it happens in the background during computation. Flash Attention makes local computation fast, NVLink links (900 GB/s on H100) make transfers fast too. The two overlap perfectly in the vast majority of configurations.
+</Callout>
+
+## Integration with Flash Attention
+
+Softmax in attention poses a challenge for distributed computation: it normally requires knowing **all** values to compute the denominator. How do you compute a correct softmax if each GPU only sees part of the K/V at a time?
+
+Flash Attention solves this problem with a **progressive online softmax**. Ring Attention pushes this technique one step further by accumulating softmax statistics across blocks received from different GPUs.
+
+At each step `j`, when GPU #0 receives a new K/V chunk, it updates:
+
+$$\text{max\_new} = \max(\text{max\_old},\ \text{max}_j)$$
+
+$$\text{norm\_new} = e^{\text{max\_old} - \text{max\_new}} \times \text{norm\_old} + \text{norm}_j$$
+
+$$\text{output\_new} = \text{accumulation of outputs with normalized weights}$$
+
+The exponential factor $e^{\text{max\_old} - \text{max\_new}}$ corrects previous statistics when the maximum changes. This is numerically stable and exact -- no approximation.
+
+Result: the attention is **exact**, identical to what you'd get computing on a single giant GPU. Ring Attention makes no compromise on mathematical quality.
+
+<Callout type="tip" title="Online softmax math">
+This is exactly the same technique Flash Attention uses to avoid materializing the full attention matrix. Ring Attention simply applies this idea across distributed GPUs rather than across blocks in local memory. The principle is identical: you can compute a global softmax by seeing only one block at a time, thanks to accumulating the max and the norm.
+</Callout>
+
+## Memory per GPU
+
+Instead of a single GPU storing everything (`O(L * d)`), each GPU stores:
+- Its Q: `(L/P) * d` (its portion of queries)
+- The current K/V and the receive buffer: ~2 chunks of `(L/P) * d`
+- Temporary output and accumulators
+
+**Total per GPU**: `O(L * d / P)`. For 8 GPUs and 1M tokens, it's like a single GPU storing 125K tokens. That's very manageable on an A100 with 80 GB. And it **scales linearly**: 16 GPUs = 62.5K per GPU, 64 GPUs = ~15K per GPU. You can go almost arbitrarily far.
+
+## Optimization for causal attention
+
+With causal masking (each token can only see previous tokens), about 50% of pairs (i, j) where i < j are already masked and don't contribute to the computation.
+
+Ring Attention exploits this intelligently: when a GPU detects that an entire K/V chunk contains only "future" tokens relative to its queries, it **completely skips the computation** for that chunk. This frees up compute time during which communication of the next chunk can happen.
+
+<Callout type="info" title="Causal Ring Attention">
+In the causal configuration, the last GPU (holding the most recent tokens) only needs previous chunks -- it skips all "future" chunks. The first GPU (oldest tokens) only computes with its own K/V. This asymmetry considerably improves efficiency, reducing effective compute work by nearly 50% in the ideal case.
+</Callout>
+
+## Real-world results
+
+- **4 A100 GPUs**: smooth processing of ~500K tokens
+- **8 A100 GPUs**: ~1M tokens
+- **Massive clusters (32-64 GPUs)**: several million tokens
+
+Concrete applications: entire books in context (a novel = ~100-200K tokens), complete legal case files, long videos converted to tokens, entire codebases for analysis.
+
+## Practical limitations
+
+<Callout type="warning" title={"NVLink is essential"}>
+Ring Attention relies on overlapping compute and communication. If communication is slow, it no longer hides behind the computation and becomes a bottleneck. NVLink (900 GB/s on H100) = perfect. PCIe Gen 4 (64 GB/s) = 14x slower, it no longer works well. InfiniBand between nodes (~400 GB/s) = usable but watch the ratio. Bottom line: Ring Attention is designed for GPUs **within the same node** connected by NVLink.
+</Callout>
+
+Variants and improvements:
+- **Striped Attention**: distribute tokens in an interleaved manner (1, 9, 17... on GPU #0, 2, 10, 18... on GPU #1) instead of contiguous chunks. Better load balancing for causal attention, since each GPU has tokens from different positions.
+- **Ring Flash Attention**: CUDA kernels specifically optimized for the ring, fusing local attention computation and communication into a single operation.
+
+<Callout type="info" title="Conclusion">
+Ring Attention makes possible what seemed impossible: processing millions of tokens without deleting or compressing them, with **exact** attention. It's a key element for models with ultra-long contexts. The algorithm is elegant, mathematically pure, and proven in production. Its legacy goes beyond the technique: it showed that the "context too long" barrier is fundamentally an engineering problem, not a theoretical one.
+</Callout>

@@ -1,0 +1,91 @@
+---
+title: "World Models for Robotic Planning"
+description: "World models learn an internal model of the world to enable robots to mentally simulate the consequences of their actions and plan ahead."
+---
+
+
+
+## Artificial Imagination: The Robot That Thinks Before Acting
+
+When you imagine grabbing a glass of water, your brain mentally simulates the movement, anticipates the glass's weight, predicts what will happen if you grip too hard or not hard enough. You don't perform the gesture to see what happens: you simulate it in your head first. **World models** give robots this same ability: a learned "internal simulator" that allows reasoning about the consequences of actions without physically executing them.
+
+This is a profound paradigm shift. Instead of reacting to the world in real time (observe, act, hope), the robot can plan by mentally simulating multiple scenarios and choosing the best one.
+
+<Callout type="info" title={"The Human Analogy"}>
+Your brain constantly simulates the consequences of your actions before executing them. You don't need to knock over a glass to know that pushing it would make it fall. World models give robots a similar ability: planning by simulating in a learned model of the world, rather than through trial and error in the real world.
+</Callout>
+
+## Foundations: Model-Based vs Model-Free RL
+
+To understand world models, you need to distinguish two families of reinforcement learning:
+
+**Model-Free** (PPO, SAC): the agent directly learns a policy (state -> action) without building a model of the environment. It's simple and effective, but requires enormous amounts of data. The robot learns through pure trial and error, never asking itself "what would happen if...?"
+
+**Model-Based**: the agent first learns a model of the environment's dynamics (if I take action A in state S, I arrive at state S'), then uses this model to plan its actions. It's much more data-efficient (sample-efficient), but the learned model can be inaccurate, and errors accumulate.
+
+**World models** are a sophisticated form of model-based RL where the world model is a deep neural network capable of predicting complex observations (images, sounds) and not just abstract states.
+
+### The General Framework
+
+A world model learns three complementary functions:
+1. **Transition model**: predicts the next state given the current state and chosen action. This is the learned physics of the world
+2. **Observation model**: generates the observations (images) the robot would see from the latent state. This is the decoder that translates imagination into vision
+3. **Reward model**: predicts the reward associated with each transition. This is the evaluation that says whether the imagined scenario is good or bad
+
+## Key Architectures
+
+**World Models** (Ha & Schmidhuber, 2018): the foundational work that gave the field its name. The architecture consists of three modules:
+- **V (Vision)**: a VAE (Variational Autoencoder) that compresses images into compact latent vectors
+- **M (Memory)**: an RNN (MDN-RNN) that predicts the evolution of latent vectors over time. This is the memory that captures world dynamics
+- **C (Controller)**: a simple linear network that chooses actions from the latent state
+
+The fundamental insight: the agent can be trained entirely "in its dream," interacting with the world model rather than the real environment. It's pure imagination: the robot learns by dreaming.
+
+**Dreamer** (Danijar Hafner): the most accomplished family of world models currently:
+- **DreamerV1** (2020): learns a policy through backpropagation through the world model, exploiting the gradients of the learned model
+- **DreamerV2** (2021): achieves superhuman performance on Atari games without ever using model-free RL
+- **DreamerV3** (2023): works across a wide range of domains without any hyperparameter tuning
+
+<Callout type="tip" title="DreamerV3: Algorithmic Generalization">
+DreamerV3 uses a discrete latent space, symlog predictions, and a robust value objective. Remarkable result: it works from Minecraft to robotic locomotion to Atari games, without changing a single hyperparameter. This is a feat of algorithmic generalization that contrasts with classical RL where each task requires hours of tuning.
+</Callout>
+
+**TD-MPC2** (Temporal Difference Model Predictive Control): combines world models with classical predictive control:
+- Learns a dynamics model in a compact latent space
+- Uses MPC (Model Predictive Control) to plan actions in real time, simulating several steps ahead and choosing the best sequence
+- Works on over 80 continuous control tasks with a single set of hyperparameters
+- Particularly suited for robotic tasks requiring precise planning (insertion, assembly)
+
+## Applications in Robotics
+
+**Manipulation planning**: the robot mentally simulates different grasping strategies before choosing the best one. It predicts an object's trajectory when pushed, anticipates potential collisions, and evaluates grasp stability. All of this before moving a single motor.
+
+**Navigation**: predicting the consequences of movements enables anticipatory obstacle avoidance (instead of reactive), path planning in dynamic environments (with moving humans), and terrain adaptation.
+
+**Video World Models**: video generation models (Sora, Runway) are, implicitly, world models. To generate a realistic video of a bouncing ball, the model must have learned the laws of physics. Several research groups are exploring the use of these video generators as world models for robotics: the model imagines what would happen if the robot took a given action, and chooses the action whose imagined result is best.
+
+<Callout type="paper" title="UniSim: The Learned Universal Simulator">
+UniSim (Google DeepMind) is a generative video model that simulates the consequences of any action in any environment. This is the ultimate vision of world models: a universal simulator learned from data, that could eventually replace classical physics simulators like MuJoCo or Isaac Sim.
+</Callout>
+
+## Advantages of World Models
+
+- **Sample efficiency**: learning a world model then planning within it is much more data-efficient than pure model-free RL. The robot learns faster with fewer real interactions
+- **Safety**: testing actions in the mental model before executing them in the real world helps avoid dangerous actions. The robot doesn't make reckless movements
+- **Transfer**: a good world model is reusable for new tasks without complete re-learning. The physics of the world doesn't change between tasks
+- **Interpretability**: you can visualize what the robot "imagines," which helps understand and debug its behavior
+
+## Limitations
+
+- **Model errors (compounding error)**: predictions diverge from reality over long horizons. 1% error per time step means roughly 50% error after 50 steps. The dream becomes a nightmare
+- **Environmental complexity**: rich, dynamic environments (a kitchen full of objects with humans) are hard to model faithfully
+- **Computational cost**: planning within the model adds latency, which can be problematic for real-time control
+- **Novel objects**: the model cannot predict the behavior of objects it has never seen (an unknown material, a novel mechanism)
+
+<Callout type="warning" title="The Compounding Error Problem">
+World model prediction errors accumulate exponentially. 1% error per time step gives roughly 40% cumulative error after 50 steps. This is why world models are often used for short-term planning (a few steps) rather than long trajectories. Combined with regular feedback from the real world, this problem is mitigated.
+</Callout>
+
+## Outlook
+
+The convergence between world models and generative models (diffusion, flow matching) is the most promising direction. Video foundation models learn extraordinarily rich representations of world physics (gravity, collisions, fluids, deformations). These representations could serve as the basis for universal robotic world models, capable of predicting the consequences of any action in any environment. It's still research, but the direction is clear and exciting.

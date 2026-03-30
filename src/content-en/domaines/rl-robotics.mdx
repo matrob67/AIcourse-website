@@ -1,0 +1,91 @@
+---
+title: "Reinforcement Learning for Robotics: PPO, SAC, TD3"
+description: "The reinforcement learning algorithms that enable robots to learn through trial and error: PPO, SAC, and TD3, their strengths and applications."
+---
+
+
+## Learning by Trial and Error: Like Learning to Walk by Falling
+
+A child learns to walk by falling hundreds of times, getting back up, adjusting posture, and trying again. They don't consult a biomechanics manual. They try, fail, and learn. A **reinforcement learning** (RL) agent does exactly the same thing: it observes its state, attempts an action, receives a reward (or a penalty), and adjusts its behavior to maximize future rewards.
+
+In robotics, RL allows a robot to learn complex behaviors (walking, grasping, manipulating) through trial and error, without a human having to explicitly program every movement. The decisive advantage of simulation: you can run a million attempts in a few hours on a GPU, while a physical robot can only manage a few hundred per day. Simulation multiplies experience by a factor of 1,000 or more.
+
+<Callout type="info" title="The RL Framework in Robotics">
+The agent observes the world state (images, position sensors, forces), executes an action (motor movements), receives a reward (task success, penalty for failure), and adjusts its policy to maximize cumulative long-term reward. In robotics, states are continuous and high-dimensional, actions are continuous, and rewards are often sparse: the robot is only rewarded at the end of the task.
+</Callout>
+
+## The Three Dominant Algorithms in Robotics
+
+### PPO (Proximal Policy Optimization)
+
+Developed by OpenAI in 2017, PPO has become the reference algorithm for robotics in simulation. It's a **policy gradient algorithm** that limits the size of policy updates at each iteration to guarantee stability.
+
+**Key mechanism**: the "clipped" objective function. PPO computes the ratio between the new policy and the old one, and clips it within an interval $[1-\epsilon, 1+\epsilon]$ (with $\epsilon = 0.2$ typically). This guarantees that the policy doesn't change too abruptly at each iteration. It's like putting guardrails on a mountain road: you move forward, but you don't fall off the cliff.
+
+**Advantages for robotics**:
+- Remarkable stability during training (few catastrophic divergences)
+- Works well with high-dimensional action spaces (a humanoid has 30+ motors)
+- Excellent in massively parallel simulation (NVIDIA's Isaac Gym)
+- Relatively simple to implement and tune
+
+**Applications**: quadruped and bipedal locomotion, simple manipulation, high-level policies (planning).
+
+<Callout type="tip" title="PPO + Parallel GPU = Revolution">
+PPO excels when you can massively parallelize training. NVIDIA's Isaac Gym runs 4096+ simulation environments in parallel on a single GPU, generating millions of transitions per second. The PPO + parallel GPU combination has literally revolutionized robotic locomotion: what used to take weeks now takes hours.
+</Callout>
+
+### SAC (Soft Actor-Critic)
+
+Developed by Tuomas Haarnoja at Berkeley in 2018, SAC introduces a subtle idea: maximize not only the reward but also the **entropy** of the policy, which encourages exploration.
+
+**Architecture**:
+- **Actor**: a neural network that generates actions (the policy)
+- **Critic**: two Q-networks (double Q-learning) that estimate the value of actions. Using two critics and taking the minimum reduces overestimation, a classic RL problem
+- **Entropy coefficient** (alpha): automatically adjusted to balance exploration and exploitation. When the model is uncertain, it explores more. When it's confident, it exploits
+
+**Advantages**:
+- **Sample efficiency**: off-policy (it reuses old experiences stored in a replay buffer), so it learns faster with less data than PPO
+- **Natural exploration**: entropy maximization encourages varied behaviors and avoids getting stuck in local optima
+- **Robustness**: high-entropy policies are often more robust to perturbations and environment changes
+- **Real world**: particularly suited when data is limited (simulation isn't available)
+
+**Applications**: dexterous manipulation, tasks where exploration is crucial, learning directly on a real robot.
+
+### TD3 (Twin Delayed Deep Deterministic Policy Gradient)
+
+Developed by Scott Fujimoto in 2018, TD3 is an improvement on DDPG that fixes three major problems:
+
+1. **Twin critics**: two Q-networks whose minimum is taken, reducing systematic value overestimation
+2. **Delayed policy updates**: the policy is updated less frequently than the critics (typically once for every two critic updates), allowing value estimates to stabilize
+3. **Target policy smoothing**: noise is added to the target policy, smoothing estimates and making learning more robust
+
+**Advantages**: more stable than DDPG, performant on continuous control, sample-efficient thanks to its off-policy nature.
+
+**Applications**: robotic arm control, relatively simple continuous control tasks.
+
+## Robotics-Specific Techniques
+
+**Reward Shaping**: in robotics, natural rewards are often sparse. The robot only receives a positive signal when it completes the entire task, which can take hundreds of actions. Reward shaping designs intermediate rewards that guide learning: reducing distance to the goal, aligning the gripper with the object, giving a bonus for first contact. It's like putting road signs along a route instead of only marking the finish line.
+
+**Curriculum Learning**: training on tasks of increasing difficulty. You start with large, easy-to-grasp objects, then reduce the size. You start on flat terrain, then add slopes and obstacles. The robot progresses like a student: easy exercises first, hard exams later.
+
+**Sim-to-Real and Domain Randomization**: train in simulation then deploy on a real robot. For the transfer to work, simulation parameters are massively randomized: friction, masses, stiffness, textures, lighting, sensor and actuator noise, latencies. If the agent works across all these varied conditions in simulation, it has a good chance of working in the real world, which is just one instantiation among many.
+
+<Callout type="warning" title="The Reward Problem: Critical and Underestimated">
+Designing a good reward function is the most critical and most underestimated aspect of robotic RL. A poorly designed reward leads to pathological behaviors. The robot finds tricks to maximize the reward without accomplishing the actual task (reward hacking). Classic example: a robot supposed to walk instead learns to fall in a way that maximizes horizontal displacement. The reward rewarded displacement, not walking.
+</Callout>
+
+## Comparative Summary
+
+**PPO**: on-policy, very stable, requires a lot of data but easily parallelizable on GPU. Ideal for large simulations.
+
+**SAC**: off-policy, sample-efficient, naturally explores well. Ideal when data is limited or expensive to obtain.
+
+**TD3**: off-policy, simple, stable. Good trade-off for continuous control when SAC is too complex.
+
+## Recent Trends
+
+- **RL from Human Feedback (RLHF)**: using human feedback (preferences, corrections) to define the reward rather than programming it manually
+- **Foundation Models + RL**: an LLM automatically generates reward functions from a natural language task description
+- **Offline RL**: learning from pre-collected data without real-time interaction with the environment, reusing existing demonstrations
+- **Multi-task RL**: a single agent that learns many tasks simultaneously and can transfer its skills between them

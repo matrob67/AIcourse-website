@@ -1,0 +1,125 @@
+---
+title: "Dense, Sparse, and Hybrid Retrieval"
+description: "Comparison of retrieval methods for RAG: dense search (embeddings), sparse search (BM25), and hybrid. Understanding when to use each approach."
+---
+
+
+
+## Three Worlds of Retrieval
+
+There are three major families for finding relevant documents. **Dense** search captures **meaning** (it knows that "car" and "automobile" refer to the same thing). **Sparse** search captures **exact terms** (it finds "error 404" without ambiguity). **Hybrid** search combines both for the best of both worlds. Understanding these three approaches means understanding the core of RAG.
+
+<Callout type="info" title="Opposing Forces">
+Dense: "automobile" matches "car". Sparse: "automobile" never matches "car".
+Dense: "error 404" matches "HTTP error handling". Sparse: "error 404" matches **exactly** "error 404".
+Each excels where the other fails. That's why hybrid is so powerful.
+</Callout>
+
+## Sparse (BM25): The Old Guard That Still Works
+
+BM25 is the classic search algorithm, the one that has powered Elasticsearch and traditional search engines for 30 years. Its principle: count words. Which documents contain the terms from your query? **Rare** terms count more (that's the IDF factor -- Inverse Document Frequency, which measures how rare a term is across the entire corpus). If "photosynthesis" appears in 3 documents out of a million, it's much more discriminating than "the" which appears everywhere.
+
+```python
+from rank_bm25 import BM25Okapi
+
+bm25 = BM25Okapi([doc.split() for doc in documents])
+scores = bm25.get_scores(query.split())
+```
+
+**Strengths**:
+- Proper nouns, error codes, reference numbers: found every time
+- Zero GPU, zero embedding model — it runs on a Raspberry Pi
+- Scalable: an inverted index is one of the most efficient data structures in existence
+
+**Weaknesses**:
+- No semantic understanding: "car" and "automobile" are two different words, period
+- Sensitive to the exact wording of the query
+
+### When BM25 Is Enough
+Technical corpus (code, API documentation, logs). Queries with precise keywords. Zero compute budget. If your users are searching for identifiers, function names, or error codes, BM25 is unbeatable.
+
+## Dense (Embeddings): Semantic Understanding
+
+An embedding model transforms text into a vector. Two texts that discuss the same topic — even if phrased differently — produce nearby vectors. This is search by **meaning**, not by words.
+
+The foundational paper for this approach is DPR (Dense Passage Retrieval) by Karpukhin et al. in 2020. Their idea: use two BERT encoders — one for the question, one for the passage — and train the whole thing so that good passages land near the question in vector space. The result surprised everyone: DPR beat BM25 on question answering benchmarks, proving that dense search could replace 30 years of sparse methods for this type of task. This paper launched the entire RAG ecosystem as we know it today.
+
+<ArxivLink id="2004.04906" title="Dense Passage Retrieval for Open-Domain QA (Karpukhin et al., 2020)" />
+
+**Strengths**:
+- Semantic understanding: "how to reduce my electricity bill" retrieves an article titled "everyday energy savings"
+- Handles synonyms, paraphrases, reformulations
+- Works cross-lingually with the right models (a query in French retrieves a document in English)
+
+**Weaknesses**:
+- Rare or technical terms: may miss them because the model hasn't seen them during training
+- Expensive: requires a GPU and an embedding model
+- "Semantic false positives": two texts that seem close on the surface but discuss different topics
+
+<Callout type="tip" title="The Dense-Only Trap">
+Dense alone can miss the obvious. A user searches for "error 404"? Dense returns an article about "HTTP error handling" (semantically close). BM25 immediately finds the document that literally contains "error 404". Which one do you prefer as the first result?
+</Callout>
+
+## Hybrid: The Best of Both Worlds
+
+The idea is simple: run both searches in parallel, then merge the results. Two fusion methods:
+
+### Weighted Score Fusion
+$$\text{final\_score} = \alpha \times \text{dense\_score} + (1 - \alpha) \times \text{sparse\_score}$$
+
+The alpha parameter controls the mix. Alpha = 0.7 gives more weight to dense (semantic search). The problem: dense and sparse scores are on completely different scales, making the weighting fragile.
+
+### Reciprocal Rank Fusion (RRF)
+A more robust solution: instead of merging **scores** (incomparable across systems), merge the **ranks**:
+
+$$\text{RRF}(doc) = \sum_i \frac{1}{k + \text{rank}_i(doc)}$$
+
+A document ranked first by both systems gets a high score. A document ranked first by only one system gets a medium score. The advantage: no normalization needed, it works out of the box.
+
+```python
+dense_results = vector_db.search(query_embedding, top_k=20)
+sparse_results = bm25.get_top_k(query, k=20)
+final = reciprocal_rank_fusion(dense_results, sparse_results, k=60)
+```
+
+<Callout type="paper" title="Empirical Results">
+Hybrid consistently outperforms dense-only and sparse-only in the literature. Typical improvement: 5 to 15 points of recall@10 depending on the dataset. The gain is particularly pronounced on technical queries containing specific terms.
+</Callout>
+
+## SPLADE (Sparse Lexical and Expansion): Sparse but Semantic
+
+SPLADE is a fascinating approach that blurs the boundary between dense and sparse. It's a Transformer that produces **sparse** vectors (like BM25, with zeros everywhere) but with **semantic understanding**.
+
+Concretely: each dimension of the vector corresponds to a vocabulary term. The model can "activate" terms that aren't in the original text — this is intelligent term expansion. A document about "car" will also have activation on "automobile", "vehicle", "drive".
+
+It's a sweet spot between dense and sparse, compatible with classic inverted indexes (so it's fast). But in practice, the BM25 + dense hybrid remains more popular because it's simpler to set up.
+
+## Comparison Table
+
+| Aspect | BM25 | Dense | Hybrid | SPLADE |
+|---|---|---|---|---|
+| Semantic | No | Yes | Yes | Yes |
+| Exact terms | Excellent | Average | Excellent | Good |
+| Cost | Minimal | Model + GPU | Both | Model |
+| Latency | Very fast | Fast | Moderate | Fast |
+
+## When to Use What
+
+### BM25 Alone
+- Technical corpus with precise terminology (code, API docs, logs)
+- Keyword searches where semantics don't help
+- Compute budget = 0
+
+### Dense Alone
+- Conversational natural language questions
+- Cross-lingual search (query in French, docs in English)
+- You have GPUs and a good embedding model
+
+### Hybrid (recommended by default)
+- **Always when possible.** BM25 costs almost nothing to add (an inverted index on disk), and hybrid improves results in nearly all cases. The only additional cost is fusion complexity, which is minimal.
+
+<Callout type="warning" title="Evaluate on YOUR Data">
+Performance varies enormously by domain. Build a small test set (50 queries with expected documents). Compare dense, sparse, and hybrid on **your actual data**. That's the only way to know what works for your case.
+</Callout>
+
+**Pragmatic recommendation**: start with hybrid (dense + BM25 via RRF). It's simple, robust, and covers 95% of cases. If results are insufficient, you'll know how to diagnose the cause: if dense fails, it's an embedding problem; if sparse fails, it's a vocabulary problem. And you can refine accordingly.

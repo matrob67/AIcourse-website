@@ -1,0 +1,128 @@
+---
+title: "Integrals in ML: marginalization and expectation"
+description: "Why integrals appear in machine learning, how expectation and marginalization are expressed as integrals, and how Monte Carlo approximations make these computations possible."
+---
+
+## The integral: a continuous sum
+
+You know the discrete sum: adding up a list of numbers. The integral is the same idea, but for infinitely many values. Instead of adding separate terms, you "sum" the values of a function along a continuum.
+
+Imagine you want to measure the area of a lake on a map. You could slice the region into small squares and count how many fall inside the lake. The smaller the squares, the more precise the estimate. In the limit, when the squares become infinitely small, you get the exact area -- that's the integral.
+
+$$\int_a^b f(x) \, dx = \lim_{n \to \infty} \sum_{i=1}^{n} f(x_i) \cdot \Delta x$$
+
+In ML, integrals don't appear for computing areas, but for two fundamental operations: **expectation** and **marginalization**.
+
+## Expectation: the probability-weighted average
+
+The expectation of a continuous random variable $X$ with probability density $p(x)$ is:
+
+$$\mathbb{E}[X] = \int_{-\infty}^{+\infty} x \cdot p(x) \, dx$$
+
+It's the "average" of $X$, but not a simple arithmetic average. Each value $x$ is weighted by its probability $p(x)$. Likely values count more than rare ones.
+
+### Analogy: the center of gravity
+
+Imagine a metal bar whose density varies along its length. The center of gravity of this bar is exactly the expectation: it's the balance point, the "average position" weighted by mass. If the bar is heavier on the left, the center of gravity shifts left.
+
+### Expectation of a function
+
+More generally, if you want the average of $g(X)$:
+
+$$\mathbb{E}[g(X)] = \int g(x) \cdot p(x) \, dx$$
+
+In ML, $g$ can be the loss, a metric, or any quantity of interest. The **expected loss** over the data distribution is:
+
+$$\mathcal{R}(\theta) = \mathbb{E}_{(x, y) \sim p_{\text{data}}}[\ell(f_\theta(x), y)] = \int \ell(f_\theta(x), y) \cdot p(x, y) \, dx \, dy$$
+
+This is the **risk** -- the average loss over all possible data, not just those in the training set. It's what we're truly trying to minimize. The empirical loss (on the dataset) is an approximation of it.
+
+## Marginalization: eliminating a variable
+
+Marginalization is the operation of "getting rid of" a variable by integrating over all its possible values. If you have the joint distribution $p(x, y)$ and want the distribution of $x$ alone:
+
+$$p(x) = \int p(x, y) \, dy$$
+
+You sum (integrate) over all possible values of $y$. The information about $y$ is "averaged out" -- you no longer know anything about $y$, but you have the complete distribution of $x$.
+
+### Concrete example
+
+Imagine you have a weather prediction model that depends on temperature $T$ and humidity $H$: $p(\text{rain} \mid T, H)$. You know the joint distribution $p(T, H)$, but you want to predict rain **regardless of** temperature. You marginalize over $T$:
+
+$$p(\text{rain} \mid H) = \int p(\text{rain} \mid T, H) \cdot p(T \mid H) \, dT$$
+
+You consider all possible temperatures, weighted by their probability, and obtain a prediction that depends only on $H$.
+
+### Marginalization in Bayesian ML
+
+In the Bayesian approach, the model parameters $\theta$ have a posterior distribution $p(\theta \mid \text{data})$. To make a prediction on a new input $x^*$, you marginalize over $\theta$:
+
+$$p(y^* \mid x^*, \text{data}) = \int p(y^* \mid x^*, \theta) \cdot p(\theta \mid \text{data}) \, d\theta$$
+
+Instead of fixing $\theta$ to a single value (as in classical ML), you average the predictions of **all possible models**, weighted by their posterior probability. In theory, this is the best thing to do -- but this integral is almost always impossible to compute exactly.
+
+## The problem: integrals are often intractable
+
+In low dimensions (1, 2, 3 variables), integrals can often be computed analytically or numerically. But in ML, integrals are in **very high dimensions**. Marginalizing over the parameters of a neural network means integrating over millions of dimensions. No classical numerical integration method works in such high dimensions -- it's the **curse of dimensionality**.
+
+Take a simple example: if you discretize each dimension into 10 points, in dimension 100, you'd have $10^{100}$ points to evaluate. That's more than the number of atoms in the observable universe. Grid methods are totally unusable.
+
+## The solution: Monte Carlo approximation
+
+The idea of Monte Carlo is simple and elegant: instead of summing over all possible points, you **draw random samples** from the distribution and average.
+
+$$\mathbb{E}[g(X)] = \int g(x) \cdot p(x) \, dx \approx \frac{1}{N} \sum_{i=1}^{N} g(x_i), \quad x_i \sim p(x)$$
+
+You replace the integral (continuous sum over infinitely many points) with a finite sum over $N$ samples drawn from $p(x)$. By the **law of large numbers**, this estimate converges to the true value as $N$ increases.
+
+### Why it works in high dimensions
+
+The beauty of Monte Carlo is that the convergence rate is $O(1/\sqrt{N})$ **regardless of dimension**. Whether you're in dimension 2 or dimension 10 million, you need the same number of samples to achieve a given accuracy. That's why Monte Carlo is the method of choice for high-dimensional integration.
+
+### Variance and number of samples
+
+The Monte Carlo estimate is **unbiased** (its mean is the true value), but it has **variance**: each estimate is slightly different. The more samples you draw, the more variance decreases. In practice, you need a few hundred to a few thousand samples for reasonable estimates.
+
+## Major applications in deep learning
+
+### Variational Autoencoders (VAE)
+
+VAEs are the most direct application of these concepts. The VAE maximizes a lower bound (ELBO) of the marginal log-likelihood:
+
+$$\ln p(x) = \ln \int p(x \mid z) \cdot p(z) \, dz$$
+
+This integral over latent space $z$ is intractable. The VAE solution:
+
+1. Introduce an approximate distribution $q_\phi(z \mid x)$ (the encoder)
+2. Derive a lower bound, the **ELBO**:
+
+$$\text{ELBO} = \mathbb{E}_{z \sim q_\phi(z|x)}[\ln p_\theta(x \mid z)] - D_{KL}(q_\phi(z \mid x) \| p(z))$$
+
+3. Estimate the first term by Monte Carlo: draw $z$'s from $q_\phi$, compute $\ln p_\theta(x \mid z)$, and average.
+
+The **reparameterization trick** ($z = \mu + \sigma \cdot \epsilon$, with $\epsilon \sim \mathcal{N}(0, 1)$) allows backpropagating the gradient through this sampling.
+
+### Approximate Bayesian inference
+
+Variational inference replaces the exact computation of the posterior $p(\theta \mid \text{data})$ with optimizing an approximate distribution $q(\theta)$. You minimize the KL divergence between $q(\theta)$ and the true posterior, which amounts to maximizing the ELBO. The integrals are estimated by Monte Carlo.
+
+### Bayesian models and uncertainty
+
+Bayesian networks (like MC Dropout or ensembles) use marginalization to estimate prediction **uncertainty**. Instead of a single prediction, you get a distribution. The spread of this distribution measures how "sure" the model is of its answer.
+
+### Diffusion models
+
+Diffusion models (DDPM, Stable Diffusion) also rely on expectations and marginalizations. The training objective is an expectation over noise and timestep:
+
+$$\mathcal{L} = \mathbb{E}_{t, \epsilon, x_0}\left[\|\epsilon - \epsilon_\theta(x_t, t)\|^2\right]$$
+
+Each training batch is a Monte Carlo estimate of this expectation.
+
+## Key takeaways
+
+- The **integral** is a continuous sum, used in ML to compute expectations and marginalize variables
+- **Expectation** $\mathbb{E}[g(X)] = \int g(x) p(x) dx$ is the probability-weighted average -- it's what the empirical loss approximates
+- **Marginalization** $p(x) = \int p(x, y) dy$ eliminates a variable by integrating over all its possible values
+- In high dimensions, integrals are **intractable**: they can be computed neither analytically nor numerically on a grid
+- **Monte Carlo approximation** replaces the integral with an average over randomly drawn samples, with convergence independent of dimension
+- **VAEs**, variational inference, Bayesian models, and diffusion models all rely on integrals approximated by Monte Carlo

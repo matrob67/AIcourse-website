@@ -1,0 +1,182 @@
+---
+title: "LSTM and GRU: Solving the Vanishing Gradient"
+description: "The LSTM and GRU architectures, their gate mechanisms, and how they capture long-term dependencies in sequences."
+---
+
+## The Critical Problem of Vanilla RNNs
+
+A classic RNN has the memory of a goldfish. After 15-20 tokens, it forgets practically everything. That's the **vanishing gradient**: when you backpropagate the error through many time steps, the gradients are multiplied by the same weights over and over. If these weights are less than 1, the gradient **shrinks exponentially** and eventually becomes nearly zero. Result: the weights of the early layers stop updating, and the network can't learn long-term dependencies.
+
+Concretely, in the sentence "The cat that crossed the street last night while it was raining is very hungry", a classic RNN has forgotten "cat" by the time it processes "hungry". It can't learn that it's the cat that is hungry.
+
+<ImageWithSource
+  src="/images/admin/img-1774010522742.png"
+  alt="Diagram of an LSTM cell with information flow"
+  source="https://colah.github.io/posts/2015-08-Understanding-LSTMs/"
+  caption="The repeating module in a standard RNN contains a single layer."
+  size="large"
+/>
+
+**LSTM** and **GRU** solve this fundamental problem with an elegant mechanism: **gates**. These are learned controllers that decide, at each time step, what to keep in memory, what to forget, and what to add new. Imagine intelligent valves on an information pipeline: they open and close automatically based on context.
+
+## LSTM: Long Short-Term Memory
+
+<ImageWithSource
+  src="/images/admin/img-1774010564330.png"
+  alt="The repeating module in an LSTM contains four interacting layers."
+  source="https://colah.github.io/posts/2015-08-Understanding-LSTMs/"
+  caption="The repeating module in an LSTM contains four interacting layers."
+  size="large"
+/>
+
+### Origins
+
+Invented in 1997 by Hochreiter and Schmidhuber, the LSTM had to wait for the GPU and big data wave of 2010-2015 to truly shine. For about 7 years (2010-2017), it was the dominant architecture for sequences: machine translation, speech recognition, text generation, time series analysis.
+
+### The Architecture: Two States, Three Gates
+
+The key to the LSTM is the separation between two states: the **cell state** $C_t$ and the **hidden state** $h_t$.
+
+The cell state $C_t$ is the true heart of the architecture. Think of it as a **conveyor belt** that runs through the network from end to end. Information flows through it via simple addition operations, without being multiplied by complex weight matrices at each step. Direct consequence: the gradient can flow on this conveyor belt **without attenuating**. It's mathematically more stable than the classic RNN, and that's exactly what solves the vanishing gradient.
+
+The hidden state $h_t$ is what the LSTM "communicates" to the outside world -- it's the visible output of the cell at each time step.
+
+Three gates control how the cell state is modified.
+
+### Forget Gate
+
+$$
+f_t = \sigma(W_f \cdot [h_{t-1}, x_t] + b_f)
+$$
+
+This gate answers the question: "**what to delete from memory?**" It takes the previous hidden state $h_{t-1}$ and the current input $x_t$ as input, passes them through a sigmoid that produces values between 0 and 1 for each dimension. Close to 0 = forget this information. Close to 1 = keep it intact.
+
+Concrete example: in a language model, when the subject of the sentence changes ("And now, let's talk about Mary..."), the forget gate erases information related to the old subject (its gender, number, properties) to make room for the new one.
+
+### Input Gate
+
+$$
+i_t = \sigma(W_i \cdot [h_{t-1}, x_t] + b_i)
+$$
+
+$$
+\tilde{C}_t = \tanh(W_C \cdot [h_{t-1}, x_t] + b_C)
+$$
+
+This gate answers: "**what new information to add?**" Two operations work together. $i_t$ (the gate itself) decides **which** dimensions to update, with values between 0 and 1. $\tilde{C}_t$ (the candidate values) proposes the **content** to add, with values between -1 and 1 thanks to tanh. The element-wise multiplication of these two vectors determines what is actually written to memory.
+
+### Cell Update
+
+$$
+C_t = f_t \odot C_{t-1} + i_t \odot \tilde{C}_t
+$$
+
+**This is where all the magic happens.** This equation is a **linear interpolation**: the old state (filtered by the forget gate) plus the new content (filtered by the input gate). No multiplication by a weight matrix, no wild non-linear activation. Just additions and element-wise multiplications. It's precisely this simplicity that allows the gradient to flow without vanishing.
+
+### Output Gate
+
+$$
+o_t = \sigma(W_o \cdot [h_{t-1}, x_t] + b_o)
+$$
+
+$$
+h_t = o_t \odot \tanh(C_t)
+$$
+
+Final step: "**what to reveal to the outside world?**" The cell state potentially contains a lot of accumulated information, but not all of it is relevant for the current time step. The output gate filters $C_t$ to produce only the useful part in $h_t$, the hidden state that will be seen by subsequent layers.
+
+<Callout type="info" title="Why this saves gradients">
+During backpropagation, the gradient traverses the cell state via the forget gate. If $f \approx 1$, the gradient passes **intact** -- no attenuation. If $f \approx 0$, the gradient vanishes, but that's a **deliberate and learned** choice by the network. The network decides for itself when to forget, unlike the vanilla RNN where attenuation is blind and uncontrollable.
+</Callout>
+
+## GRU: Gated Recurrent Unit
+
+<ImageWithSource
+  src="/images/admin/img-1774010650228.png"
+  alt="Diagram of a GRU cell"
+  source="https://d2l.ai/chapter_recurrent-modern/gru.html"
+  caption="This diagram illustrates how a GRU (Gated Recurrent Unit) cell works, a simplified type of recurrent neural network compared to LSTM. It shows how the reset gate and update gate control information flow to compute the hidden state."
+  size="large"
+/>
+
+### The Simplified Version
+
+Proposed in 2014 by Cho and colleagues, the GRU simplifies the LSTM elegantly: **2 gates instead of 3**, and no separate cell state. Everything goes through a single hidden state $h_t$. Result: about 25% fewer parameters, faster training, and often comparable performance.
+
+### Update Gate
+
+$$
+z_t = \sigma(W_z \cdot [h_{t-1}, x_t] + b_z)
+$$
+
+The update gate combines the roles of the LSTM's forget gate AND input gate into a single gate. It simultaneously answers: "how much of the past to keep?" and "how much new to integrate?" When $z_t$ is close to 0, we keep the old state. When $z_t$ is close to 1, we replace it with new content.
+
+### Reset Gate
+
+$$
+r_t = \sigma(W_r \cdot [h_{t-1}, x_t] + b_r)
+$$
+
+This gate controls **the influence of the past on the candidate**. If $r \approx 0$, the network "resets" by completely ignoring the previous state to compute the new candidate. It starts from scratch, as if the sequence began at this instant. If $r \approx 1$, the past is fully taken into account.
+
+### State Update
+
+$$
+\tilde{h}_t = \tanh(W \cdot [r_t \odot h_{t-1}, x_t] + b)
+$$
+
+$$
+h_t = (1 - z_t) \odot h_{t-1} + z_t \odot \tilde{h}_t
+$$
+
+**The GRU's intuition is crystal clear**: it's a slider switch. The slider $z_t$ moves between "keep all the past" ($z = 0$) and "replace everything with new" ($z = 1$). The beauty of the design is that $(1 - z_t)$ and $z_t$ are complementary: the more you keep, the less you replace, and vice versa. It's this constraint that makes the GRU both simpler and more stable than what you'd get with two independent gates.
+
+<Callout type="tip" title="Quick intuition">
+GRU = a single binary choice per dimension: "do I keep the past or do I replace it?" It's simpler to understand and often sufficient for most tasks.
+</Callout>
+
+## LSTM vs GRU: Who Wins?
+
+| Aspect | LSTM | GRU |
+|--|--|--|
+| Gates | 3 (forget, input, output) | 2 (update, reset) |
+| States | 2 ($C_t$ and $h_t$) | 1 ($h_t$ only) |
+| Parameters | More | ~25% fewer |
+| Training speed | Slower | Faster |
+| Long-term memory | Excellent | Very good |
+
+### The Empirical Truth
+
+Surprise: on most benchmarks, **performance is nearly identical**. Neither wins systematically.
+
+- **GRU better suited** when you have little data (fewer parameters = less overfitting risk) or when training speed is an important factor
+- **LSTM better suited** for very long sequences where the separate cell state offers an advantage, or when you have lots of data to train the extra parameters
+- **Practical recommendation**: test both, choose whichever gives the best results on your validation. Start with GRU (faster to iterate), switch to LSTM if needed
+
+<Callout type="paper" title="Explored variants">
+Many variants have been proposed: Peephole LSTM (gates look directly at the cell state), coupled LSTM (forget and input gates are linked), etc. A systematic 2015 study by Greff et al. compares 8 LSTM variants: performance differences are **minimal**. The vanilla LSTM remains the most robust and proven choice.
+</Callout>
+
+## Practical Usage
+
+### Stacking Layers
+
+In practice, you often stack 2 to 4 layers of LSTM/GRU. The output of layer 1 at each time step becomes the input to layer 2, and so on. It's like stacking levels of abstraction: layer 1 captures local patterns, layer 2 captures higher-level patterns. Beyond 4 layers, gains are generally small and the risk of overfitting increases.
+
+### Bidirectionality
+
+BiLSTMs and BiGRUs run two networks in parallel: one that reads the sequence left to right, the other right to left. Both outputs are concatenated. This is particularly powerful for text classification, Named Entity Recognition (NER), and any task where **the entire sequence is available** at prediction time. Warning: this doesn't apply to text generation (you don't know the future).
+
+### Regularization
+
+- **Dropout**: applied between stacked layers, but **not between time steps** within the same layer (that would break memory continuity)
+- **Variational dropout**: uses the same dropout mask at every time step, maintaining temporal coherence
+- **L2 regularization**: penalizes large weights to prevent overfitting
+
+<Callout type="info" title="A lasting legacy">
+Transformers have largely replaced LSTM and GRU for NLP since 2018. But the gating concepts (intelligent gates) invented by the LSTM survive everywhere in modern deep learning: State Space Models (Mamba), gated MLPs, and even certain Transformer variants. LSTM and GRU lost the architectural battle, but their fundamental principles won the war. Understanding them remains essential for grasping the evolution of deep learning.
+</Callout>
+
+## Summary
+
+LSTM and GRU are RNNs augmented with intelligent memory controlled by gates. The gates automatically learn what to keep and what to forget, solving the vanishing gradient that paralyzed classic RNNs. The LSTM separates cell state and hidden state with 3 gates; the GRU simplifies to 2 gates and a single state. In practice, performance is similar. Even though Transformers dominate today, understanding LSTM and GRU is fundamental: they're the ones that showed that learned gating mechanisms could solve memory problems in deep networks.

@@ -1,0 +1,115 @@
+---
+title: "Tree of Thoughts: Tree-Based Exploration"
+description: "Tree of Thoughts extends chain-of-thought by exploring multiple reasoning paths in parallel, selecting the most promising ones at each step."
+---
+
+
+
+## The Problem: A Single Path Is Fragile
+
+Chain-of-thought generates linear reasoning: step 1, step 2, step 3, conclusion. It's better than no reasoning at all, but it's fragile. If the LLM makes a mistake at step 2, the entire rest is corrupted. There's no way to backtrack.
+
+**Tree of Thoughts (ToT)** offers a natural solution: instead of following a single path, explore **multiple paths in parallel** and select the best ones at each step. It's the difference between a hiker who picks a trail at random and a group of scouts who explore multiple trails and converge on the best one.
+
+<ArxivLink id="2305.10601" title="Tree of Thoughts: Deliberate Problem Solving with Large Language Models (Yao et al., 2023)" />
+
+<Callout type="info" title={"The analogy"}>
+CoT is like a beginner chess player who plays the first move that comes to mind. ToT is like an experienced player who mentally evaluates several moves, anticipates possible responses, and chooses the most promising line. It's tree search applied to reasoning.
+</Callout>
+
+## How It Works
+
+The algorithm breaks down into four steps:
+
+1. **Decompose**: divide the problem into well-defined intermediate steps
+2. **Generate**: at each step, ask the LLM to propose multiple "thoughts" (candidates)
+3. **Evaluate**: each candidate receives a quality score (given by the LLM itself)
+4. **Search**: a search algorithm (BFS or DFS) explores the tree of possibilities
+
+Here's the tree structure:
+
+**Problem**
+- **Thought A** (score: 0.8)
+  - **A1** (score: 0.9) &larr; Best &rarr; **Solution**
+  - A2 (score: 0.3) &cross;
+- **Thought B** (score: 0.6)
+  - B1 (score: 0.7)
+- Thought C (score: 0.2) &cross;
+
+Two search strategies are possible:
+
+**BFS (Breadth-First Search)**: you explore all candidates at each level, keep the K best, then move to the next level. It's reliable when evaluation is good, because you don't risk missing a good branch.
+
+**DFS (Depth-First Search)**: you explore depth-first, and backtrack if you hit a dead end. More memory-efficient for very wide trees, since you don't need to store all candidates at a level.
+
+<Callout type="paper" title="Spectacular results">
+On the Game of 24 (find how to get 24 with 4 numbers): CoT achieves 4% success, ToT achieves **74%**. On crossword puzzles: CoT 16%, ToT **60%**. The advantage is overwhelming on problems that require exploration and backtracking.
+</Callout>
+
+## Thought Evaluation: The LLM Judges Its Own Ideas
+
+The centerpiece of ToT is that the LLM evaluates the quality of its own reasoning steps. It's explicitly asked to rate each candidate:
+
+> **Evaluation prompt:**
+>
+> Evaluate this step for [problem].
+> Step: [thought]
+> Score 1-10:
+> - 1-3: likely dead end
+> - 4-6: uncertain but possible
+> - 7-10: promising
+>
+> Give your score and justification:
+
+This is **assisted metacognition**: the model reflects on its own reflection. And it works surprisingly well, especially on powerful models.
+
+### Concrete Example: The Game of 24
+
+> **Numbers:** 4, 5, 6, 10 -- **Goal:** get 24 using the 4 operations
+>
+> **Step 1 -- Proposals:**
+> - A) $10 - 4 = 6$ (remaining: 5, 6, 6) &rarr; 7/10
+> - B) $5 \times 4 = 20$ (remaining: 6, 10, 20) &rarr; 6/10
+> - C) $6 / 4 = 1.5$ (decimal number, complicates things) &rarr; 3/10
+>
+> Keep A and B, prune C.
+>
+> **Step 2 (from A, with 5, 6, 6):**
+> - A1) $5 + 6 = 11$ (remaining: 6, 11) &rarr; $6 + 11 = 17$ &cross;
+> - A2) $6 - 5 = 1$ &rarr; $6 \times 1 = 6$ &cross;
+> - A3) $5 \times 6 = 30$ &rarr; $30 - 6 = 24$ &check;
+
+The tree found the solution by systematically exploring promising branches and pruning dead ends.
+
+## Variants and Improvements
+
+**ToT + self-consistency**: instead of just evaluating thoughts, you complete them all the way to the final solution. If a thought leads to a valid solution, it's validated. If not, it's pruned. More expensive but more reliable.
+
+**Beam Search**: a simplified and very popular version. At each step, you keep only the K best candidates (the "beam"), generate their continuations, and re-select the K best. It's the most common trade-off between exhaustiveness and cost.
+
+**MCTS (Monte Carlo Tree Search)**: combines ToT with the MCTS algorithm (the one that beat the world champion at Go). Smarter exploration that balances between exploiting promising branches and exploring new ones.
+
+<Callout type="tip" title="When to use ToT">
+ToT helps enormously on **combinatorial** problems: logic puzzles, multi-step planning, mathematical solving, optimization. For simple factual questions or text generation, standard CoT is more than enough and costs 10 to 30 times less.
+</Callout>
+
+## The Cost: The Elephant in the Room
+
+ToT significantly multiplies LLM calls:
+- K candidates per step x E evaluations x N steps
+- With K=5 and N=3 steps: 15 generations + 15 evaluations = **30 LLM calls**
+- Versus **1 single call** for standard CoT
+
+The overhead is 10 to 30 times. In terms of latency, a query that takes 1 second with CoT can take 30 seconds with ToT. In terms of API cost, the bill explodes proportionally.
+
+<Callout type="warning" title="The cost/benefit ratio">
+30 LLM calls instead of 1 is a heavy investment. It's only justifiable if: (1) CoT frequently fails on your type of problem, AND (2) tree exploration can actually correct the errors. For the majority of applications (chatbots, summarization, factual QA), simple CoT or self-consistency (generate 5 answers and vote) are far more cost-effective.
+</Callout>
+
+## The Conceptual Impact: Reasoning as Search
+
+Beyond the algorithm itself, Tree of Thoughts introduced a transformative idea: treating an LLM's reasoning as a **search problem in a state space**, rather than simple sequential token generation.
+
+This perspective directly influenced next-generation reasoning models like o1 (OpenAI) and DeepSeek-R1, which **internalize** the exploration: instead of explicitly performing tree search with multiple calls, these models learn to mentally explore branches during a single call, using more internal reasoning tokens.
+
+Even though explicit ToT is rarely used in production (too expensive), its foundational ideas (branching, pruning, evaluation, backtracking) have become the building blocks of advanced LLM reasoning.

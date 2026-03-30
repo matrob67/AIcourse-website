@@ -1,0 +1,224 @@
+---
+title: "Tool Use Patterns"
+description: "Advanced tool use patterns for LLM agents: dynamic selection, chaining, composite tools, and retry and fallback strategies."
+---
+
+
+
+## Beyond Simple "Call-and-Response"
+
+Calling a tool, receiving a result, and moving on — that's the base case, and it barely covers 5% of real situations. In production, an agent must handle much greater complexity: choosing the right tool among 50 options, chaining 5 calls to accomplish a task, handling errors gracefully, and protecting the user from irreversible actions.
+
+The patterns we'll cover are the **building blocks** of any serious agent. Understanding these patterns means understanding how to build agents that work in the real world, not just in a demo.
+
+<Callout type="info" title="Patterns Are the Foundations of Agents">
+A sophisticated agent isn't a single brilliant algorithm — it's an intelligent combination of elementary patterns: routing to direct to the right tool, chaining for multi-step workflows, retry for robustness, and validation for security. Master these patterns and you can build any agent.
+</Callout>
+
+## Pattern 1: Routing — Directing to the Right Tool
+
+### The Problem
+
+The LLM receives a request and must decide which tool to use among several options. It's exactly like a phone switchboard: the call comes in, and it needs to be routed to the right department without mistakes.
+
+| User Question | Appropriate Tool |
+|---|---|
+| "What's the weather like?" | `weather_api` |
+| "Find the handleLogin function" | `code_search` |
+| "Calculate 15% of 340" | `calculator` |
+| "Who invented the telephone?" | `web_search` |
+
+### Two Routing Approaches
+
+**Implicit routing**: the LLM freely chooses via native function calling. Simple to implement, but reliability degrades with the number of tools. Beyond 15-20 tools, the model's attention fragments and it starts choosing inappropriate tools.
+
+**Explicit routing**: a dedicated classifier (or a specialized prompt) first analyzes the request to determine the category, then selects the specific tool in that category. More robust, but more complex to maintain.
+
+<Callout type="tip" title="Hierarchical Routing for Complex Systems">
+With 20+ tools, organize them in a two-level hierarchy. Level 1: "Is this a data question, communication, or calculation?" Level 2: "In data, is it PostgreSQL, MongoDB, or Elasticsearch?" Each level reduces the choice space, making the decision more reliable at each step.
+</Callout>
+
+## Pattern 2: Sequential Chaining
+
+### Breaking a Complex Task into Steps
+
+The result of one tool feeds the input of the next, like an assembly line. Each link produces what the next one needs:
+
+1. `search_user("Marie Dupont")` &rarr; `{id: 456}`
+2. `get_orders(user_id=456)` &rarr; `[{order_id: 789, ...}]`
+3. `get_order_details(order_id=789)` &rarr; `{product: "Laptop", status: "delivered"}`
+
+The LLM naturally orchestrates this chaining via the **ReAct** (Reasoning-Acting) pattern: it reasons about the situation, decides to call a tool, observes the result, reasons again, and so on until it has all the necessary information. It's a think-act-observe loop that adapts dynamically.
+
+## Pattern 3: Parallel Calls
+
+### Saving Time When Calls Are Independent
+
+When multiple tool calls have no dependency between them (the result of one isn't needed for the other), executing them in parallel divides the latency:
+
+> **User:** "Compare the weather in Paris, London, and Tokyo"
+> **LLM** &rarr; `[weather("Paris"), weather("London"), weather("Tokyo")]` — all three in parallel
+
+Modern models natively support **parallel tool calls**. Instead of 3 seconds (3 sequential calls of 1 second each), you get the response in 1 second. For the user, it's transparent. For latency, it's transformative.
+
+## Pattern 4: Composite Tools
+
+### Encapsulating Complexity Behind a Simple Interface
+
+Combine multiple simple tools into a higher-level tool:
+
+```python
+# Composite tool: search and summarize
+def search_and_summarize(query: str) -> str:
+    results = web_search(query)  # Tool 1: raw search
+    summary = llm.summarize(results)  # Tool 2: summarize
+    return summary
+```
+
+From the LLM's perspective, it's a single tool with a clear interface. But internally, it's a complete pipeline. The advantages are threefold:
+
+- **Simplicity**: the LLM sees one tool instead of two, simplifying its choice
+- **Encapsulation**: coordination logic is hidden in the tool, not delegated to the LLM
+- **Reliability**: the composite handles the details (pagination, formatting) without involving the LLM
+
+## Pattern 5: Retry and Fallback
+
+### When Things Fail, Retry Intelligently
+
+Tools fail. That's normal. What matters is how the agent reacts.
+
+#### Retry with Error Feedback
+
+> **LLM** &rarr; `weather_api("Paris, France")` &rarr; Error: "City not found"
+> **System** &rarr; "The tool returned an error: city not found. Please reformulate."
+> **LLM** &rarr; `weather_api("Paris")` &rarr; Success: `{temp: 18, ...}`
+
+The descriptive error message gives the LLM the information it needs to correct its call. This is the key: a good error message transforms a failure into real-time learning.
+
+#### Fallback to an Alternative Tool
+
+> **LLM** &rarr; `internal_search(query)` &rarr; "No results found"
+> **System** &rarr; "The internal database found nothing. Try an external source."
+> **LLM** &rarr; `web_search(query)` &rarr; [relevant results]
+
+When one tool can't answer, another takes over. This is robustness through redundancy.
+
+<Callout type="warning" title="Watch Out for Infinite Retry Loops">
+Always define a maximum number of attempts (2-3 max). If a tool systematically fails after 3 tries, the LLM must accept the failure and offer an alternative to the user. Otherwise, you're spending time and tokens for nothing in an endless loop.
+</Callout>
+
+## Pattern 6: Human Confirmation
+
+### Ask Before Acting When Stakes Are High
+
+Some actions are irreversible or high-impact. For those, the agent must ask for confirmation:
+
+> **LLM:** "I'm about to send an email to 500 customers with this promotion. Do you confirm?"
+> **User:** "Yes"
+> **LLM** &rarr; `send_email(recipients=500, template="promo_spring")`
+
+### Categorize Actions by Risk Level
+
+| Level | Examples | Confirmation Required |
+|---|---|---|
+| Read-only | Search, viewing a file | Never |
+| Low impact | Create a draft, do a calculation | Rarely |
+| Medium impact | Send a message, modify a document | Sometimes |
+| High impact | Delete data, payment, mass email | Always |
+
+This classification should be defined in advance in the agent's configuration, not left to the LLM's judgment.
+
+## Pattern 7: Parameter Validation
+
+### Check Before Executing
+
+Never blindly trust parameters generated by the LLM. Validate them before execution:
+
+```python
+def safe_sql_query(query: str) -> str:
+    # Check that it's not a destructive query
+    if any(keyword in query.upper() for keyword in ["DROP", "DELETE", "TRUNCATE"]):
+        return "Error: destructive queries are forbidden"
+    # Check syntax
+    if not is_valid_sql(query):
+        return "Error: invalid SQL syntax"
+    return execute_query(query)
+```
+
+This is defense in depth: even if the LLM makes a mistake (or is manipulated), the validation layer blocks dangerous actions.
+
+## Pattern 8: Stateful Tools
+
+### When a Tool "Remembers" Between Calls
+
+Some tools maintain persistent state between successive calls. This is more efficient than reloading everything each time:
+
+```python
+class SpreadsheetTool:
+    def __init__(self):
+        self.workbook = None
+
+    def open(self, path: str) -> str:
+        self.workbook = load_workbook(path)
+        return f"Opened: {path} ({len(self.workbook.sheets)} sheets)"
+
+    def read_cell(self, sheet: str, cell: str) -> str:
+        return str(self.workbook[sheet][cell].value)
+
+    def write_cell(self, sheet: str, cell: str, value: str) -> str:
+        self.workbook[sheet][cell] = value
+        return f"Wrote {value} to {sheet}!{cell}"
+```
+
+The tool opens the file once, then all subsequent operations are fast because the file is already in memory. It's the same principle as a database connection you keep open.
+
+## Design Best Practices
+
+### 1. Granularity: Finding the Sweet Spot
+
+- **Too fine**: the LLM must orchestrate dozens of micro-calls (slow, fragile)
+- **Too coarse**: monolithic tools lack flexibility
+- **The right level**: one coherent business action per tool. "Search for a customer" is good. "Make an HTTP GET call" is too low-level. "Manage the entire CRM" is too high-level.
+
+### 2. Tool Descriptions Are a Contract
+
+Descriptions are the "instruction manual" the LLM uses to decide when and how to call a tool:
+
+```python
+@tool("search_customers")
+def search_customers(name: str, country: str = "US") -> list[Customer]:
+    """
+    Search for customers by name and country.
+
+    Usage examples:
+    - search_customers("Smith") for all Smiths in the US
+    - search_customers("Dupont", "FR") for Duponts in France
+
+    Returns a list of customers (max 100).
+    """
+    ...
+```
+
+Clear descriptions with concrete examples drastically improve tool use reliability.
+
+### 3. Idempotence When Possible
+
+An idempotent tool produces the same result whether you call it once or ten times. This enormously simplifies retries:
+
+```python
+# Idempotent: calling twice poses no problem
+def set_user_preference(user_id, pref, value):
+    db.set(f"user_{user_id}_{pref}", value)
+
+# Not idempotent: calling twice doubles the effect
+def add_credit(user_id, amount):
+    db.increment(f"user_{user_id}_credit", amount)
+```
+
+### 4. Logging and Observability
+
+Systematically log every tool call: parameters, duration, result or error. Without logs, debugging an agent in production is a nightmare. With structured logs, you can retrace exactly what happened and why.
+
+<Callout type="tip" title={"The Pattern That Changes Everything: Retry with Clear Error Message"}>
+If you only remember one pattern from this page, make it this one. The majority of agent failures in production come from poorly handled tool errors. A descriptive error message allows the LLM to correct its call automatically in most cases. "City not found" is enough for the LLM to try without the country. It's simple, and it transforms an agent's reliability.
+</Callout>

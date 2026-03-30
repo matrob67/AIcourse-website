@@ -1,0 +1,165 @@
+---
+title: "Test-Time Compute Scaling"
+description: "Test-time compute scaling is a new paradigm that improves performance by investing more computation during generation, rather than during training."
+---
+
+
+## A New Axis: Thinking Rather Than Growing
+
+For years, improving an LLM meant the same thing: more parameters, more training data, more GPUs for training. It was a race for size. Bigger = better, and Kaplan et al.'s scaling laws seemed to set this in stone.
+
+**Test-time compute scaling** breaks this logic. The idea: instead of investing the entire compute budget into training, you also invest at inference time. You keep the same model, but give it **more time to think** before answering. It's a fundamental paradigm shift.
+
+<Callout type="info" title="The inverted paradigm">
+The old question: "Which model is big enough to solve this problem?"
+The new question: "How much thinking time does the model need to solve this problem?"
+</Callout>
+
+## The Three Dimensions of Test-Time Compute
+
+### 1. Reasoning Tokens
+
+The model generates intermediate thinking tokens before producing its final answer. It's the most natural form of test-time compute: the model "thinks out loud."
+
+- **o1/o3**: hidden reasoning tokens, invisible to the user
+- **DeepSeek-R1**: fully visible reasoning between `<think>` tags
+- **Claude extended thinking**: structured and accessible "thinking" block
+
+The more reasoning tokens the model generates, the more it can decompose the problem, verify its steps, explore alternatives, and correct its errors. It's like giving a student more scratch paper on an exam.
+
+### 2. Multiple Sampling (Self-Consistency)
+
+Instead of generating a single answer, you generate N independently with temperature > 0:
+
+- **Self-consistency**: take the majority answer (vote)
+- **Best-of-N**: select the best according to a reward model
+- **Iterative revision**: improve the answer step by step
+
+Each sample takes a slightly different reasoning path. By aggregating, you filter noise and converge toward the correct answer.
+
+### 3. Tree Search
+
+You explore multiple reasoning paths in a structured way:
+
+- **Tree of Thoughts**: BFS/DFS exploration on a tree of thoughts
+- **MCTS**: Monte Carlo Tree Search guided by rewards
+- **Beam search**: keep the K best branches at each step
+
+It's the most sophisticated approach, but also the most expensive.
+
+## Technical Corner: Test-Time Scaling Laws
+
+Empirically, when you double test-time compute, the gains follow predictable patterns:
+
+- **Doubling reasoning tokens**: log-linear gain (a lot at the start, then the pace gradually slows)
+- **Doubling the number of samples (self-consistency)**: gain proportional to roughly $\sqrt{2}$ (returns diminish as well)
+- Returns diminish but remain significant much longer than previously thought
+
+**Key result**: a 7B model with 1000 samples can outperform a 70B model with a single sample on certain reasoning tasks. Model size is no longer the only lever.
+
+### Comparison: Test-Time vs Training-Time
+
+| Approach | When | Impact |
+|---|---|---|
+| More parameters | Training | All tasks |
+| More data | Training | All tasks |
+| More test-time compute | Inference | Reasoning mostly |
+
+<Callout type="paper" title="Test-time compute dominates on reasoning">
+A medium-sized model with a large test-time budget can **outperform a 10x larger model** on math, code, and logic tasks. However, for factual knowledge or creativity, test-time compute helps little, because those are capabilities that depend on what was learned during training.
+</Callout>
+
+## Practical Allocation Strategies
+
+### Fixed Budget: How to Distribute It?
+
+You have a fixed inference token budget. How best to use it?
+
+**Three options**:
+- 1 long reasoning chain (lots of thinking tokens)
+- 10 short reasoning chains (fewer tokens each, then vote)
+- A structured search tree
+
+The right choice depends on problem difficulty:
+
+| Difficulty | Recommended Strategy |
+|---|---|
+| Easy | 1 short CoT is more than enough |
+| Medium | Self-consistency with $N=10$ |
+| Hard | Long CoT or tree search |
+
+### Adaptive Compute: Investing Based on Difficulty
+
+The most pragmatic idea: don't apply the same budget to every problem.
+
+1. Generate a quick answer (few tokens)
+2. Estimate the model's confidence (log-likelihood, coherence)
+3. If confidence is low: invest more compute (more samples, longer reasoning)
+
+<Callout type="tip" title="Simple heuristic for detecting difficulty">
+Generate 3 quick answers. If they agree? Return the answer immediately, it's an easy problem. If they diverge? Difficult problem, invest more compute. This heuristic is free (3 samples is very few) and very effective in practice.
+</Callout>
+
+## Concrete Implementations
+
+### Best-of-N with Reward Model
+
+```python
+def best_of_n(prompt, model, reward_model, n=10):
+    responses = [model.generate(prompt, temperature=0.7) for _ in range(n)]
+    scores = [reward_model.score(prompt, r) for r in responses]
+    return responses[argmax(scores)]
+```
+
+You generate many answers, and a separate evaluation model selects the best one. Simple, parallelizable, and surprisingly effective.
+
+### Iterative Revision
+
+```python
+def iterative_revision(prompt, model, max_iterations=3):
+    response = model.generate(prompt)
+    for i in range(max_iterations):
+        critique = model.generate(f"Critique this answer: {response}")
+        if "correct" in critique.lower():
+            break
+        response = model.generate(f"Improve based on: {critique}")
+    return response
+```
+
+You generate, critique, improve, and repeat. Each iteration refines the answer. Less parallelizable than Best-of-N but sometimes more effective because each iteration benefits from the previous one's feedback.
+
+## Limitations to Know
+
+### Cost
+
+N=10 samples means **10 times the cost** in tokens. N=100 = 100 times more expensive. You need to decide whether the quality gain justifies the investment, and for many applications, the answer is no.
+
+### Latency
+
+More compute = more waiting. For an interactive application where the user expects a response in under 500ms, generating 100 samples isn't feasible. Test-time compute shines on batch tasks or latency-tolerant applications.
+
+### Diminishing Returns
+
+Beyond a certain point, more compute no longer helps. This threshold depends on the model and the problem, but it always exists. Doubling compute from 100 to 200 samples rarely helps as much as going from 1 to 2.
+
+<Callout type="warning" title="A targeted tool, not a universal solution">
+Test-time compute helps mostly for **reasoning** — verifiable tasks where the model can iterate and converge toward the correct answer.
+
+For "What is the capital of Switzerland?" (memorized knowledge), more compute adds nothing.
+
+For creative writing (subjective style), more compute can even degrade the result, because the model "overthinks" and loses naturalness.
+
+It's a powerful but targeted tool, not a magic wand.
+</Callout>
+
+## The Change in Perspective
+
+Test-time compute scaling has transformed the fundamental question of applied AI.
+
+**Before**: "Which model should I buy?"
+
+**Now**: "Which model, with what thinking budget, for what type of problem?"
+
+It's a transition toward **adaptive intelligence** that allocates resources intelligently based on task difficulty. Instead of a single model that always responds the same way, you have a system that can think for 100ms on a simple question and 10 minutes on a complex theorem.
+
+This has been the major direction in AI since 2024-2025, and it's accelerating.

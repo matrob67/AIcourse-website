@@ -1,0 +1,137 @@
+---
+title: "FP8 Training: The Next Frontier"
+description: "FP8: 8 bits for everything. DeepSeek-V3 did it at 671B. E4M3 and E5M2 formats. How it works without blowing up."
+---
+
+## FP8: The Bold Bet That Paid Off
+
+The H100's FP8 Tensor Cores offer **2x the throughput of FP16** for matrix multiplications. DeepSeek-V3 (671B parameters) was trained in FP8 and the result is on par with BF16. The bet is won.
+
+But be careful: FP8 means only 8 bits to represent a floating-point number. That's extremely tight. For comparison, FP32 uses 32 bits, BF16 uses 16. Going down to 8 bits is like trying to paint a picture with only 256 colors instead of 65,536. It requires ingenious compensation techniques.
+
+## The Two FP8 Formats: Each Has Its Role
+
+### E4M3 (4 exponent bits, 3 mantissa bits)
+- **Range**: from $-448$ to $+448$
+- **Precision**: about 1.5 significant decimal digits
+- **Usage**: the **forward pass** (weights and activations)
+
+### E5M2 (5 exponent bits, 2 mantissa bits)
+- **Range**: from $-57344$ to $+57344$
+- **Precision**: about 1 significant decimal digit
+- **Usage**: the **backward pass** (gradients)
+
+<Callout type="info" title={"The asymmetry is intentional"}>
+Why two different formats? Because the needs are different. Forward pass activations have a relatively narrow range but need fidelity: E4M3 offers more precision. Backward pass gradients can vary over enormous ranges (from tiny to gigantic): E5M2 offers more dynamic range. It's an intelligent allocation of the 8 available bits based on context.
+</Callout>
+
+## Quantization Techniques: How to Stay Within 8 Bits
+
+The move to FP8 requires "scaling" to fit values into the limited range of the format. Several strategies exist.
+
+### Per-Tensor Scaling: The Simplest
+
+The most direct approach is to use a single scale factor for the entire tensor. You first divide each value by this factor before quantizing to FP8:
+
+$$x_{\text{fp8}} = \text{quantize}\!\left(\frac{x}{\text{scaling\_factor}}\right)$$
+
+Then, during dequantization, you multiply by the same factor to recover the original scale:
+
+$$x_{\text{dequant}} = x_{\text{fp8}} \times \text{scaling\_factor}$$
+
+The factor is computed from the tensor's absolute maximum. This method is simple and fast, but becomes imprecise if the tensor contains outliers, since a single extreme value compresses the entire useful range of the other values.
+
+### Delayed Scaling: Gaining Throughput
+
+Computing the scale factor at every iteration introduces overhead. **Delayed scaling** works around the problem: you use statistics from **previous** iterations to estimate the factor:
+
+$$\text{factor}[t] = \frac{\max(\text{history}[-W:])}{\max_{\text{fp8}}}$$
+
+Why does this work? Because the distributions of activations and gradients change **gradually** from one iteration to the next. The previous iteration's factor is an excellent approximation.
+
+<Callout type="tip" title={"The practical impact of delayed scaling"}>
+No synchronous pause to compute the tensor maximum. Throughput stays maximal. And since distributions change slowly, the quality loss is negligible. This is the default mode in NVIDIA's Transformer Engine.
+</Callout>
+
+### Per-Block Scaling (Microscaling)
+
+A finer approach: instead of one factor per entire tensor, you use different factors per **block** of values (per matrix row, or per group of 128 elements). Each block has its own scale factor.
+
+The advantage: outliers in one block don't affect the others. Precision is better. The cost: you need to store and manage more scale factors, which adds complexity.
+
+## The FP8 Training Pipeline: Who Does What in Which Format
+
+| Operation | Format | Reason |
+|-----------|--------|--------|
+| Forward GEMM (weights x activations) | E4M3 | Predictions require fidelity, hence the most precise format |
+| Backward GEMM (gradients x activations) | E5M2 | Gradients vary over very wide ranges, requiring more dynamic range |
+| Softmax | FP32 | This operation is numerically very sensitive to rounding errors |
+| LayerNorm / RMSNorm | FP32 | Computing statistics (mean, variance) requires high precision |
+| Optimizer (Adam) | FP32 | Moment accumulation must remain precise to guarantee convergence |
+| Master weights | FP32 | Incremental weight updates require fine granularity |
+
+The crucial point of this pipeline is that matrix multiplications (GEMM) are done in FP8 for speed, while **accumulations are done in FP32**. The H100's Tensor Cores natively support this mixed operation: multiply in FP8, accumulate in FP32. This is what makes the whole thing viable.
+
+<Callout type="warning" title={"FP32 accumulation is non-negotiable"}>
+Without FP32 accumulation, the degradation is catastrophic. Rounding errors accumulate with each multiplication and the model diverges. The H100's Tensor Cores handle this in hardware. On older GPUs that don't have this capability, FP8 training is extremely difficult.
+</Callout>
+
+## FP8-Specific Challenges
+
+### Gradient Instability
+
+With only 2-3 mantissa bits, gradient precision is very limited. Small gradients can be rounded to zero, large ones can saturate. This introduces noise into the optimization.
+
+Practical solutions:
+- **Gradient clipping**: cap gradient norms to avoid outliers
+- **Sensitive layers in BF16**: keep embeddings and the last layer in BF16, as they're particularly sensitive to quantization errors
+- **Progressive warm-up**: start training in BF16 for the first few hundred steps, then gradually switch to FP8 once the model has stabilized
+
+### Weight and Activation Outliers
+
+Some neurons produce abnormally large values ("outliers"). A single outlier in a tensor forces the scale factor to adapt to this extreme value, compressing the entire useful range of the other values.
+
+Solutions:
+- **Orthogonal rotation**: redistribute outliers more uniformly across dimensions
+- **Smart clipping**: clip outliers with a calculated minimal loss
+- **Per-channel quantization**: use separate scale factors for each channel (row or column) of the matrix
+
+## Real Results: It Works
+
+DeepSeek-V3 (671B) trained in FP8 achieves quality **comparable to BF16** with approximately **40% reduction in computational cost**. That's a remarkable result.
+
+Validation studies across different model sizes:
+
+| Model size | FP8 vs BF16 degradation |
+|---|---|
+| < 1B | Undetectable (0%) |
+| 1-10B | Minimal (< 0.1%) |
+| > 100B | Low (0.2-0.5%, requires tuning) |
+
+<Callout type="paper" title={"The savings at scale"}>
+For a 70B model, FP8 training saves about 40% of the compute budget compared to BF16. At the scale of a training run costing millions of dollars, that's savings of hundreds of thousands of dollars. For the largest models (100B+), FP8 can make the difference between a viable project and one that's too expensive.
+</Callout>
+
+## Tools and Hardware Support
+
+**Transformer Engine (NVIDIA)**: the reference library. Provides Transformer layers optimized for FP8 with delayed scaling managed automatically. It's transparent: you replace your standard layers with TE layers and FP8 is activated.
+
+**Compatible frameworks**:
+- PyTorch: FP8 support via Transformer Engine
+- JAX: via XLA primitives
+- Megatron-LM: native integration for distributed training
+
+**GPUs supporting FP8**:
+- H100 / H200 (Hopper, NVIDIA): native FP8 Tensor Cores, FP32 accumulation
+- MI300X (AMD): FP8 via Matrix Cores
+- Gaudi 3 (Intel): FP8 support
+
+## Future Perspective: Toward Ever Fewer Bits
+
+FP8 training is just the beginning. NVIDIA's Blackwell architecture introduces support for **FP4** (4 bits!). The trend is clear: each GPU generation reduces the required precision, compensated by increasingly sophisticated stabilization algorithms.
+
+<Callout type="info" title={"The inevitable evolution of precision"}>
+FP32 &rarr; FP16 &rarr; BF16 &rarr; FP8 &rarr; FP4. At each step: throughput doubles, precision decreases, and compensation techniques become more elaborate. It's an engineering tradeoff that continually pushes the boundaries of what's possible.
+</Callout>
+
+FP8 training is no longer experimental. DeepSeek-V3 proved it at the scale of 671 billion parameters. For the next generations of models, FP8 will likely be the standard format, replacing BF16 just as BF16 replaced FP32.

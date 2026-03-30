@@ -1,0 +1,137 @@
+---
+title: "Constrained optimization: Lagrange and KKT"
+description: "Lagrange multipliers, KKT conditions, and constrained optimization: the mathematical tools behind SVMs, normalization, and regularization."
+---
+
+## Why constraints?
+
+In machine learning, we don't simply seek to minimize a function. We want to do it while respecting rules. Probabilities must sum to 1. Embeddings must have unit norm. An SVM's margin must be maximal while correctly classifying the points. Constrained optimization formalizes these situations.
+
+## The general problem
+
+### Formulation
+
+We want to minimize an objective function $f(x)$ subject to constraints:
+
+$$\min_x f(x) \quad \text{subject to} \quad g_i(x) = 0, \quad i = 1, \ldots, m$$
+
+For example: minimize a loss, subject to the constraint that the softmax weights sum to 1.
+
+Without constraints, we use the condition $\nabla f(x) = 0$. But with constraints, the minimum may be at a point where the gradient is not zero: the constraint "prevents" going lower.
+
+## Lagrange multipliers
+
+### The geometric intuition
+
+Imagine you're walking on a mountainside (the function $f$) but you're forced to stay on a trail (the constraint $g(x) = 0$). The lowest point you can reach is where the trail is tangent to a contour line of the mountain. At that point, the slope of the mountain is perpendicular to the trail.
+
+Mathematically: at the optimal point, the gradient of $f$ is parallel to the gradient of $g$:
+
+$$\nabla f(x^*) = \lambda \nabla g(x^*)$$
+
+The scalar $\lambda$ is the Lagrange multiplier.
+
+### The Lagrangian
+
+We combine the objective and constraints into a single function:
+
+$$\mathcal{L}(x, \lambda) = f(x) + \sum_{i=1}^m \lambda_i g_i(x)$$
+
+The optimality conditions are then:
+
+$$\nabla_x \mathcal{L} = 0 \quad \text{and} \quad \nabla_\lambda \mathcal{L} = 0$$
+
+The first condition gives $\nabla f = -\sum \lambda_i \nabla g_i$ (tangency). The second gives back the constraints $g_i(x) = 0$.
+
+### Concrete example
+
+Maximize entropy $H = -\sum_i p_i \log p_i$ subject to the constraint $\sum_i p_i = 1$:
+
+$$\mathcal{L}(p, \lambda) = -\sum_i p_i \log p_i + \lambda\left(\sum_i p_i - 1\right)$$
+
+Differentiating with respect to $p_i$ and solving, we get $p_i = 1/K$ for all classes: the uniform distribution maximizes entropy. This elegant result follows directly from the Lagrange method.
+
+### Interpretation of the multiplier
+
+The multiplier $\lambda$ has an economic interpretation: it's the sensitivity of the optimal objective to a relaxation of the constraint. If $\lambda$ is large, the constraint is "costly": relaxing it a little would greatly improve the objective.
+
+## Inequality constraints and KKT conditions
+
+### The extended problem
+
+In practice, constraints are often inequalities:
+
+$$\min_x f(x) \quad \text{subject to} \quad g_i(x) \leq 0, \quad i = 1, \ldots, m$$
+
+For example: the margin of an SVM must be at least 1, i.e., $g_i(x) = 1 - y_i(\mathbf{w} \cdot \mathbf{x}_i + b) \leq 0$.
+
+### The KKT conditions
+
+The Karush-Kuhn-Tucker (KKT) conditions, formulated independently by Karush (1939) then Kuhn and Tucker (1951), generalize the Lagrange conditions to inequalities. At the optimal point $(x^*, \lambda^*)$:
+
+1. **Stationarity**: $\nabla_x \mathcal{L}(x^*, \lambda^*) = 0$
+2. **Primal feasibility**: $g_i(x^*) \leq 0$ for all $i$
+3. **Dual feasibility**: $\lambda_i \geq 0$ for all $i$
+4. **Complementary slackness**: $\lambda_i g_i(x^*) = 0$ for all $i$
+
+### The complementary slackness condition
+
+This is the most subtle and most useful condition. It says: either the constraint is active ($g_i(x^*) = 0$, we're on the boundary), or the multiplier is zero ($\lambda_i = 0$, the constraint has no effect). Both are never simultaneously nonzero.
+
+In intuitive terms: a constraint that isn't "tight" costs nothing. Only active constraints influence the solution.
+
+## Major application: SVMs
+
+### The primal problem
+
+A linear SVM seeks the hyperplane that separates classes with maximum margin:
+
+$$\min_{\mathbf{w}, b} \frac{1}{2} \|\mathbf{w}\|^2 \quad \text{subject to} \quad y_i(\mathbf{w} \cdot \mathbf{x}_i + b) \geq 1, \quad \forall i$$
+
+You minimize the norm of weights (maximum margin) subject to the constraint that each point is correctly classified with a margin of at least 1.
+
+### The dual
+
+By forming the Lagrangian and applying KKT, you get the dual problem:
+
+$$\max_\alpha \sum_i \alpha_i - \frac{1}{2} \sum_{i,j} \alpha_i \alpha_j y_i y_j (\mathbf{x}_i \cdot \mathbf{x}_j) \quad \text{subject to} \quad \alpha_i \geq 0, \quad \sum_i \alpha_i y_i = 0$$
+
+### Support vectors
+
+By the complementary slackness condition, $\alpha_i > 0$ only if $y_i(\mathbf{w} \cdot \mathbf{x}_i + b) = 1$. These points, exactly on the margin, are the support vectors. They are the only ones that matter for defining the hyperplane. All other points ($\alpha_i = 0$) could be removed without changing the solution.
+
+### The kernel trick
+
+The dual depends on the data only through dot products $\mathbf{x}_i \cdot \mathbf{x}_j$. By replacing this dot product with a kernel $K(\mathbf{x}_i, \mathbf{x}_j)$, you can separate data that isn't linearly separable without ever explicitly computing the transformation. That's the kernel trick, a direct consequence of the dual formulation.
+
+## Other applications in ML
+
+### Embedding normalization
+
+Constraining embedding vectors to live on the unit sphere ($\|e\| = 1$) is an equality constraint. In practice, you normalize directly rather than using Lagrange, but the underlying theory is the same.
+
+### Regularization as a constraint
+
+Instead of minimizing $L(\theta) + \lambda \|\theta\|^2$ (penalized formulation), you can write the equivalent problem:
+
+$$\min_\theta L(\theta) \quad \text{subject to} \quad \|\theta\|^2 \leq C$$
+
+The two formulations are linked by Lagrangian duality. For each $\lambda$, there exists a corresponding $C$, and vice versa. That's why regularization can be seen as a constraint on model complexity.
+
+### Fairness constraints
+
+Increasingly, we want fair models. For example: the probability of a positive prediction must be the same for two demographic groups. This is expressed as an equality constraint on model outputs, and Lagrange multipliers allow integrating this constraint into training.
+
+### Strong and weak duality
+
+In convex optimization, strong duality means the dual problem has the same optimal solution as the primal. This is a powerful result because the dual is sometimes easier to solve. Weak duality ($\text{dual} \leq \text{primal}$) is always true and provides a useful lower bound.
+
+## Key takeaways
+
+- Lagrange multipliers allow optimizing under equality constraints
+- The geometric intuition is tangency between the contour lines of the objective and the constraint
+- KKT conditions extend the method to inequality constraints
+- Complementary slackness says only active constraints matter
+- SVMs are the flagship application: the dual formulation leads to the kernel trick
+- Regularization can be seen as a constraint on parameters
+- These tools remain relevant for fairness and normalization constraints in modern ML

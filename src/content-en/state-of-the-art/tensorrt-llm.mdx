@@ -1,0 +1,157 @@
+---
+title: "TensorRT-LLM: Maximum NVIDIA Optimization"
+description: "NVIDIA's solution for squeezing every millisecond of performance from GPUs."
+---
+
+
+
+
+
+## The Positioning
+
+TensorRT-LLM (TRT-LLM) is NVIDIA's **premium** tool for LLM inference. Goal: **maximum performance** on NVIDIA GPUs, at the cost of higher complexity than vLLM.
+
+It's the choice for very large deployments: if you're serving 1M requests/day on GPU, every millisecond counts.
+
+<Callout type="info" title="vLLM vs TRT-LLM">
+vLLM: excellent simplicity/performance tradeoff. TRT-LLM: better performance, more complex. For prototyping, vLLM. For hyper-optimized production, TRT-LLM.
+</Callout>
+
+## Architecture
+
+### Compilation Pipeline
+
+TensorRT-LLM **compiles** the model for a specific GPU:
+
+1. Define the architecture in Python (TRT-LLM API)
+2. Build the computation graph
+3. TensorRT **fuses kernels** and optimizes for the target GPU
+4. Generate an optimized compiled engine
+
+The compilation phase is costly in time, but the resulting engine executes extremely fast afterward.
+
+### Applied Optimizations
+
+- **Kernel fusion**: combine multiple operations into a single GPU kernel
+- **FlashAttention**: optimized attention with minimal memory access
+- **Quantization**: FP8, INT8, INT4 natively supported
+- **Multi-GPU parallelism**: transparent tensor parallelism and pipeline parallelism
+
+## FP8 Quantization (The Star)
+
+NVIDIA's H100 GPU **natively** supports FP8 in its Tensor Cores:
+
+- **FP8 E4M3**: 1 sign bit, 4 exponent bits, 3 mantissa bits
+- **Quasi lossless**: < 0.1% perplexity loss
+- **2x faster** than FP16
+- **Zero calibration**: just a cast
+
+It's magical: visible KV cache compression, visible speedup, virtually no loss.
+
+<Callout type="tip" title="FP8 on H100">
+FP8 is the optimal format for H100. Use it without hesitation if you have the hardware. The quality/speed ratio is unbeatable.
+</Callout>
+
+## In-Flight Batching
+
+TensorRT-LLM implements **continuous batching** with specific optimizations:
+
+- Mix prefill and decode in the same batch
+- **Micro-batching**: group operations to exploit Tensor Cores
+- Dynamic scheduling and request preemption
+
+It's continuous batching, "NVIDIA-optimized" version.
+
+## Multi-GPU and Multi-Node
+
+### Tensor Parallelism (TP)
+
+Split each layer across multiple GPUs:
+
+- **GPU 0**: weight columns 0-1024
+- **GPU 1**: weight columns 1024-2048
+- ...
+
+With AllReduce for synchronization. Reduces latency proportionally to the number of GPUs.
+
+### Pipeline Parallelism (PP)
+
+Split the layers themselves across GPUs:
+
+- **GPU 0**: layers 0-15
+- **GPU 1**: layers 16-31
+
+Increases throughput but not latency.
+
+```bash
+# Example: compile a 70B model for 2 GPUs
+trtllm-build --model_dir ./mistral-70b \
+    --tp_size 2 \
+    --output_dir ./engines/mistral-tp2
+```
+
+## Real Performance
+
+On A100 80GB, Mistral-7B, batch=64:
+
+| Framework | Throughput (tokens/s) | Latency P50 (ms/token) |
+|---|---|---|
+| HF Transformers | ~800 | ~80 |
+| vLLM | ~3500 | ~18 |
+| TGI | ~3200 | ~20 |
+| **TRT-LLM (FP16)** | **~4200** | **~15** |
+| **TRT-LLM (FP8)** | **~7000** | **~9** |
+
+TRT-LLM wins through hardware-aware compilation. Kernels are optimized for the GPU's exact architecture.
+
+## Integration with Triton
+
+TRT-LLM integrates natively with **NVIDIA Triton Inference Server**:
+
+- Load balancing between instances
+- Automatic scaling
+- Complete monitoring
+- A/B testing
+- Multi-model support
+
+Triton = complete production infrastructure.
+
+## The Pitfalls
+
+### Setup Complexity
+
+Not all Hugging Face models are automatically supported. You must define the architecture in the TRT-LLM API.
+
+### NVIDIA Lock-In
+
+TensorRT-LLM works **only** on NVIDIA GPUs. No portability. vLLM and ONNX Runtime are more portable.
+
+### Recompilation Required
+
+Compiled engines are **specific to a GPU and configuration**:
+
+- Change the max batch size? **Recompile** (15 min)
+- Change the max context length? **Recompile**
+- Change the GPU (H100 → A100)? **Recompile**
+
+<Callout type="warning" title="Deployment plan">
+TRT-LLM requires a fixed configuration planned in advance. No runtime flexibility. Size things correctly from the start.
+</Callout>
+
+## When to Use It
+
+**Yes to TRT-LLM:**
+- Mega-scale production on NVIDIA infrastructure
+- Every millisecond counts
+- Hopper GPUs (H100/H200) with native FP8
+- Predictable configuration
+
+**No to TRT-LLM:**
+- Prototyping and experimentation (too heavy)
+- Dynamic flexibility required
+- Multi-vendor deployment
+- Small scale (vLLM is enough)
+
+## Conclusion
+
+TRT-LLM is the **champagne of inference frameworks**: expensive to set up but absolutely optimal in performance. For very high volumes, it pays off. For everything else, vLLM is more than enough.

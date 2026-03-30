@@ -1,0 +1,146 @@
+---
+title: "Mamba: Selective State Spaces"
+description: "Analysis of Mamba, the selective SSM architecture that rivals Transformers by introducing input-dependent parameters in State Space Models."
+---
+
+## The problem S4 can't solve
+
+Imagine this simple test: you're given the sequence `a1 b2 c3 COPY 2`, and you need to answer `b`.
+
+A human understands instantly: "COPY 2" means copy the second element of the list. To do this, you need to **decide in real time** which information to store in memory --- the number 2 retroactively changes the importance of each previous element.
+
+S4, however, applies the same fixed filter to every token, without considering the content. It can't "understand" that the word COPY changes the game. S4 excels on music, time series, regular signals --- but it fails on this kind of task where the **context changes the rules**.
+
+That's the problem **Mamba** solves.
+
+<ArxivLink id="2312.00752" title="Mamba: Linear-Time Sequence Modeling with Selective State Spaces" />
+
+
+
+## Time-invariant SSMs: their fundamental limitation
+
+S4 is an **LTI** (Linear Time-Invariant) system, meaning the same matrices A, B, C apply at every time step, regardless of the input content. "Time-invariant" means these matrices are fixed once trained. Every token passes through the same filter, regardless of its meaning in context.
+
+The most telling analogy: it's an audio amplifier with a fixed volume. Whether the music is soft or loud, whether the passage is a crucial violin solo or a silence between movements, the filter treats everything the same way. There's no way to "turn up the volume" when something important comes along.
+
+<Callout type="info" title="Selectivity as an intelligent compression mechanism">
+The fundamental idea behind Mamba: selectivity in SSMs is analogous to the **LSTM's forget gate**. It allows the model to dynamically decide, at each token, what to store in its hidden state and what to ignore. An important keyword? Engrave it in memory. A predictable function word? Let it pass without cluttering the state. It's adaptive rather than uniform compression.
+</Callout>
+
+## The Mamba architecture: making parameters input-dependent
+
+The big idea behind Mamba, published by Albert Gu and Tri Dao in December 2023, is simple to state: make certain SSM parameters **dependent on the current token**. Instead of a fixed filter, the model adjusts its behavior at each time step based on what it sees.
+
+### The three selective parameters
+
+**Delta (the discretization step)**: this is the most intuitive parameter. It controls how fast the state evolves. A large delta = the model gives a lot of importance to the current token and "forgets" the past quickly. A small delta = the model preserves its current state and ignores the input. It's the slider between "absorb" and "ignore."
+
+$$
+\Delta = \text{softplus}(\text{Linear}(x))
+$$
+
+The softplus function ($\log(1 + e^x)$) guarantees that $\Delta > 0$: a negative time step has no physical meaning --- it's a "duration," always positive.
+
+**B (input matrix --- write gate)**: controls **what to write** into the hidden state. In the recurrence equation, B multiplies the input $x_k$ to determine how the current token modifies the state. Each token can influence the state differently.
+
+$$
+B = \text{Linear}(x)
+$$
+
+**C (output matrix --- read gate)**: controls **what to read** from the hidden state. In the recurrence equation, C multiplies the state $h_k$ to determine which information to extract to the output. Each token can "read" the state differently.
+
+$$
+C = \text{Linear}(x)
+$$
+
+Although B and C have the same form (linear projection of $x$), they play opposite roles: B is the write gate (input -> state) while C is the read gate (state -> output). They are applied at different places in the recurrence equation and learn distinct weights.
+
+These three projections are computed from the current token `x` --- hence the name "selectivity." The model adapts its filter at each position.
+
+<Callout type="paper" title="Connection with LSTM">
+When `delta` tends toward infinity, the model completely ignores the previous state and only sees the current token --- like a fully open forget gate. When `delta` tends toward 0, it ignores the token and preserves its state intact --- fully closed forget gate. This is exactly the behavior of the LSTM forget gate, but operating in a continuous, high-dimensional state space rather than on a discrete vector.
+</Callout>
+
+## The technical problem: how to parallelize without FFT?
+
+Selectivity has a major technical cost. S4 could speed up via FFT because its convolution kernel was **fixed** for the entire sequence --- one kernel, one FFT. With Mamba, the kernel changes at every position (it depends on the token). You can no longer unroll the recurrence into a global convolution.
+
+The recurrence becomes:
+
+$$
+h_k = \bar{A}_k \cdot h_{k-1} + \bar{B}_k \cdot x_k
+$$
+
+The "bar" notation designates the **discretized** versions of A and B: the continuous matrices are transformed into discrete matrices suited for token-by-token processing, recomputed at each step using the current $\Delta_k$. The exact discretization gives:
+
+$$
+\bar{A}_k = \exp(\Delta_k A), \quad \bar{B}_k = (\Delta_k A)^{-1}(\exp(\Delta_k A) - I) \cdot \Delta_k B
+$$
+
+Since $\bar{A}_k$ and $\bar{B}_k$ change at each step --- it's an **input-dependent recurrence**, impossible to reformulate as a simple convolution.
+
+### The solution: parallel scan
+
+Mamba uses a **parallel associative scan** --- a parallel algorithmic technique known since the 1980s, originally designed to compute prefix sums on parallel machines.
+
+The key observation: even though `h_k` depends on `h_(k-1)`, this recurrence is **associative** --- it can be decomposed into independent sub-problems that are recombined afterward. All states are computed in O(L) total work, with a depth of only O(log L) on GPU. In practice, it's like a binary tree: you combine pairs, then quadruplets, then octets, until covering the entire sequence.
+
+It's not as fast as S4's FFT, but it's incomparably better than pure sequential recurrence.
+
+## Hardware optimizations: Tri Dao's touch
+
+Tri Dao --- the same researcher who developed Flash Attention --- designed a **fused CUDA kernel** for Mamba's selective scan. The philosophy is identical to Flash Attention: minimize memory transfers, not FLOPs.
+
+<Callout type="tip" title="Hardware-aware implementation">
+Mamba's implementation keeps the hidden state in the GPU's **SRAM** (ultra-fast memory of a few MB, integrated directly into the streaming processors) instead of writing it to HBM (the GPU's main memory, larger but ~10x slower). The projections for B, C, and delta are computed in the same kernel, without materializing intermediate states in main memory. Result: the bottleneck shifts from memory bandwidth to pure computation --- exactly what you want.
+</Callout>
+
+
+### The complete Mamba block
+
+A Mamba block stacks six operations in order:
+
+1. Linear expansion projection (factor 2 --- doubles the dimension for more capacity)
+2. Causal 1D convolution (kernel size 4 --- captures a few tokens of local context)
+3. SiLU activation (smooth non-linear function, similar to GELU)
+4. Selective SSM (Mamba's core --- the adaptive recurrence)
+5. Multiplicative gate (controls information flow, like in Gated MLPs)
+6. Projection back to the original dimension
+
+This architecture draws direct inspiration from the Gated MLP block of modern Transformers (LLaMA, Mistral). The only structural difference: the selective SSM replaces attention.
+
+## Performance: Mamba vs Transformers
+
+### Quality on language benchmarks
+
+Mamba 3B (3 billion parameters) achieves performance comparable to same-size Transformers on standard language benchmarks. On certain reasoning tasks involving long sequences, it surpasses them --- its fixed state doesn't suffer from the "lost in the middle" problems of long Transformer contexts.
+
+### The major advantage: inference
+
+| Metric | Transformer | Mamba |
+|----------|-------------|-------|
+| Inference memory | KV cache that grows with L | Fixed state, regardless of length |
+| Cost per token | O(L) (reading KV cache) | O(1) (fixed state update) |
+| Throughput on long context | Decreases with length | Stays constant |
+
+<Callout type="info" title={"KV cache versus fixed state"}>
+A Transformer with a 100,000-token context stores 100,000 key and value vectors per layer --- gigabytes of memory that grow with each generated token. Mamba stores a single fixed-size state vector (a few thousand dimensions), whether the context is 100 or 1,000,000 tokens. In theory, Mamba can process **infinitely long** sequences without any increase in inference memory.
+</Callout>
+
+### Mamba's limitations
+
+Mamba is not a universal solution. Studies have identified specific weaknesses:
+
+- **Precise recall**: retrieving exact information (a name, a date) mentioned 50,000 tokens earlier is difficult --- the state compresses information in a *lossy* way. It's like trying to find an exact sentence in a novel summary: the idea is there, the exact words are not.
+- **In-context learning (few-shot)**: giving 5 examples in the prompt and asking the model to imitate the pattern --- Transformers are significantly better, because they "see" the examples directly in their KV cache.
+- **Ecosystem**: fewer optimized inference tools, fewer pre-trained models, smaller community than the Transformer ecosystem.
+
+## Mamba's legacy
+
+Mamba demonstrated something many believed impossible: a model **without an attention mechanism** can be competitive on large-scale language tasks. Before December 2023, the consensus was that attention was irreplaceable for state-of-the-art NLP.
+
+This impact triggered a wave of innovation: Mamba-2 (faster thanks to SSM-attention unification), Jamba (SSM+attention hybrid at production scale), RWKV-6 (adopting Mamba's selectivity), and applications in genomics, audio, and video.
+
+<Callout type="tip" title="Mamba in practice">
+Pre-trained Mamba models up to 2.8B parameters are available as open source. The architecture has been adopted and adapted by many teams, giving rise to Mamba-2 (faster), Jamba (hybrid with attention, 52B parameters), and specialized variants for genomics, long-duration audio, and protein modeling.
+</Callout>

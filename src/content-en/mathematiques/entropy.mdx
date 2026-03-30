@@ -1,0 +1,145 @@
+---
+title: "Entropy: measuring uncertainty"
+description: "Shannon entropy, its interpretation in terms of compression and uncertainty, and its direct connection to language models and perplexity."
+---
+
+## Entropy: a universal measure of uncertainty
+
+When a language model predicts the next word, some contexts make the prediction easy ("The sky is...") and others make it hard ("She decided to..."). Entropy quantifies exactly this difficulty: it's the mathematical measure of the uncertainty of a probability distribution. The greater the uncertainty, the higher the entropy.
+
+## Shannon's formula
+
+### Definition
+
+For a discrete random variable $X$ with distribution $P$, Shannon entropy is:
+
+$$H(X) = -\sum_{x} P(x) \log P(x)$$
+
+By convention, $0 \log 0 = 0$ (the limit as $p \to 0$).
+
+If the logarithm is base 2, entropy is in bits. If it's the natural logarithm, it's in nats. In ML, we generally use the natural log in calculations, but we often reason in bits for intuition.
+
+### Why this formula?
+
+Shannon sought the only function that satisfies three natural properties:
+- **Continuity**: small changes in probabilities produce small changes in entropy
+- **Maximum for uniform**: uncertainty is maximized when all outcomes are equally likely
+- **Additivity**: the entropy of independent events adds up
+
+The formula $H = -\sum p \log p$ is the unique function (up to a multiplicative constant) that satisfies these three properties.
+
+## Intuition: how many bits to encode?
+
+### The link with compression
+
+Entropy measures the minimum average number of bits needed to encode a message drawn from distribution $P$.
+
+Let's take an example. An alphabet of 4 symbols:
+- Case 1: all equally likely ($p = 1/4$ each). $H = \log_2 4 = 2$ bits. You need 2 bits per symbol (00, 01, 10, 11).
+- Case 2: $P = (1/2, 1/4, 1/8, 1/8)$. $H = 1.75$ bits. You can do better than a fixed-length code: assign a short code ("0") to the frequent symbol and longer codes to rare symbols.
+
+Entropy says: you can't compress below $H$ bits per symbol on average. It's the theoretical limit of compression.
+
+### Language models are compressors
+
+A language model learns the distribution $P(\text{next token} | \text{context})$. A good model assigns high probability to tokens that actually appear, which corresponds to low average surprise, hence low cross-entropy. In other words: a good language model compresses text well.
+
+This connection between prediction and compression is deep. Every good predictor is a good compressor, and vice versa.
+
+## Extreme cases
+
+### Maximum entropy: the uniform distribution
+
+When all $K$ outcomes are equally likely ($P(x) = 1/K$ for all $x$):
+
+$$H_{\max} = \log K$$
+
+This is the case of greatest uncertainty. For a balanced 6-sided die: $H = \log_2 6 \approx 2.58$ bits. For an LLM vocabulary of 50,000 tokens: $H_{\max} = \log_2 50000 \approx 15.6$ bits.
+
+### Minimum entropy: certainty
+
+When one outcome has probability 1 (the others are 0):
+
+$$H = -1 \cdot \log 1 = 0$$
+
+Entropy is zero: there is no uncertainty. You know exactly what will happen. No bits are needed to encode a message whose content you already know.
+
+### In between
+
+For a Bernoulli with parameter $p$:
+
+$$H(p) = -p \log p - (1-p) \log (1-p)$$
+
+Entropy is maximized at $p = 0.5$ (fair coin flip: 1 bit) and tends toward 0 as $p \to 0$ or $p \to 1$.
+
+## Conditional entropy
+
+### Definition
+
+Conditional entropy measures the residual uncertainty about $X$ when you know $Y$:
+
+$$H(X|Y) = -\sum_{x,y} P(x, y) \log P(x|y)$$
+
+It's the average of the entropy of $X$ over the different values of $Y$.
+
+### Fundamental property
+
+$$H(X|Y) \leq H(X)$$
+
+Knowing $Y$ can only reduce (or maintain) the uncertainty about $X$. Information cannot increase uncertainty.
+
+Equality holds if and only if $X$ and $Y$ are independent: knowing $Y$ tells you nothing about $X$.
+
+### In ML
+
+In an autoregressive model, $H(\text{token}_t | \text{tokens}_{1:t-1})$ decreases as the context grows. With more context, predicting the next token is easier. That's why models with longer contexts tend to have better perplexities.
+
+## Perplexity: entropy made readable
+
+### Definition
+
+Perplexity is simply the exponential of cross-entropy:
+
+$$\text{PPL} = 2^{H(P, Q)}$$
+
+where $H(P, Q)$ is the cross-entropy between the true distribution and the model's predictions (in base 2 for bits). In practice, with the natural log:
+
+$$\text{PPL} = e^{-\frac{1}{N}\sum_{i=1}^N \log Q(x_i)}$$
+
+### Interpretation
+
+Perplexity can be interpreted as the effective number of choices the model "hesitates" between at each step. A perplexity of 10 means the model is as uncertain as if it were choosing uniformly among 10 options.
+
+### Numbers in practice
+
+- **Perplexity of 1**: the model predicts perfectly, with zero uncertainty
+- **Perplexity of 50,000**: the model knows nothing, it chooses uniformly from the vocabulary
+- **GPT-2**: perplexity of about 30 on standard benchmarks
+- **GPT-3/4**: significantly lower perplexities
+
+### Why perplexity and not entropy directly?
+
+Perplexity is more intuitive. Saying "the model hesitates between 25 words" is more meaningful than "the entropy is 4.64 bits." Both contain the same information, but perplexity has an immediate interpretation.
+
+## Entropy and regularization
+
+### Maximum entropy principle
+
+When you only have partial knowledge about a distribution (for example, you know its mean but nothing else), the maximum entropy principle says: choose the distribution with the highest entropy compatible with those constraints. It's the most "honest" distribution, the one that doesn't add unjustified assumptions.
+
+- Constraint on the mean: the maximum entropy distribution is exponential
+- Constraints on the mean and variance: it's the Gaussian
+- No constraint (finite support): it's the uniform
+
+### Label smoothing
+
+Label smoothing replaces one-hot labels $(1, 0, 0, \ldots)$ with "softened" labels $(0.9, 0.033, 0.033, \ldots)$. It's a form of entropy regularization: you prevent the model from being too confident by increasing the entropy of the target distribution.
+
+## Key takeaways
+
+- Entropy $H(X) = -\sum p(x) \log p(x)$ measures the uncertainty of a distribution
+- It's maximized for the uniform distribution and zero for a certain distribution
+- Entropy is the theoretical limit of compression
+- Language models are compressors: a good model has low cross-entropy
+- Perplexity $= 2^H$ is the effective number of choices, the standard metric for LLMs
+- Conditional entropy decreases with context: more information = less uncertainty

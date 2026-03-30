@@ -1,0 +1,214 @@
+---
+title: "The Transformer: The Architecture That Changed Everything"
+description: "Understanding the Transformer from scratch: why RNNs weren't enough, how attention works, and why this invention upended all of artificial intelligence."
+---
+
+## Imagine reading a novel through a keyhole
+
+Before 2017, the best language processing models worked like this: they read a sentence **word by word**, from left to right, trying to remember what they had seen before. That's exactly what **RNNs** (Recurrent Neural Networks) and their more evolved cousins, **LSTMs**, did.
+
+The problem? Imagine you're asked to read *Les Miserables* looking at only one word at a time, through a keyhole. By the time you reach page 800, you've forgotten the beginning. And you can't go back.
+
+That was exactly the state of NLP (Natural Language Processing, the field of AI that deals with language) before the Transformer. Three major problems made life impossible:
+
+**1. Sequential slowness.** To process a 100-word sentence, an RNN must take 100 steps, one after another. Impossible to parallelize on a GPU. It's like having an 8-lane highway but only using a single lane.
+
+**2. Memory that fades.** Over the course of steps, the information from the first words gets diluted. This is the famous **vanishing gradient** problem: the mathematical signal that enables learning diminishes at each step, like a message being passed along in a giant game of telephone.
+
+**3. Long-range dependencies.** In the sentence *"The cat, which was peacefully sleeping on the blue cushion near the living room window, suddenly woke up"*, the RNN must remember that it's **the cat** that woke up, despite 15 words of separation. In practice, it didn't manage this well.
+
+<Callout type="info" title="In numbers">
+Training an RNN translation model in 2016 took about **3 to 4 weeks** on a GPU cluster. The Transformer reduced this to a few **days**, a 5 to 10x improvement, simply thanks to parallelization.
+</Callout>
+
+## June 2017: "Attention Is All You Need"
+
+<ImageWithSource
+  src="/images/admin/img-1774046212113.png"
+  alt="Academic paper 'Attention Is All You Need'"
+  sourceUrl="https://arxiv.org/abs/1706.03762"
+  size="medium"
+/>
+
+It's in this context that a team of 8 researchers from Google published a paper with a provocative title: **"Attention Is All You Need"**. Their idea? Throw RNNs in the trash. Completely. And replace them with a single mechanism: **attention**.
+
+<ArxivLink id="1706.03762" title="Attention Is All You Need (Vaswani et al., 2017)" />
+
+The idea wasn't to modify RNNs or improve them. It was to start from scratch. And the result is the **Transformer**: a radically different architecture that would become the foundation of all modern AI.
+
+GPT, BERT, LLaMA, Mistral, Claude, Gemini... **All** of today's large language models are Transformers. It's as if someone had invented the combustion engine while everyone was still using horses.
+
+## Self-attention: everyone looks at everyone
+
+The heart of the Transformer is **self-attention**. The idea is surprisingly simple.
+
+### The dinner party analogy
+
+Imagine a dinner with 10 people around a table. In an RNN, conversations are sequential: person 1 whispers to person 2, who whispers to person 3, and so on. If person 1 says something important, it arrives distorted at person 10.
+
+In a Transformer, **everyone can talk to everyone at the same time**. Each person looks at the other 9 and decides who to pay attention to. Person 10 can hear person 1 directly, with no intermediary.
+
+That's self-attention: each word in the sentence "looks at" all the other words and decides which ones are relevant to it.
+
+### How it works concretely
+
+For each word, the Transformer creates three things:
+
+- **Query (Q)**: "What am I looking for?" -- it's the question the word asks
+- **Key (K)**: "What do I offer?" -- it's the label of each word
+- **Value (V)**: "What information do I transmit?" -- it's the actual content
+
+<ImageWithSource
+  src="/images/admin/img-1774046108326.png"
+  alt="Diagram of Q, K, and V matrices in a Transformer"
+  sourceUrl="https://arxiv.org/abs/1706.03762"
+  size="medium"
+/>
+
+Think of a library. You arrive with a **query** ("I'm looking for a book about AI"). Each book has a **label** ("Artificial Intelligence", "Cooking", "Poetry"). You compare your query to all the labels, and you take the books whose label matches best. The **value** is the content of those books.
+
+The Transformer does exactly that for each word: it compares its Query to the Keys of all other words, and retrieves a weighted average of their Values.
+
+<Callout type="tip" title="Technical corner: the formula">
+Mathematically, attention is computed in a single formula:
+
+`Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) V`
+
+The `QK^T` measures the similarity between each pair of words (dot product). We divide by `sqrt(d_k)` to prevent the numbers from getting too large (d_k is the dimension of the vectors, typically 64). The `softmax` transforms these scores into probabilities that sum to 1. Finally, we multiply by V to get the final result.
+</Callout>
+
+<ImageWithSource
+  src="/images/admin/img-1774047012684.png"
+  alt="Diagram of the attention mechanism in a Transformer"
+  sourceUrl="https://arxiv.org/abs/1706.03762"
+  size="medium"
+/>
+
+## Multi-head attention: seeing the world from multiple angles
+
+<ImageWithSource
+  src="/images/admin/img-1774046308861.png"
+  alt="Diagram of the Multi-Head Attention mechanism"
+  sourceUrl="https://www.researchgate.net/figure/An-example-of-Multi-head-Attention_fig3_345127211"
+  size="medium"
+/>
+
+A single attention mechanism is like looking at a painting with only one eye. You capture one perspective, but not the full richness.
+
+**Multi-head attention** solves this problem: instead of a single attention computation, the Transformer performs **several in parallel** (typically 8). Each attention "head" learns to capture a different type of relationship:
+
+- One head follows **grammatical** relationships (who is the subject of which verb?)
+- Another follows **coreferences** (who does "he" refer to?)
+- Another captures **proximity** relationships (neighboring words)
+- Another detects **semantic** patterns (words in the same semantic field)
+
+It's like having 8 different experts reading the same sentence, each with their own specialty. At the end, you combine their analyses.
+
+<Callout type="info" title={"The zero-cost trick"}>
+Multi-head attention doesn't cost more than single-head! You simply divide the dimension by the number of heads. With a model of dimension 512 and 8 heads, each head works on vectors of dimension 64. The total computation remains identical: 8 x 64 = 512.
+</Callout>
+
+## Positional encoding: "By the way, what's the order?"
+
+There's a crucial detail that's easy to forget: self-attention is **completely blind to word order**. To it, "the cat eats the mouse" and "the mouse eats the cat" are strictly identical -- the same word pairs, the same attention scores.
+
+This is a huge problem. Word order changes everything in natural language!
+
+The solution? You **add** to each word a vector that encodes its position. It's like numbering the pages of a book whose pages have been shuffled. The original Transformer uses sinusoidal functions for this (sines and cosines of different frequencies). Modern models use more advanced techniques like **RoPE** (Rotary Position Embedding), but the principle remains the same: inject the information "this word is at position 1, that one at position 5".
+
+<Callout type="warning" title="Without positional encoding...">
+Without positional encoding, a Transformer couldn't distinguish "John loves Mary" from "Mary loves John". Sentences would be treated as bags of words, with no structure. It's a detail that seems trivial, but it's absolutely fundamental.
+</Callout>
+
+## The complete architecture: encoder + decoder
+
+<ImageWithSource
+  src="/images/admin/img-1774047153615.png"
+  alt="Diagram of the Transformer architecture with encoder and decoder"
+  sourceUrl="https://arxiv.org/abs/1706.03762"
+  size="medium"
+/>
+
+The original Transformer is composed of two stacked blocks, like a two-story factory:
+
+### The encoder: understanding the input
+
+The encoder takes the input sentence (for example, a French sentence to translate) and transforms it into a rich representation. It consists of **6 identical layers** stacked together. Each layer does two things:
+
+1. **Multi-head self-attention**: each word looks at all the others
+2. **Feed-forward network**: a small neural network applied to each position independently
+
+Between each step, a **residual connection** (adding the input and output of each sub-layer) and **normalization** are applied. The residual connection is like keeping a copy of your raw notes in addition to your rewritten notes: if the rewrite fails, you don't lose the original information.
+
+### The decoder: generating the output
+
+The decoder generates the output word by word (for example, the English translation). It also has 6 layers, but each one does three things:
+
+1. **Masked self-attention**: each word only looks at previous words (not the future!)
+2. **Cross-attention**: each output word looks at the entire input via the encoder
+3. **Feed-forward network**
+
+<Callout type="tip" title="Why mask the future?">
+During training, the decoder sees the entire target sentence at once (to go faster). But it must not cheat by looking at words it hasn't generated yet! The causal mask forces each position to only look at what precedes it. It's like an exam where each question is revealed one at a time.
+</Callout>
+
+## Why it changed everything
+
+The Transformer isn't just "a bit better" than RNNs. It's a paradigm shift. Here's why:
+
+### 1. Total parallelization
+
+An RNN processes 1000 words in 1000 sequential steps. A Transformer processes 1000 words **in a single pass**, all in parallel on the GPU. It's the difference between sending 1000 letters one by one and sending 1000 emails simultaneously.
+
+### 2. Long-range dependencies are no longer a problem
+
+Each word is directly connected to all others. No need to pass information through 500 intermediate steps. Word 1 and word 500 are "one hop" apart from each other.
+
+### 3. It scales
+
+The architecture is modular and predictable. You can stack more layers, add more heads, increase dimensions. **Scaling laws** show that performance improves steadily as you increase size. It's this property that allowed going from models with a few million parameters to models with hundreds of billions.
+
+### 4. One architecture for everything
+
+The Transformer has become the universal building block of AI:
+
+| Variant | Principle | Examples | Usage |
+|---|---|---|---|
+| **Encoder-only** | Bidirectional, understands full context | BERT, RoBERTa | Classification, search |
+| **Decoder-only** | Auto-regressive, generates word by word | GPT, LLaMA, Claude, Mistral | Text generation, chatbots |
+| **Encoder-Decoder** | Understands then generates | T5, BART | Translation, summarization |
+| **Vision Transformer** | Attention on image patches | ViT, DINOv2 | Computer vision |
+
+<Callout type="info" title="The current trend">
+Nearly all modern LLMs (GPT-4, Claude, LLaMA, Mistral) use a **decoder-only** architecture. It's simpler, easier to train, and naturally lends itself to text generation and massive scaling.
+</Callout>
+
+## The impact in numbers
+
+The original paper was published in June 2017. Here's what happened next:
+
+- **2017**: The Transformer beats the state of the art in translation (BLEU score -- Bilingual Evaluation Understudy, a translation quality metric -- of 41.0 on English-French, +2 points vs the previous best model)
+- **2018**: BERT (encoder Transformer) revolutionizes text understanding with 340M parameters
+- **2020**: GPT-3 shows that a decoder Transformer of 175 billion parameters can write near-human text
+- **2022**: ChatGPT (Transformer-based) reaches 100 million users in 2 months -- the all-time record
+- **2023-2025**: GPT-4, Claude, Gemini, LLaMA... all Transformers, with reasoning, code, and vision capabilities
+
+The original paper has accumulated more than **130,000 citations**. It's one of the most cited scientific articles in the history of computer science. And its impact goes well beyond text: Transformers power image recognition (ViT), audio transcription (Whisper), music generation, multimodal models...
+
+<Callout type="paper" title="The founding paper">
+"Attention Is All You Need" by Vaswani et al. (2017) isn't just a good paper. It's one of those rare articles that **redefines an entire field**. Before it, NLP was a patchwork of specialized techniques. After it, a single architecture dominates everything.
+</Callout>
+
+## What we'll explore next
+
+Now that you have the big picture, the following sections will dive into the details of each component:
+
+- **Self-attention**: the complete computation with Query, Key, Value (Section 29)
+- **Multi-head attention**: why multiple heads and how it works (Section 30)
+- **Positional encoding**: sinusoidal, learned, RoPE and modern variants (Section 31)
+- **Encoder-decoder**: the complete architecture and its variants (Section 32)
+- **Feed-forward and residual connections**: the complementary building blocks (Section 33)
+- **Pre-norm vs post-norm**: a detail that changes everything for training (Section 34)
+- **Transformer vs RNN**: the definitive comparison (Section 35)
+
+Each of these sections will give you the keys to understand not only how it works, but **why** it was designed that way.

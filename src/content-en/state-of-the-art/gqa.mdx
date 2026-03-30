@@ -1,0 +1,146 @@
+---
+title: "Grouped Query Attention (GQA)"
+description: "Study of Grouped Query Attention, the attention mechanism that offers an optimal trade-off between Multi-Head Attention and Multi-Query Attention by grouping heads into key-value pairs."
+---
+
+## The all-or-nothing problem
+
+MQA is great for efficiency, but sharing **a single** K/V pair across all heads might be too radical. It's like having one waiter for an entire restaurant -- quick to coordinate, but the service suffers when tables have different needs.
+
+MHA is perfect for quality, but its gigantic KV cache limits what you can do in practice. Each head has its own set of keys and values, it's like a dedicated waiter per table -- impeccable service, but the payroll explodes.
+
+What if you didn't have to choose? What if you could have **as many K/V groups as you want** -- from 1 (MQA) to H (MHA), including any value in between?
+
+That's **Grouped Query Attention (GQA)**, introduced by the Google team, and now adopted by virtually all modern open-source LLMs.
+
+<ArxivLink id="2305.13245" title="GQA: Training Generalized Multi-Query Models from Multi-Head Checkpoints" />
+
+
+## The GQA principle
+
+### Grouping the heads
+
+Instead of one K/V pair per head (MHA) or one K/V pair for everyone (MQA), GQA creates **G groups**, each group sharing a K/V pair:
+
+$$
+Q_i = X \cdot W_i^Q \quad \text{(DISTINCT: each head has its own query)}
+$$
+$$
+K_g = X \cdot W_g^K \quad \text{(G projections: one per group)}
+$$
+$$
+V_g = X \cdot W_g^V \quad \text{(G projections: one per group)}
+$$
+
+The H heads are divided into G groups of H/G heads each. All heads within the same group use the same K and V, but keep distinct queries. Each head therefore asks its own "question" to the context, but the context is represented by a reduced number of K/V perspectives.
+
+### The MHA -> GQA -> MQA continuum
+
+GQA elegantly unifies MHA and MQA as extreme cases of the same mechanism:
+
+- **G = H**: each group contains exactly one head -> this is **standard MHA**
+- **G = 1**: a single group contains all heads -> this is **MQA**
+- **1 < G < H**: intermediate configuration -> this is **GQA**
+
+You turn a single knob (the number of groups G) to navigate the entire quality-efficiency spectrum.
+
+<Callout type="info" title="The most common configuration">
+The dominant configuration in modern models is **G = H/8** -- that is, 8 groups for 64 heads (each group contains 8 heads sharing the same K/V). The KV cache is reduced by a factor of 8 compared to MHA, while maintaining 8 distinct K/V sets to capture different aspects of the context. This is the choice of LLaMA 2 70B, Mistral 7B, and many other reference models.
+</Callout>
+
+## KV cache reduction: the real numbers
+
+For a model with H = 64 heads, d_k = 128, and L context tokens:
+
+| Configuration | G | KV cache per layer per token | Reduction vs MHA |
+|--------------|---|-------------------------------|------------------|
+| MHA | 64 | 2 x 64 x 128 = 16,384 elements | 1x |
+| GQA-8 | 8 | 2 x 8 x 128 = 2,048 elements | **8x** |
+| GQA-4 | 4 | 2 x 4 x 128 = 1,024 elements | **16x** |
+| MQA | 1 | 2 x 1 x 128 = 256 elements | **64x** |
+
+Let's put this in concrete perspective: with a context of 128,000 tokens and 80 layers (a GPT-4-type model), the difference between MHA and GQA-8 represents several hundred gigabytes of VRAM. In practice, that's the difference between needing 4 A100 GPUs or a single one -- a direct impact on deployment cost.
+
+<Callout type="tip" title="How to choose G?">
+In practice, G = 8 offers an excellent balance for large models: 8x KV cache reduction with nearly imperceptible quality loss on benchmarks. For very memory-constrained deployments (mobile, edge), G = 4 or G = 2 are viable with moderate degradation. G = 1 (MQA) remains useful for the most extreme cases where every megabyte counts. The rule of thumb: start with G = 8 and reduce only if memory requires it.
+</Callout>
+
+## Converting MHA -> GQA: reusing existing models
+
+One of GQA's most important practical advantages: you can **convert an existing MHA model** to GQA without retraining from scratch. This is crucial when you've invested millions of dollars in an MHA training run.
+
+### The uptrained conversion process
+
+*Uptrained conversion* refers to converting an already-trained MHA model to GQA, followed by a short retraining -- you don't start from scratch.
+
+1. **Group the heads**: distribute the H heads into G groups (consecutive groups, or based on a similarity heuristic)
+2. **Average the K/V**: within each group, compute the average of the K and V weight matrices of the H/G constituent heads
+3. **Fine-tune**: train the converted model on ~5% of the original tokens to recover performance
+
+<Callout type="paper" title="Conversion results">
+The uptrained conversion of LLaMA 65B (MHA) to GQA-8 with only 5% of the original tokens in fine-tuning recovers **over 99%** of the original performance, while multiplying inference throughput by ~5. The return on investment is enormous: a few hours of fine-tuning versus months of full training.
+</Callout>
+
+### Averaging vs selection
+
+Two strategies for forming the group's K/V:
+- **Averaging**: the group's K projection is the average of the K projections of the constituent heads. This approach preserves information from all original heads and generally gives better results.
+- **Selection**: you choose a representative head per group (typically the median). Simpler to implement, slightly lower quality.
+
+## The industry standard: who uses GQA?
+
+GQA has become the **de facto standard** for open-source LLMs since mid-2023. The list speaks for itself:
+
+- **LLaMA 2 70B** (Meta): first major model to popularize GQA (G = 8 for H = 64)
+- **LLaMA 3** (Meta): GQA across the entire family, from 8B to 405B
+- **Mistral 7B**: GQA with G = 8 for H = 32 (4 K/V heads for 32 Q heads)
+- **Gemma** (Google): GQA across all sizes
+- **Qwen 2** (Alibaba): GQA as the standard configuration
+- **Command R** (Cohere): GQA for inference efficiency
+
+<Callout type="info" title="Why this massive adoption?">
+GQA is the first mechanism to offer a quality-efficiency trade-off good enough to be adopted without hesitation by teams targeting top performance. MQA was too aggressive -- the quality loss became visible on demanding tasks. GQA-8 is practically indistinguishable from MHA on benchmarks, while dividing the KV cache by 8. It's the rare case where you can have your cake and (almost) eat it too.
+</Callout>
+
+## Why does GQA work so well?
+
+### K/V redundancy
+
+Empirical analyses reveal that K/V projections from different heads are often **highly correlated** with each other. Concretely, if you look at the K weight matrices of 8 consecutive heads, they look very similar -- they capture essentially the same semantic information with slight variations. Grouping them by averaging therefore only destroys a small fraction of useful information.
+
+### Queries carry the diversity
+
+The real diversity of attention patterns comes from the **queries**: different heads ask different questions about the same content. One head asks "what's the grammatical subject?", another "what's the main verb?", a third "is there a cause-and-effect relationship?". These questions remain entirely distinct per head in GQA -- only the K/V "dictionary" they search is shared within a group.
+
+### Sufficient residual capacity
+
+With G = 8 K/V groups, the model still has 8 distinct representations of the context. That's enough to capture the different aspects needed: syntax, semantics, coreference, logical relationships, etc. The real loss only becomes noticeable below G = 4, on tasks that require multiple simultaneous perspectives on the context.
+
+
+## Combinations with other optimizations
+
+GQA isn't an isolated technique -- it combines naturally with other optimizations, and the gains multiply:
+
+**GQA + Flash Attention**: perfectly compatible. Reducing the number of K/V heads reduces the size of manipulated tensors, which amplifies Flash Attention's gains by reducing memory transfers.
+
+**GQA + KV cache quantization**: quantizing the KV cache in INT8 or INT4 further multiplies the reduction. The two techniques are orthogonal: GQA reduces the number of K/V groups, quantization reduces the precision of each value. Together, you can achieve 32x or more reduction.
+
+**GQA + Sliding Window Attention**: Mistral combines GQA with a sliding context window. Double lever: fewer K/V groups and K/V history truncated to the window size.
+
+<Callout type="warning" title="Beware of very small G">
+With G = 1 or G = 2, the loss of K/V diversity can become significant, particularly for tasks requiring fine attention on multiple distinct aspects of the context simultaneously -- complex multi-step reasoning, questions about long documents with many varied details, or translation between structurally very different languages.
+</Callout>
+
+## Comparative performance
+
+| Model | Attention | Relative quality | Relative throughput |
+|--------|-----------|-----------------|---------------|
+| LLaMA 65B (MHA) | MHA | 100% | 1x |
+| LLaMA 65B -> GQA-8 | GQA-8 | ~99.5% | ~5x |
+| LLaMA 65B -> MQA | MQA | ~98.5% | ~7x |
+
+GQA-8's trade-off is crystal clear: 0.5% less quality for 5 times more throughput. For the vast majority of applications, that's a highly profitable exchange -- you lose half a point on benchmarks to serve 5 times more users with the same hardware.
+
+## Conclusion
+
+Grouped Query Attention represents a pragmatic and decisive advance for LLM inference optimization. By offering a continuum between MHA (maximum quality) and MQA (maximum efficiency), it allows practitioners to choose exactly the optimal trade-off for their use case. Its near-universal adoption confirms that GQA has become a standard component of every modern Transformer architecture -- as fundamental as layer normalization or residual connections.

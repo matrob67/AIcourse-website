@@ -1,0 +1,141 @@
+---
+title: "Megatron-LM (NVIDIA)"
+description: "Overview of Megatron-LM, NVIDIA's distributed training framework that combines Tensor, Pipeline, and Data Parallelism to train the largest language models."
+---
+
+
+
+## The infrastructure of titans: Megatron-LM
+
+When we talk about training a 175 billion parameter model on 1000+ GPUs for weeks, having good hardware isn't enough. You need software capable of orchestrating this army of GPUs with surgical efficiency. That's exactly the role of **Megatron-LM**, the distributed training framework developed by NVIDIA.
+
+Megatron-LM is built specifically for NVIDIA hardware (NVLink, InfiniBand, Tensor Cores), which allows it to extract superior performance compared to more generic solutions like ZeRO or FSDP at scale. It's the reference framework when maximum performance is non-negotiable.
+
+## 3D Parallelism: the core architecture
+
+Megatron organizes GPUs in **three dimensions**, with each GPU having a coordinate in this grid:
+
+$$\text{GPU\_ID} = (\text{tensor\_rank},\ \text{pipeline\_rank},\ \text{data\_rank})$$
+
+Each dimension corresponds to a type of parallelism:
+- **Tensor Parallelism (TP)**: partitions each layer across GPUs within a DGX node (8 GPUs connected by ultra-fast NVLink)
+- **Pipeline Parallelism (PP)**: distributes layers between nodes (connected by InfiniBand)
+- **Data Parallelism (DP)**: replicates the complete pipeline to process different batches in parallel
+
+Concrete example for a 175B model on 1024 GPUs (128 DGX H100 nodes):
+- TP = 8 (within each node)
+- PP = 16 (between 16 nodes in sequence)
+- DP = 8 (8 replicas of the complete pipeline)
+- Total: 8 x 16 x 8 = 1024 GPUs
+
+<Callout type="info" title="Why 3D and not just 2D?">
+With only TP + DP, each replica uses a single node (8 GPUs). For a 175B model, 8 GPUs aren't enough in memory. PP allows distributing layers across multiple nodes, reducing memory per replica. Moreover, PP uses efficient point-to-point communications between nodes, while TP (which requires frequent all-reduces) stays confined to the fast intra-node NVLink.
+</Callout>
+
+## The optimizations that make the difference
+
+### Ultra-optimized Tensor Parallelism
+
+Megatron minimizes TP communication cost through intelligent partitioning:
+- MLP weights are partitioned in **columns** for the first matrix and in **rows** for the second, which eliminates an intermediate communication
+- Non-linearities (GELU, SwiGLU) are fused with the matrix multiplication
+- Result: only **2 all-reduces per Transformer layer** in the forward pass, versus 4 with a naive implementation
+
+This optimization cuts communication latency in half, which is critical when you have thousands of all-reduces per batch.
+
+### Integrated Sequence Parallelism
+
+Non-TP operations (LayerNorm, dropout, residual additions) are partitioned along the sequence. This eliminates activation redundancy at no communication cost, since the TP all-reduces are replaced by reduce-scatter + all-gather of the same total volume.
+
+<Callout type="paper" title="SP in Megatron">
+Megatron's Sequence Parallelism is a "free lunch" in terms of communication: it replaces all-reduces with reduce-scatter + all-gather operations that transport exactly the same volume of data, while freeing memory from duplicated activations. It's a pure optimization, with no trade-offs.
+</Callout>
+
+### Advanced Pipeline Parallelism
+
+Megatron supports multiple scheduling strategies to minimize the pipeline bubble:
+- **1F1B**: alternates forward and backward to limit activation memory
+- **Interleaved 1F1B**: assigns non-contiguous layers to each GPU to reduce the bubble
+- **Virtual pipeline stages**: simulates more stages than physical GPUs, which further reduces the bubble at the cost of more communications
+
+### Native Context Parallelism
+
+Built-in support for very long sequences (100K+ tokens), with K/V exchanges optimized and fused with the attention computation.
+
+## Training optimizations
+
+### Advanced mixed precision
+
+Megatron uses a hierarchy of numerical precisions:
+- **BF16** for forward and backward passes (good speed/precision trade-off)
+- **FP32** for master weights and gradient accumulation (numerical stability)
+- **FP8** via the Transformer Engine on H100 (doubles matmul speed for minimal precision cost)
+
+### Selective activation checkpointing
+
+Instead of uniformly checkpointing (saving/recomputing) all layers, Megatron allows choosing which operations to checkpoint. In practice: checkpoint attention activations (very memory-expensive, quadratic in sequence length) and keep MLP activations (less voluminous).
+
+<Callout type="tip" title="Intelligent checkpointing">
+This selective approach reduces activation memory by about 40% while adding only 20-30% additional computation (recomputing checkpointed activations). It's an excellent trade-off: you gain a lot of memory for a moderate compute cost.
+</Callout>
+
+### Communication/computation overlap
+
+Megatron masks communication latency by overlapping it with computations:
+- DP all-reduce during the backward pass (gradients are sent while other gradients are still being computed)
+- PP parameter prefetch during the current layer's computation
+- TP all-gather during non-TP operations
+
+The goal: the GPU should never be waiting for a communication. The network transfers while the Tensor Cores compute.
+
+## Real-world performance
+
+### Scaling efficiency (MFU: Model FLOPs Utilization)
+
+MFU measures what fraction of the GPU's theoretical FLOPs is actually used for useful model computation. It's the gold standard metric for evaluating a training system's efficiency.
+
+| Configuration | MFU | Notes |
+|--------------|-----|--------|
+| 8 GPUs (1 node, TP=8) | 95-98% | Near peak, very little communication |
+| 64 GPUs (8 nodes, TP=8 + PP=8) | 88-95% | Excellent, PP bubble is small |
+| 1024 GPUs (3D: 8x16x8) | 75-85% | Good, limited by inter-node communication |
+| 4096+ GPUs | 60-75% | Communications become the dominant factor |
+
+On DGX H100 + InfiniBand HDR, Megatron-LM achieves 150-180 TFLOP/s per GPU (out of a theoretical peak of 990 TFLOP/s in BF16). That represents 15-18% of raw peak, which for distributed scaling on 1000+ GPUs is remarkable (communications, the bubble, and non-matmul operations consume the rest).
+
+<Callout type="warning" title="MFU vs GPU utilization">
+Don't confuse MFU with GPU utilization rate. An MFU of 50% is considered **excellent** for distributed training. The "missing" 50% is consumed by: network communications, non-matrix operations (normalization, activation), the pipeline bubble, and memory bandwidth limitations.
+</Callout>
+
+## Ecosystem and alternatives
+
+### NeMo Framework
+
+NeMo is NVIDIA's abstraction layer on top of Megatron-LM:
+- Simplified YAML configuration (no need to code parallelism in Python)
+- Pre-made recipes for LLM, multimodal, and ASR
+- Integration with NVIDIA NGC and Base Command for deployment
+
+### Models trained with Megatron-LM
+
+- **BLOOM** (BigScience): 176B parameters, one of the largest open-source models
+- **Falcon** (TII): architecture adapted from Megatron
+- Numerous proprietary industrial models
+- Reference framework for distributed training research
+
+### Comparison with alternatives
+
+| Framework | Developer | Main strength |
+|-----------|------------|------------------|
+| Megatron-LM | NVIDIA | Maximum performance on NVIDIA hardware |
+| DeepSpeed | Microsoft | ZeRO, ease of use, flexibility |
+| FSDP | Meta/PyTorch | Native PyTorch integration, simplicity |
+| ColossalAI | HPC-AI | Multi-backend, easy configuration |
+
+<Callout type="info" title="When to choose Megatron-LM?">
+If you have an NVIDIA GPU cluster (DGX, InfiniBand) and maximum performance is critical, Megatron-LM is the reference choice. It's more complex to configure than alternatives, but you gain 10-20% MFU performance. For startups or teams with 8-64 GPUs, FSDP or DeepSpeed are probably a better starting point (simpler, more accessible documentation).
+</Callout>
+
+## Summary
+
+Megatron-LM is the highest-performing framework for distributed LLM training on NVIDIA GPUs. Its 3D parallelism (TP + PP + DP), hardware-aware optimizations (communication/computation overlap, mixed precision, selective checkpointing), and integration with the NVIDIA ecosystem make it the go-to choice for very large-scale projects. It's complex to master, but at the scale of 1000+ GPUs, the performance is well worth the investment.

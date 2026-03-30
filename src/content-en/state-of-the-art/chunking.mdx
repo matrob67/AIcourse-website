@@ -1,0 +1,153 @@
+---
+title: "Chunking Strategies for RAG"
+description: "Splitting documents into chunks is a crucial step in RAG. Exploring strategies: fixed-size, semantic, recursive, document-based, and best practices."
+---
+
+## The Chunking Dilemma: Too Small or Too Large?
+
+When you build a RAG system, you need to split your documents into pieces (chunks) to index and retrieve them. This splitting choice is **the most impactful decision** in your RAG pipeline, and paradoxically the one most often rushed.
+
+**Chunks too small** (100 tokens): each piece lacks context. An isolated sentence like "The result is 42%" means nothing without knowing what result we're talking about. The retriever brings back incomprehensible fragments.
+
+**Chunks too large** (2000 tokens): each piece contains so many different topics that the embedding dilutes relevant information in noise. The retriever brings back large blocks where only 2 sentences are useful.
+
+This is the Goldilocks problem: you need to find the right size.
+
+<Callout type="info" title="The Unavoidable Tradeoff">
+The perfect chunk would contain exactly one complete idea, no noise, with enough context to stand on its own. In reality, that's impossible to achieve systematically. Empirical experiments converge on a sweet spot of 256-512 tokens for roughly 80% of use cases.
+</Callout>
+
+## Splitting Strategies
+
+### 1. Fixed Size (naive)
+
+Split every N tokens with overlap between consecutive chunks.
+
+```python
+from langchain.text_splitter import CharacterTextSplitter
+
+splitter = CharacterTextSplitter(
+    chunk_size=500,
+    chunk_overlap=100,
+)
+chunks = splitter.split_text(doc)
+```
+
+**Strength**: simple, predictable, fast. You know exactly how many chunks you'll have.
+**Weakness**: cuts arbitrarily in the middle of sentences and paragraphs. A table can end up split into two incomprehensible pieces.
+
+### 2. Recursive (the recommended default)
+
+Tries to split on large separators first (paragraphs `\n\n`), then progressively descends to finer separators (line breaks `\n`, sentences `.`, words ` `). The result: chunks that respect the natural structure of the text as much as possible.
+
+```python
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=512,
+    chunk_overlap=50,
+)
+```
+
+**Strength**: respects text structure, produces few "orphan chunks" (incomplete fragments).
+**Weakness**: variable size depending on document structure. Some chunks will be near the limit, others much shorter.
+
+<Callout type="tip" title="Start with RecursiveCharacterTextSplitter">
+It's LangChain's default for a good reason: it works well in 90% of cases without configuration. If results aren't satisfactory, then refine with a more specific strategy.
+</Callout>
+
+### 3. Semantic
+
+Computes the embedding of each sentence, then detects thematic breaks by measuring cosine similarity between consecutive sentences. When similarity drops sharply, it indicates a topic change: that's where you cut.
+
+**Strength**: produces thematically coherent chunks. Each chunk covers a single topic.
+**Weakness**: slow (you need to compute the embedding of each sentence individually), unpredictable chunk sizes, and quality depends on the embedding model used for detection.
+
+Recommended for: scientific documents, structured reports. For general text or FAQs, it's usually overkill.
+
+### 4. By Document Structure
+
+Leverage the structure already present in the document: Markdown headers, HTML sections, PDF chapters.
+
+```python
+# Simplified example: split on Markdown H2s
+chunks = text.split("## ")
+```
+
+**Strength**: respects the author's intent. If a document has sections, it's because the author judged each section forms a coherent unit.
+**Weakness**: requires format-specific parsing (Markdown, PDF, HTML, source code). And not all documents are well-structured.
+
+Ideal for: technical documentation, manuals, source code. Unsuitable for unstructured text (emails, transcriptions).
+
+### 5. Parent-Child (advanced)
+
+Store **two levels** of chunks with different roles:
+
+- **Children** (small, ~200 tokens): indexed in the vector database and used for retrieval. Their small size allows precise matching.
+- **Parents** (large, ~1000 tokens): returned to the LLM after retrieval has found a relevant child. Their large size gives the LLM enough context to answer correctly.
+
+It's the best of both worlds: retrieval precision (small chunks) and context richness (large chunks).
+
+## Optimal Size by Use Case
+
+| Use Case | Size | Overlap |
+|---|---|---|
+| Factual QA | 256-512 | 50 |
+| Summary/analysis | 512-1024 | 100 |
+| Code | Per function | 0 |
+| Legal | Per article | 50 |
+
+<Callout type="paper" title="What Do Benchmarks Say?">
+Empirical comparisons show that 256-512 tokens offer the best recall/precision tradeoff for factual QA. Beyond 1024 tokens, quality drops: embeddings compress too much heterogeneous information into a single vector, and the truly relevant passages get lost in the noise of neighboring passages.
+</Callout>
+
+
+## Chunk Enrichment
+
+### Metadata
+
+Each chunk should receive filterable metadata: source, page, date, author, section. This enables filtering **before** the vector search.
+
+```json
+{
+  "text": "chunk content...",
+  "metadata": {
+    "source": "report-2024.pdf",
+    "page": 15,
+    "section": "Financial Results",
+    "date": "2024-03-15"
+  }
+}
+```
+
+Example: "retrieve from 2024 reports only" becomes a simple filter on the `date` metadata, followed by a vector search on the filtered subset.
+
+### Contextual Retrieval (Anthropic)
+
+Add a short **contextual summary** generated by an LLM for each chunk, explaining its position and role in the original document:
+
+> **Context**: This chunk comes from Chapter 3 of the 2024 annual report, Q3 financial results section.
+>
+> [Original chunk content]
+
+The embedding then captures not only the chunk's content but also its context within the document. Retrieval improves significantly because the embedding model has more information to position the chunk in the vector space.
+
+### Hypothetical Questions
+
+Generate questions that the chunk could answer and store them with the chunk. During retrieval, instead of comparing the user query to the chunk's raw text, you compare it to the hypothetical questions. This brings the search space closer to actual usage (users ask questions, not statements).
+
+## Common Pitfalls to Avoid
+
+<Callout type="warning" title="Chunking Mistakes That Destroy Quality">
+1. **Ignoring structure**: splitting a table or code block in the middle makes it incomprehensible
+2. **Zero overlap**: ideas that span two chunks are simply lost
+3. **One size for everything**: applying the same chunking to code, narrative text, and tables is a recipe for failure
+4. **No cleaning**: chunks polluted by repeated headers, page footers, pagination
+5. **Chunks too long**: beyond 2000 tokens, the LLM tends to ignore non-relevant parts of the provided context
+</Callout>
+
+## How to Evaluate Your Strategy
+
+The best method: create a small evaluation set (50-100 questions with expected passages as answers). Vary the size, overlap, and chunking strategy. **Measure recall@5 and recall@10** on your actual dataset.
+
+The optimal chunking depends on your domain, your query types, and your embedding model. Ten configurations tested empirically (it takes a few hours) are worth a thousand theoretical debates. The results will often surprise you: the "intuitively optimal" configuration isn't always the best.

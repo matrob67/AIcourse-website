@@ -1,0 +1,132 @@
+---
+title: "Guardrails: Filtering Dangerous LLM Responses"
+description: "Control LLM inputs and outputs: detect jailbreaks, filter content, prevent hallucinations. Defense in depth."
+---
+
+## The Risk: An LLM in Production Can Generate Anything
+
+An LLM deployed in production without guardrails is a ticking time bomb. It can:
+
+- Generate offensive, violent, or inappropriate content for your audience
+- Leak sensitive information injected into the context (customer data, company secrets)
+- Hallucinate facts with absolute confidence, misleading users
+- Be manipulated through jailbreak techniques to bypass its instructions
+- Respond on topics completely outside the intended scope of your application
+
+Without **guardrails**, you have no control over what your system returns to users. With well-designed guardrails, you filter dangerous inputs before they reach the model, and you validate outputs before they reach the user.
+
+<Callout type="info" title="Defense in depth: not a wall, but layers">
+No single guardrail works perfectly. The correct strategy is to **combine multiple layers of protection**: input filtering, solid system instructions, safety fine-tuning of the model itself, output filtering, and continuous monitoring. If one layer fails, the next one catches it. It's the same principle as in cybersecurity.
+</Callout>
+
+## Input Guardrails: Block Before the LLM
+
+The first line of defense filters requests **before** they reach the LLM:
+
+- **Jailbreak detection**: identify attempts to bypass system instructions. The techniques are varied: prompt injection ("ignore your instructions and..."), manipulative roleplay, encoding malicious requests in code or foreign languages.
+- **Content filtering**: block inappropriate, illegal, or out-of-scope requests. A customer service chatbot doesn't need to answer questions about making explosives.
+- **PII detection**: mask emails, phone numbers, addresses before sending them to the LLM. Especially if the LLM is a third-party cloud service.
+- **Format validation**: ensure the request is structurally valid and doesn't contain malicious payloads
+- **Topic detection**: verify that the request concerns the functional scope of your system. A medical chatbot should refuse to discuss trading.
+
+## Output Guardrails: Validate Before Returning
+
+The second line of defense checks the response **after** generation but **before** showing it to the user:
+
+- **Content filtering**: block responses containing inappropriate content, even if the request was legitimate
+- **Factual verification**: compare the response's claims against reliable sources. Particularly critical for sensitive domains (medicine, law, finance).
+- **Hallucination detection**: in a RAG system, verify that the response is faithful to the retrieved source documents. If the LLM invents information not present in the context, that's a hallucination.
+- **Format validation**: ensure the output respects the expected schema (valid JSON, correct structure). Essential for programmatic integrations.
+- **Output PII filtering**: detect and remove personal data the model may have generated
+- **Inappropriate refusal detection**: when the model refuses to answer a legitimate request out of excessive caution
+
+## NVIDIA NeMo Guardrails: The Programmatic Framework
+
+**NeMo Guardrails** is an open source framework from NVIDIA for implementing programmable guardrails. It uses **Colang**, a declarative language specifically designed to define conversational behavior rules.
+
+### Available Rail Types
+
+- **Input rails**: input filtering (jailbreak detection, toxicity)
+- **Output rails**: output filtering (content, format, PII)
+- **Dialog rails**: conversational flow control (the chatbot must follow a specific scenario)
+- **Retrieval rails**: filtering RAG documents before injection into the prompt (irrelevant documents, inappropriate content)
+- **Execution rails**: tool call control (the LLM wants to send an email? A rail checks permissions first)
+
+### Pipeline Architecture
+
+1. **User** sends a message
+2. &darr; **Input rails**: request analysis and filtering
+3. &darr; **Dialog rails**: conversational flow verification
+4. &darr; Message (potentially modified or blocked) sent to the **LLM**
+5. &darr; **LLM** generates its response
+6. &darr; **Output rails**: response analysis and filtering
+7. &darr; **Validated response** returned to the user
+
+Each step can block, modify, or pass through. If a rail blocks, a fallback response is returned instead of the LLM's response.
+
+<Callout type="tip" title={"Rails on tool calls: a critical case"}>
+With LLM agents that use tools (sending emails, SQL queries, file modifications), execution guardrails are essential. Before the LLM deletes a file or sends a message, a rail can request confirmation, check permissions, or simply block dangerous actions.
+</Callout>
+
+## Guardrails AI: Structured Validation
+
+**Guardrails AI** is a Python framework focused on LLM output validation and correction.
+
+### Key Features
+
+- **Validators**: library of predefined validators (PII detection, toxicity, JSON/XML format validation, factual consistency)
+- **RAIL spec**: specification in XML or Pydantic to define the exact expected output format
+- **Automatic correction**: if validation fails, the LLM is called back with explicit feedback about the error, so it can self-correct
+- **Guardrails Hub**: community marketplace of reusable validators
+
+### The Iterative Correction Pattern
+
+The most interesting mechanism in Guardrails AI is the correction loop:
+
+1. The **LLM** generates a response
+2. &darr; **Validation** fails (invalid JSON, PII detected, etc.)
+3. &darr; The **LLM** receives feedback: "Your response must be valid JSON with fields X, Y, Z. You returned free text. Try again."
+4. &darr; The **LLM** retries with this context (up to N max attempts)
+
+This is smarter than simply rejecting the response: the model has the ability to understand its mistake and correct itself. The success rate increases significantly with this loop.
+
+<Callout type="paper" title="The correction loop: a powerful pattern">
+This "generate, validate, correct" pattern is remarkably effective. The LLM generally understands its mistake when you explain it clearly. It's more robust than a simple rejection, and it reduces the final failure rate to a few percent on structured validation cases.
+</Callout>
+
+## Specialized Moderation Models
+
+Beyond frameworks, there are models trained specifically for content moderation:
+
+### OpenAI Moderation API
+Classifies content according to predefined categories: hate speech, violence, self-harm, sexual content, etc. Free for OpenAI users, fast and reliable for standard cases.
+
+### Perspective API (Google/Jigsaw)
+Assigns a toxicity score to texts. Massively used by comment platforms and social networks. Good for general-purpose moderation.
+
+### Llama Guard (Meta)
+An LLM specialized in conversation safety classification. Can be fine-tuned for your own risk categories. Open source and self-hostable, a major advantage for privacy.
+
+## Defense in Depth Strategy
+
+A robust guardrails strategy combines six layers:
+
+1. **System prompt**: clear and detailed instructions about expected behavior, allowed topics, and limits
+2. **Input filtering**: jailbreak and inappropriate content detection before the LLM
+3. **Model-level security**: safety fine-tuning (RLHF, safety training, Constitutional AI)
+4. **Output filtering**: response verification after generation
+5. **Real-time monitoring**: anomaly detection, alerts on suspicious patterns
+6. **Human escalation**: when the system hesitates or detects an ambiguous case, redirect to a human operator
+
+<Callout type="warning" title={"No guardrail is perfect, and attackers adapt"}>
+Guardrails reduce risk but never completely eliminate it. Jailbreak techniques are constantly evolving. Moderation models have false negatives. This is "risk reduction," not "absolute security." The correct posture: continuously monitor, analyze the cases that slip through, and regularly update your defenses.
+</Callout>
+
+## Best Practices
+
+- **Identify your specific risks first**: what types of responses are unacceptable for your application? The answer is different for a medical chatbot and a video game assistant.
+- **Measure the impact on experience**: guardrails add latency and cost (moderation API calls). Measure the tradeoff.
+- **Test with real attacks**: maintain a collection of adversarial prompts and regularly test your defenses. Red teams are your friends.
+- **Log rejections**: analyze what was blocked to refine your filters and detect false positives
+- **Avoid over-filtering**: too strict = user frustration. A chatbot that refuses to answer legitimate questions is just as problematic as a chatbot without filters.
+- **Iterate continuously**: guardrails are not "configure once and forget." It's a permanent arms race between attackers and defenders.

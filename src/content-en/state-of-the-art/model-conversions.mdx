@@ -1,0 +1,161 @@
+---
+title: "Model Conversions: Formats and Compatibility"
+description: "Safetensors, GGUF, ONNX, TensorRT — model formats, when to use each one, and how to convert between them."
+---
+
+## The Problem: One Model, Ten Formats
+
+You've trained (or downloaded) a model. You want to use it for inference. Problem: the tool you're using doesn't understand the format the model is saved in.
+
+PyTorch saves in its native format. llama.cpp expects GGUF. TensorRT wants its own compiled format. ONNX Runtime wants ONNX. Each framework and inference engine has its own requirements.
+
+Result: converting models from one format to another has become an indispensable skill. It's rarely exciting, often frustrating (cryptic errors, architecture incompatibilities), but absolutely necessary for deploying a model in production.
+
+## The Main Formats
+
+### PyTorch Native (.bin, .pt)
+
+The historic format. PyTorch uses `pickle` to serialize tensors and model metadata.
+
+- **Advantages**: native format, zero friction for training and experimentation with PyTorch
+- **Disadvantages**: `pickle` allows arbitrary code execution on load --- a malicious `.bin` file can execute anything on your machine. Files are bulky (no native compression) and loading requires loading the entire file into memory at once
+
+<Callout type="warning" title={"Security risk with pickle"}>
+Never load a `.bin` or `.pt` file from an untrusted source. The pickle format allows code injection that's automatically executed at load time. It's the equivalent of running an unknown script on your machine. Safetensors was created precisely to solve this problem.
+</Callout>
+
+### Safetensors (.safetensors)
+
+Developed by Hugging Face, safetensors has become the standard format for sharing and storing models.
+
+- **Security**: no code execution on load --- the format contains only tensors and their metadata, nothing executable
+- **Performance**: supports memory-mapping (mmap), which allows loading weights directly from disk without copying them to RAM. Loading is near-instantaneous, even for 70B parameter models
+- **Interoperability**: supported by Hugging Face transformers, vLLM, and the majority of the Python ecosystem
+- **Shard support**: large models are split into multiple files (for example, `model-00001-of-00004.safetensors`), with a JSON index that maps each tensor to its file
+
+This is the format to use by default for storing and sharing models. If you're publishing a model on Hugging Face Hub, use safetensors.
+
+### GGUF (.gguf)
+
+The llama.cpp format, designed for local inference on CPU or in hybrid CPU+GPU mode.
+
+- **Self-contained**: the GGUF file contains everything --- weights, tokenizer, hyperparameters, quantization metadata --- in a single file
+- **Built-in quantization**: weights can be stored in reduced precision (Q4_K_M, Q5_K_S, Q8_0, etc.) directly in the file, without a separate quantization step
+- **CPU optimized**: llama.cpp kernels are optimized for CPU inference with SIMD instructions (AVX2, AVX-512, ARM NEON), making local inference viable even without a GPU
+- **Ecosystem**: used by llama.cpp, ollama, LM Studio, GPT4All --- the entire local inference ecosystem
+
+This is the format for running a model on a laptop, a server without a dedicated GPU, or an edge device.
+
+### ONNX (.onnx)
+
+ONNX (Open Neural Network Exchange) is an intermediate format, agnostic to the source framework.
+
+- **Portability**: an ONNX model can be executed by ONNX Runtime, TensorRT, OpenVINO (Intel), CoreML (Apple), and other engines
+- **Graph optimization**: the format represents the model as an operation graph, enabling automatic optimizations (operation fusion, elimination of redundant nodes)
+- **Limitations**: some PyTorch operations don't have a direct ONNX equivalent, which can complicate export. Very recent or custom architectures sometimes require custom operators
+
+ONNX often serves as an intermediate step in a conversion pipeline rather than a final deployment format.
+
+### TensorRT (.engine, .plan)
+
+NVIDIA's optimized format for inference on NVIDIA GPUs.
+
+- **Maximum performance**: TensorRT compiles the model for a specific GPU architecture (Ampere, Hopper, etc.) with layer fusion, automatic selection of the best kernels, and memory optimization. Gains are typically 2-5x compared to native PyTorch
+- **Not portable**: an `.engine` file compiled for an A100 doesn't work on an H100, or even on an A100 with a different TensorRT version. You must recompile for each target
+- **Compilation time**: compilation can take several minutes to several hours depending on model size and requested optimizations
+
+This is the format for high-performance production on NVIDIA infrastructure, where every millisecond of latency counts.
+
+<Callout type="info" title={"Use case summary"}>
+**Safetensors**: storage, sharing, training, Python inference. The default.
+**GGUF**: local inference, CPU, edge, laptop. The "runs everywhere" format.
+**ONNX**: interoperability between frameworks, intermediate step toward TensorRT or OpenVINO.
+**TensorRT**: NVIDIA production, minimal latency, maximum throughput. The "performance at any cost" format.
+</Callout>
+
+## Conversion Pipelines
+
+### PyTorch to Safetensors
+
+The simplest and most common conversion. It's essentially a container change without modifying the weights:
+
+```python
+from safetensors.torch import save_file
+import torch
+
+state_dict = torch.load("model.bin")
+save_file(state_dict, "model.safetensors")
+```
+
+Hugging Face transformers handles this automatically with `model.save_pretrained()` which directly produces safetensors. Lossless conversion, the weights are identical bit for bit.
+
+### Safetensors to GGUF
+
+This conversion is handled by llama.cpp scripts (`convert_hf_to_gguf.py`). It generally includes a quantization step:
+
+1. Load safetensors weights in full precision (FP16 or BF16)
+2. Apply the chosen quantization (for example Q4_K_M)
+3. Pack the quantized weights with the tokenizer and metadata into a GGUF file
+
+The quantization is **lossy**: weights are rounded to lower precision. A model in Q4_K_M (4 bits) is about 4x smaller than FP16, but loses some quality. The size/quality tradeoff depends on the chosen quantization level.
+
+### PyTorch to ONNX to TensorRT
+
+The classic pipeline for NVIDIA production:
+
+1. **ONNX export**: `torch.onnx.export()` or Hugging Face's `optimum` library traces the model and produces an ONNX graph
+2. **ONNX optimization** (optional): graph simplification, operation fusion
+3. **TensorRT compilation**: `trtexec` compiles the ONNX graph into an optimized engine for the target GPU
+
+```bash
+# ONNX export with optimum
+optimum-cli export onnx --model meta-llama/Llama-3-8B ./onnx_model/
+
+# TensorRT compilation
+trtexec --onnx=model.onnx --saveEngine=model.engine --fp16
+```
+
+<Callout type="tip" title={"TensorRT-LLM: the shortcut"}>
+For LLMs specifically, NVIDIA offers TensorRT-LLM which bypasses the ONNX pipeline. It directly converts Hugging Face checkpoints into TensorRT engines optimized for LLMs, with specific optimizations (paged KV cache, continuous batching, tensor parallelism). It's the recommended path for deploying LLMs in production on NVIDIA GPUs.
+</Callout>
+
+## Conversion Tools
+
+| Tool | Conversion | Notes |
+|-------|-----------|-------|
+| `transformers` (save_pretrained) | PyTorch to Safetensors | Automatic, built-in |
+| `convert_hf_to_gguf.py` (llama.cpp) | HF/Safetensors to GGUF | Supports quantization |
+| `optimum` (Hugging Face) | HF to ONNX | Simplified export, handles common architectures |
+| `trtexec` (NVIDIA) | ONNX to TensorRT | Compilation for specific GPU |
+| TensorRT-LLM | HF to TensorRT | Dedicated LLM pipeline, bypasses ONNX |
+
+## Common Pitfalls
+
+### Lossy Conversions
+
+The safetensors to GGUF conversion with quantization is inherently lossy. But even supposedly lossless conversions can introduce subtle differences:
+- Numerical rounding between frameworks (implicit FP32 to FP16)
+- Differences in operation implementations (RMS normalization may differ slightly between PyTorch and llama.cpp)
+- Tokenizer issues: the GGUF tokenizer must exactly reproduce the behavior of the Hugging Face tokenizer, which isn't always trivial for custom tokenizers
+
+### Unsupported Architectures
+
+Each conversion tool supports only a limited set of architectures. A model with a very recent or custom architecture (custom attention, special layers) may not be directly convertible. You then need to adapt the conversion scripts or wait for community support to be added.
+
+### Post-Conversion Validation
+
+Always validate a model after conversion: compare logits (the model's raw outputs) on a test set between the original format and the converted format. A significant divergence indicates a problem in the conversion.
+
+<Callout type="warning" title={"Don't skip validation"}>
+A model that loads without errors isn't necessarily a correct model. Mismatched weights, missing layers, or overly aggressive quantization can produce a model that "works" but generates incoherent text. A few minutes of validation prevent hours of debugging in production.
+</Callout>
+
+## Summary
+
+Model conversion is an unavoidable technical step between training and deployment. The key points:
+
+1. **Safetensors** is the default format for storage and sharing --- safe, fast, interoperable.
+2. **GGUF** is the format for local and edge inference --- self-contained, built-in quantization.
+3. **TensorRT** offers the best performance in production on NVIDIA GPUs --- at the cost of portability.
+4. **ONNX** serves as a pivot format between frameworks, but is rarely the final deployment format.
+5. Always **validate** after conversion: loading without errors doesn't mean functioning correctly.

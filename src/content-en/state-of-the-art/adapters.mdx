@@ -1,0 +1,104 @@
+---
+title: "Adapters: The Pioneers of PEFT"
+description: "Adapter modules, introduced in 2019, are the pioneers of Parameter-Efficient Fine-Tuning. Understanding how they work and their legacy in modern techniques."
+---
+
+## Before LoRA, There Were Adapters
+
+LoRA is everywhere today. But in 2019, well before LoRA became the star, a team at Google Research had an elegant idea: instead of modifying the model's existing weights (which amounts to retraining everything), why not simply **insert small trainable modules** between the existing layers?
+
+That's the principle behind **adapters**: you keep the large pre-trained model completely frozen, and you add tiny neural networks that learn the specialization. The base model doesn't budge an inch.
+
+<ArxivLink id="1902.00751" title="Parameter-Efficient Transfer Learning for NLP (Houlsby et al., 2019)" />
+
+## The Simple Idea: Mini Bottleneck Modules
+
+Imagine a wide pipe (768 dimensions for BERT) through which information flows. An adapter is a temporary narrowing of this pipe: you compress the info into a much smaller space, transform it, then widen it back out.
+
+### Structure of an Adapter
+
+An adapter is a small **bottleneck**-shaped network:
+
+1. **Down-projection**: take the input (dimension $d$, e.g., 768 for BERT) and reduce it to dimension $m$ (e.g., 64)
+2. **Activation**: apply a non-linearity (ReLU or GELU) to transform the information
+3. **Up-projection**: widen back to the original dimension $d$
+4. **Skip connection**: add the result to the original input (like in ResNet)
+
+$$\text{adapter}(x) = x + \text{up\_proj}(\text{activation}(\text{down\_proj}(x)))$$
+
+The skip connection is crucial: it guarantees that at the beginning of training (when the adapter weights are close to zero), the module behaves as an identity. It doesn't disturb the model. The adapter "progressively learns to intervene."
+
+<Callout type="info" title="The Numbers That Matter">
+For BERT-base ($d=768$, $m=64$): only $2 \times 768 \times 64 = 98\,304$ parameters per adapter. Compared to the millions of parameters in a full Transformer layer, it's a tiny fraction. We're talking about less than 4% of total parameters.
+</Callout>
+
+### Where to Place Them in the Transformer?
+
+In Houlsby's original architecture, **two adapters per Transformer layer** are inserted:
+1. After the multi-head attention block (after the output projection)
+2. After the FFN (feed-forward network)
+
+Later work showed that a single adapter after the FFN is often sufficient, with negligible performance loss. Fewer parameters, same result: that's the kind of simplification we like.
+
+## Why Does It Work So Well?
+
+The deep intuition is this: pre-training learns **general** representations of language (grammar, semantics, basic reasoning). Fine-tuning for a specific task doesn't require starting from scratch. It's enough to learn small **transformations** that redirect these representations toward your task.
+
+It's like a Swiss Army knife that's already assembled. You don't need to reforge the entire knife to add a corkscrew. You just add the missing module.
+
+<Callout type="paper" title="Concrete Results">
+On the GLUE benchmark, adapters with only 3.6% of BERT's parameters achieve 99.6% of full fine-tuning performance. In other words: the vast majority of the model's parameters don't need to move to adapt to a new task.
+</Callout>
+
+## Adapters vs LoRA: The Clash of Titans
+
+Here's the showdown that explains why LoRA eventually took over:
+
+| Aspect | Adapters | LoRA |
+|---|---|---|
+| Mechanism | Modules inserted between layers | Low-rank matrices inside layers |
+| Inference latency | Increased (sequential modules) | None (fusion possible into weights) |
+| Parameters (7B model) | ~0.3% | ~0.1% |
+| Non-linearity | Yes (ReLU/GELU activation) | No (purely linear) |
+| Fusion into model | Impossible | Possible |
+
+<Callout type="warning" title={"The Fatal Flaw: Latency"}>
+Adapters **add inference time** because they are extra layers that compute sequentially. With LoRA, you can "merge" the low-rank matrices into the original weights and make all overhead disappear. With adapters, that's impossible because of the non-linearity (the ReLU/GELU activation prevents fusion). This difference is what tipped the scales in LoRA's favor.
+</Callout>
+
+## Interesting Descendants
+
+The adapter idea has spawned powerful variants:
+
+**AdapterFusion**: you train multiple adapters on different tasks (sentiment, NER, translation...), then an attention mechanism automatically learns to combine them. It's multi-task without retraining the individual adapters.
+
+**AdapterHub**: a community platform where everyone shares their adapters. A "French" adapter, a "legal" adapter, a "summarization" adapter... and you compose them like LEGO bricks.
+
+## The Star Use Case: Multilingual
+
+This is where adapters truly shine, and where LoRA doesn't have an equally elegant answer:
+
+1. **Base model**: trained on English
+2. **Language adapter**: "French" adapter that captures the syntax and particularities of French
+3. **Task adapter**: "NER" adapter (named entity recognition) trained on English data
+4. **Combination**: you stack both adapters and get NER in French, **without ever having had French NER data**!
+
+<Callout type="tip" title="Skill Composition = Superpower">
+This is the major and unique advantage of adapters: **compositional modularity**. "French" adapter + "NER" adapter = NER in French. "German" adapter + "Sentiment" adapter = sentiment analysis in German. This zero-shot composition of skills is something LoRA doesn't do as cleanly.
+</Callout>
+
+
+
+## The Legacy: The Foundations of Modern PEFT
+
+Although LoRA dominates today, adapters established the three founding principles of PEFT (Parameter-Efficient Fine-Tuning):
+
+- **Freeze the base model**: don't touch the pre-trained weights
+- **Train only small additions**: a few percent of parameters are enough
+- **Initialize near identity**: added modules should not disturb the model at the start
+
+The `adapters` library (formerly AdapterHub) remains actively maintained and supports classic adapters, prefix tuning, LoRA, and their combinations.
+
+---
+
+**Historical perspective**: Adapters didn't win the battle against LoRA (because of inference latency). But they won the conceptual war: PEFT exists today because adapters proved in 2019 that you could adapt a giant model by touching only a fraction of its parameters. All modern techniques owe them this foundational intuition.

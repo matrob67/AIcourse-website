@@ -1,0 +1,135 @@
+---
+title: "MCTS for LLM Reasoning"
+description: "Monte Carlo Tree Search, the key algorithm behind AlphaGo, is adapted for LLMs to explore the reasoning space more efficiently than Tree of Thoughts."
+---
+
+## From the Game of Go to Math Problems
+
+In 2016, AlphaGo beat the world champion of Go thanks to Monte Carlo Tree Search (MCTS). The algorithm is elegant: faced with a gigantic tree of possibilities (Go has more positions than atoms in the universe), MCTS explores intelligently by balancing **exploration** (testing new branches) and **exploitation** (deepening promising branches).
+
+The analogy with reasoning is direct: when an LLM solves a complex problem, each thinking step is a "move," and solving the complete problem is like winning the "game." Reasoning becomes a game, and MCTS knows how to play.
+
+<Callout type="info" title={"The chess analogy"}>
+In chess, MCTS explores possible moves, simulates entire games, then focuses its efforts on branches that seem to lead to victory. For LLM reasoning, each "move" is a thinking step ("let's apply the derivative," "let's factor"), and each "complete game" is an end-to-end problem resolution.
+</Callout>
+
+## The Four Phases of MCTS
+
+The algorithm repeats four phases in a loop, each iteration refining its understanding of the possibility tree.
+
+### Phase 1: Selection
+
+Starting from the root (the problem posed), you descend through the tree by choosing at each node the most promising child according to the **UCB formula** (Upper Confidence Bound):
+
+$$
+UCB(\text{node}) = \frac{Q(\text{node})}{N(\text{node})} + c \cdot \sqrt{\frac{\ln N(\text{parent})}{N(\text{node})}}
+$$
+
+- $Q(\text{node})$ = total reward accumulated by this node
+- $N(\text{node})$ = number of times this node has been visited
+- **First term**: exploitation — we favor nodes that have performed well so far
+- **Second term**: exploration — we give a chance to rarely visited nodes
+
+It's this tension between "go toward what works" and "try what we don't know" that makes MCTS so powerful. Without the second term, you'd get stuck in a local optimum. Without the first, you'd explore randomly.
+
+### Phase 2: Expansion
+
+When you reach a leaf (a node with no children), you generate new reasoning steps via the LLM. Concretely, the model proposes multiple possible continuations of the partial reasoning, and each becomes a new node in the tree.
+
+### Phase 3: Simulation (Rollout)
+
+From the new node, you **complete the reasoning** all the way to a final answer. It's like playing a quick game to the end to get an idea of the outcome. The LLM generates the rest of the reasoning greedily or by sampling.
+
+### Phase 4: Backpropagation
+
+The simulation result (correct or incorrect) is propagated back along the path taken. The $Q$ and $N$ statistics of each visited node are updated. Over iterations, nodes that often lead to correct answers build a good reputation.
+
+## Adaptation to LLMs
+
+### State = A Partial Reasoning
+
+Each node of the tree represents reasoning under construction:
+
+> **Root:** Solve $f(x) = 2x^2 + 3x - 5$, find $f'(x)$
+> - **Node 1:** Apply differentiation rules
+>   - **Node 1.1:** $\frac{d}{dx}(2x^2) = 4x$ &check;
+>   - **Node 1.2:** $\frac{d}{dx}(2x^2) = 2x$ &cross;
+> - **Node 2:** Use polynomial derivative formula
+>   - **Node 2.1:** $f'(x) = 4x + 3$
+
+The tree naturally captures different approaches and their variants, including dead ends.
+
+### Reward Function
+
+This is the crux of the matter. How do you know if a branch is promising? Several options exist:
+
+- **ORM (Outcome Reward Model)**: you only look at whether the final answer is correct (when it's verifiable)
+- **PRM (Process Reward Model)**: you evaluate each step individually — a much richer signal
+- **Self-evaluation**: the LLM itself rates the quality of each step
+- **External verification**: code execution, symbolic computation, proof assistant
+
+### The LLM as Game Policy
+
+The LLM plays the role of the **policy**: it decides which reasoning steps to propose. Temperature controls diversity. Low temperature = conservative reasoning. High temperature = creative but risky explorations.
+
+<Callout type="paper" title="MCTS + PRM: the winning combo">
+The PRM (Process Reward Model) provides a reward signal at each step, which guides exploration in a fine-grained way. Clearly bad branches are penalized early. Good branches receive more attention. It's the most powerful combination for mathematical reasoning.
+</Callout>
+
+## Why MCTS Outperforms Beam Search
+
+### 1. Exploration-Exploitation Balance
+
+The UCB formula naturally manages this dilemma. Classic beam search simply keeps the K best candidates at each step, which can trap it in a local optimum. MCTS goes back to explore forgotten branches when favorite branches disappoint.
+
+### 2. Adaptive Compute Allocation
+
+Difficult problems automatically receive **more iterations**, because the tree doesn't converge quickly. Easy problems converge rapidly and consume little. Compute distributes itself intelligently.
+
+### 3. Natural Backtracking
+
+If a branch turns out to be bad after simulation, MCTS doesn't blindly pursue it. It redistributes attention to other branches. It's elegant backtracking, without an explicit backtracking mechanism.
+
+## Concrete Use Cases
+
+### rStar (Self-play Reasoning)
+
+rStar combines MCTS with self-play: the model plays both the role of reasoner and evaluator. Each "game" is solving a problem, and the generated data is used to train the model itself. The model improves by playing against itself, exactly as AlphaGo did for Go.
+
+### AlphaProof (DeepMind)
+
+AlphaProof applies MCTS to **formal mathematical proofs**: the LLM generates proof steps, Lean (a proof assistant) verifies each step with certainty, and MCTS explores the space of possible proofs. Result: solving International Mathematical Olympiad problems, a domain long considered out of AI's reach.
+
+<Callout type="tip" title="MCTS vs Tree of Thoughts">
+Tree of Thoughts uses simple beam search: good for basic exploration. MCTS is superior when the search space is **immense** and per-step rewards are **available** (via a PRM). If you don't have a reliable PRM, ToT remains an excellent choice, simpler and less expensive.
+</Callout>
+
+## The Cost: The Price of Power
+
+### Orders of Magnitude
+
+A typical MCTS for reasoning:
+
+| Metric | Value |
+|---|---|
+| Iterations per problem | 50-500 |
+| Each iteration | 1 expansion + 1 simulation |
+| Total LLM calls per problem | 100-1000 |
+
+For comparison, self-consistency requires 10-40 calls. MCTS is 10 to 100 times more. **Much more expensive**, but potentially far more effective on truly difficult problems.
+
+### Parallelization
+
+MCTS simulations can be partially parallelized (leaf parallelization, root parallelization). This reduces latency, but makes exploration slightly less optimal since updates aren't instantaneous.
+
+<Callout type="warning" title="MCTS: research rather than production">
+MCTS for LLM reasoning remains a **research** technique more than a production one. The high cost and the need for a good reward signal limit it to high-value problems: advanced math, critical code, formal proofs, complex planning.
+
+For everyday applications, CoT or self-consistency offer a much better quality-to-cost ratio.
+</Callout>
+
+## The Convergence of Two Worlds
+
+MCTS applied to LLM reasoning embodies the **fusion** between classical AI planning techniques (MCTS comes from game theory and operations research) and the generative capabilities of modern LLMs. These are not two separate worlds: tree search and text generation complement each other naturally.
+
+As PRMs and base models improve, MCTS for LLMs could unlock even more advanced reasoning capabilities, particularly in domains where verification is automatable.

@@ -1,0 +1,177 @@
+---
+title: "Mutual information and its applications in ML"
+description: "Mutual information, its relationship with entropy and KL divergence, and its applications in feature selection, contrastive learning, and the Information Bottleneck."
+---
+
+## Mutual information: how much two variables share
+
+When you observe an image and predict its label, a fundamental question arises: how much information does the image contain about the label? And conversely, how much does the label tell us about the image? Mutual information answers this question precisely and symmetrically.
+
+## Definition
+
+### The formula
+
+The mutual information between two random variables $X$ and $Y$ is:
+
+$$I(X; Y) = \sum_{x, y} P(x, y) \log \frac{P(x, y)}{P(x) P(y)}$$
+
+It's the KL divergence between the joint distribution $P(x, y)$ and the product of marginals $P(x) P(y)$:
+
+$$I(X; Y) = D_{KL}(P(X, Y) \| P(X) P(Y))$$
+
+If $X$ and $Y$ are independent, $P(x, y) = P(x) P(y)$ and $I(X; Y) = 0$. The more dependent the variables are, the higher the mutual information.
+
+### Equivalent formulas
+
+Mutual information can be expressed in several ways, all instructive:
+
+$$I(X; Y) = H(X) - H(X|Y)$$
+$$I(X; Y) = H(Y) - H(Y|X)$$
+$$I(X; Y) = H(X) + H(Y) - H(X, Y)$$
+
+The first one says: mutual information is the reduction in uncertainty about $X$ when you know $Y$. It's the initial uncertainty minus the residual uncertainty.
+
+### Venn diagram analogy
+
+Think of a Venn diagram:
+- The left circle is $H(X)$ (total uncertainty of $X$)
+- The right circle is $H(Y)$ (total uncertainty of $Y$)
+- The intersection is $I(X; Y)$ (shared information)
+- The union is $H(X, Y)$ (joint entropy)
+- $H(X|Y)$ is the part of $H(X)$ outside the intersection
+
+## Key properties
+
+### Symmetry
+
+$$I(X; Y) = I(Y; X)$$
+
+Unlike KL divergence, mutual information is symmetric. What $X$ tells about $Y$ is exactly what $Y$ tells about $X$.
+
+### Non-negativity
+
+$$I(X; Y) \geq 0$$
+
+with equality if and only if $X$ and $Y$ are independent.
+
+### More general than correlation
+
+Pearson correlation only captures linear dependencies. Mutual information captures any form of statistical dependence. Two variables can have zero correlation but high mutual information (for example, $Y = X^2$ with $X$ symmetric around 0).
+
+### Bounds
+
+$$0 \leq I(X; Y) \leq \min(H(X), H(Y))$$
+
+The shared information cannot exceed the total information of each variable.
+
+## Feature selection
+
+### The principle
+
+To choose the most informative features for predicting a target variable $Y$, you can rank features by decreasing mutual information:
+
+$$\text{score}(X_j) = I(X_j; Y)$$
+
+A feature with high mutual information with the target is potentially useful. A feature with $I(X_j; Y) \approx 0$ is independent of the target and can be eliminated.
+
+### Advantages over correlation
+
+- Captures nonlinear relationships between features and target
+- Doesn't assume any particular distribution
+- Works for both discrete and continuous variables (with kernel or histogram estimation)
+
+### Limitations
+
+- Estimating mutual information in high dimensions is difficult
+- Doesn't account for redundancies between features: two highly correlated features can each have high $I$ with the target, but adding both doesn't bring much
+
+## Contrastive learning and InfoNCE
+
+### The idea of contrastive learning
+
+Contrastive learning learns representations by bringing together representations of "similar" examples (positives) and pushing apart those of "different" examples (negatives). But what's the connection with mutual information?
+
+### InfoNCE loss
+
+The InfoNCE loss (Information Noise Contrastive Estimation), at the heart of SimCLR, CLIP, and many others, is a lower bound on mutual information:
+
+$$\mathcal{L}_{\text{InfoNCE}} = -E\left[\log \frac{e^{f(x, y^+)}}{e^{f(x, y^+)} + \sum_{j=1}^{K} e^{f(x, y_j^-)}}\right]$$
+
+where $f$ is a similarity function between representations, $y^+$ is the positive example, and $y_j^-$ are the $K$ negative examples.
+
+It can be shown that:
+
+$$I(X; Y) \geq \log(K + 1) - \mathcal{L}_{\text{InfoNCE}}$$
+
+Minimizing the InfoNCE loss maximizes a lower bound on the mutual information between the representations of the two views. That's why contrastive learning is sometimes called "mutual information maximization."
+
+### CLIP: a flagship example
+
+CLIP learns image-text representations by maximizing mutual information between image and text embeddings that correspond to each other. The image of a cat and the sentence "a photo of a cat" share information about the visual content. CLIP captures this shared information in a common embedding space.
+
+## The Information Bottleneck
+
+### The theoretical framework
+
+The Information Bottleneck theory, proposed by Naftali Tishby in 1999, offers an original perspective on why deep neural networks work. The idea is that a good representation $Z$ of an input $X$ for predicting an output $Y$ must:
+
+1. **Maximize** $I(Z; Y)$: the representation should contain the maximum relevant information for prediction
+2. **Minimize** $I(Z; X)$: the representation should forget the irrelevant details of the input
+
+$$\min_{Z} \left[-I(Z; Y) + \beta \cdot I(Z; X)\right]$$
+
+The parameter $\beta$ controls the tradeoff between compression and prediction.
+
+### Interpretation for deep networks
+
+Each layer of a deep network can be seen as a transformation that compresses input information while preserving useful information for the output. The early layers extract many features (high $I(Z; X)$), and subsequent layers compress toward the essentials (low $I(Z; X)$, high $I(Z; Y)$).
+
+### The fitting phase and the compression phase
+
+Experimental work has observed two phases during training:
+1. **Fitting phase**: the network learns to encode relevant information, $I(Z; Y)$ increases rapidly
+2. **Compression phase**: the network forgets irrelevant details, $I(Z; X)$ decreases while $I(Z; Y)$ remains stable
+
+This interpretation remains debated in the scientific community, but it offers an intuitive framework for thinking about what deep networks do.
+
+## Estimating mutual information
+
+### The practical challenge
+
+Computing exact mutual information requires knowing the joint distribution $P(X, Y)$, which is rarely the case in practice. We need estimators.
+
+### Classic estimators
+
+- **Histogram**: discretize the variables and count. Simple but imprecise in high dimensions.
+- **KNN (k-Nearest Neighbors)**: the Kraskov-Stogbauer-Grassberger estimator uses distances to neighbors to estimate densities. More robust than histograms.
+
+### Neural estimators
+
+MINE (Mutual Information Neural Estimation) uses a neural network to estimate a lower bound on mutual information:
+
+$$I(X; Y) \geq E_{P(X,Y)}[T_\theta(x, y)] - \log E_{P(X)P(Y)}[e^{T_\theta(x, y)}]$$
+
+where $T_\theta$ is a neural network. This allows estimating mutual information between network layers, learned representations, or any pair of variables.
+
+## Mutual information in modern architectures
+
+### Attention and mutual information
+
+The attention mechanism can be interpreted as a relevance computation: which input tokens are most informative for predicting an output token? It's an implicit form of mutual information maximization between the query and the keys.
+
+### Data augmentation
+
+Data augmentations in contrastive learning (cropping, rotation, color changes) are chosen to preserve semantic information ($I(Z; Y)$ stays high) while modifying surface details ($I(Z; X)$ is reduced). It's the Information Bottleneck put into practice.
+
+### Regularization and information forgetting
+
+Dropout, weight decay, and data augmentation can all be seen as mechanisms that reduce $I(Z; X)$ (the information the representation keeps about the input), forcing the network to retain only information useful for the task.
+
+## Key takeaways
+
+- Mutual information $I(X; Y)$ measures any form of statistical dependence between two variables
+- $I(X; Y) = H(X) - H(X|Y)$: it's the reduction in uncertainty brought by knowledge of the other variable
+- It's more general than correlation because it captures nonlinear dependencies
+- InfoNCE in contrastive learning maximizes a lower bound on mutual information
+- The Information Bottleneck proposes that a good network compresses the input while preserving relevant information for the output
+- Estimating mutual information in high dimensions is a practical challenge, solved by neural estimators like MINE

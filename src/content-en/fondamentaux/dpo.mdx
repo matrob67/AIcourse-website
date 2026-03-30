@@ -1,0 +1,144 @@
+---
+title: "DPO: Direct Preference Optimization"
+description: "How DPO radically simplifies RLHF by eliminating the reward model and reinforcement learning, while directly optimizing on human preferences."
+---
+
+## "What If We Cut Through All This Complexity?"
+
+RLHF works, but it's a real Rube Goldberg machine. Let's recap the pipeline: you first need to train an SFT (Supervised Fine-Tuning) model, then train a separate reward model on human preference data, then run a reinforcement learning algorithm (PPO) that juggles **four models in memory simultaneously** (the model being trained, its frozen reference copy, the reward model, the critic), a KL penalty to prevent the model from diverging too far, and complete responses that the model must generate at each training step to have them evaluated by the reward model. Not to mention the chronic stability issues, reward hacking (the model learns to fool the reward model rather than actually improving), and the colossal computational cost.
+
+In May 2023, a team of researchers from Stanford publishes a paper that surprises the community. Their contribution: a mathematical proof that all this machinery is **superfluous**. You can get equivalent results with a fraction of the complexity. The technique is called **DPO** (Direct Preference Optimization).
+
+<ArxivLink id="2305.18290" title="Direct Preference Optimization: Your Language Model Is Secretly a Reward Model (Rafailov et al., 2023)" />
+
+
+
+## The Central Insight: The Model *Already Is* a Reward Model
+
+Here's the brilliant idea behind DPO, and it really is one of those elegant observations that changes everything. Let's recall what RLHF is trying to do: adjust the model to maximize human rewards, while not straying too far from what it was after SFT. Mathematically (in the formulas, $\pi$ denotes the model -- it's the reinforcement learning technical term "policy," which simply means "the model's generation strategy"):
+
+$$\max \; \mathbb{E}[r(x, y)] - \beta \cdot D_{KL}(\pi \| \pi_{\text{ref}})$$
+
+Term by term:
+- $r(x, y)$: the reward -- the score the reward model gives to response $y$ for prompt $x$
+- $\mathbb{E}[\ldots]$: the expectation -- the average of this score over many prompts and responses
+- $\beta$: a coefficient that controls the constraint strength (the larger it is, the more the model is constrained)
+- $D_{KL}(\pi \| \pi_{\text{ref}})$: the KL divergence -- a measure of "distance" between the current model ($\pi$) and the reference model ($\pi_{\text{ref}}$). If the model strays too far from the reference, this term becomes large and penalizes
+
+In summary: we want to maximize rewards ($r$) while staying close to the reference ($D_{KL}$ small). $\beta$ tunes the balance between the two.
+
+Most researchers saw this problem as requiring iterative reinforcement learning: generate responses, evaluate them, update the model, repeat. The DPO researchers demonstrated something remarkable: this optimization problem has an **exact analytical solution**. In other words, you can directly write the formula for the optimal model, without any RL loop:
+
+$$\pi_{\text{opt}}(y|x) \propto \pi_{\text{ref}}(y|x) \cdot \exp\left(\frac{r(x, y)}{\beta}\right)$$
+
+In plain terms: the probability the optimal model assigns to response $y$ is proportional to what the reference model would give, **amplified** by the reward $r$. Responses with a high reward score see their probability skyrocket (thanks to the exponential), while those with a bad score are attenuated.
+
+The genius trick: by inverting this relationship, you can express the reward through the probability ratio between the current model and the reference model:
+
+$$r(x, y) = \beta \cdot \log \frac{\pi(y|x)}{\pi_{\text{ref}}(y|x)} + C$$
+
+The ratio $\frac{\pi(y|x)}{\pi_{\text{ref}}(y|x)}$ compares the probability the current model gives to response $y$ vs the probability the reference model would give it. If the current model assigns a probability 10x higher than the reference, this ratio is large, and the "implicit reward" is high. ($C$ is a constant that doesn't affect the optimization.)
+
+What does this concretely say? That **every language model implicitly defines a reward model** via the ratio of its probabilities with a reference model. If the fine-tuned model assigns a much higher probability to a response than the reference model, it means that response has a high "implicit reward." No need to train a separate reward model: the model itself already encodes its preferences in the way it distributes probabilities.
+
+<Callout type="paper" title="The Implicit Reward -- The Heart of DPO">
+The idea isn't just a mathematical trick. It says something profound: the way a model assigns probabilities to tokens already encodes its "preferences." If the fine-tuned model gives a higher probability to a response than the reference model, it means it "prefers" it. DPO directly exploits this structure.
+</Callout>
+
+## The DPO Loss: Elegantly Simple
+
+By substituting the implicit reward into the **Bradley-Terry model**, you directly get the DPO loss. Bradley-Terry is a simple idea: to predict who wins between two options A and B, you compare their respective scores. If A has a score of 8 and B has 3, A is much more likely to win. It's the same principle as Elo ratings in chess -- and here, it's applied to model responses. The resulting loss:
+
+$$\mathcal{L}_{\text{DPO}} = -\mathbb{E}\left[\log \sigma\left(\beta \left(\log \frac{\pi(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \log \frac{\pi(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right)\right]$$
+
+Let's decode this formula piece by piece:
+
+- $x$: the prompt (the question asked to the model)
+- $y_w$: the **chosen** response (w for "win" -- the one humans prefer)
+- $y_l$: the **rejected** response (l for "lose" -- the one humans don't like)
+- $\log \frac{\pi(y_w|x)}{\pi_{\text{ref}}(y_w|x)}$: how much the current model "boosts" the good response relative to the reference
+- $\log \frac{\pi(y_l|x)}{\pi_{\text{ref}}(y_l|x)}$: how much the current model "boosts" the bad response relative to the reference
+- The **subtraction** between the two: the preference gap. We want the model to boost the good response *more* than the bad one
+- $\sigma$: the sigmoid function, which converts this gap into a probability between 0 and 1
+- $\beta$: amplifies or attenuates the gap (same role as in the RLHF formula)
+
+In summary: the loss is low when the model clearly prefers the good response over the bad one (relative to the reference). It's high when the model can't tell the difference, or worse, prefers the bad one.
+
+The fundamental point: this is **supervised learning** with a special loss. No RL, no response sampling during training, no value network. Just a forward pass on the data pairs and a backward pass to update the weights.
+
+
+## The DPO Pipeline: Before vs After
+
+**Before (RLHF with PPO):**
+1. Train SFT
+2. Generate responses, have humans annotate
+3. Train a separate reward model
+4. Run PPO with 4 models in memory, monitor stability, manage reward hacking
+5. Iterate for weeks
+
+**After (DPO):**
+1. Train SFT
+2. Collect preference pairs (prompt, chosen response, rejected response)
+3. Train with the DPO loss -- it's standard fine-tuning
+
+That's it.
+
+<Callout type="info" title="The DPO Data Format">
+Each training example is a triplet: (prompt, chosen_response, rejected_response). For example: prompt = "Explain gravity to an 8-year-old," chosen = [clear explanation with analogies], rejected = [explanation full of physics jargon]. Public datasets like UltraFeedback or HH-RLHF provide exactly this format.
+</Callout>
+
+## The Hyperparameters That Matter
+
+- **beta**: controls the KL constraint strength, i.e., how much the model is allowed to deviate from the reference. Typically between 0.1 and 0.5. Too low: the model diverges strongly from the reference and can lose its base capabilities. Too high: the model stays too close to the reference and doesn't learn enough from the preferences.
+- **Learning rate**: much lower than for SFT, typically between 5e-7 and 1e-6. Alignment is a delicate fine adjustment. Going too fast degrades the capabilities acquired during SFT.
+- **Number of epochs**: 1 to 3 maximum. Overfitting with DPO is fast and brutal. The model starts to "over-learn" the pairs and loses diversity and overall quality. Monitor the validation loss closely.
+
+## Concrete Advantages: What DPO Really Changes
+
+**Simplicity**: DPO can be implemented in a few dozen lines. No critic model (the 4th PPO model that estimates future rewards), no response generation at each step, no clipping coefficient to calibrate. Your intern can implement it in a day.
+
+**Stability**: DPO loss curves are smooth and monotonic. No sudden collapse, no reward hacking (there's no reward model to hack).
+
+**Memory**: 2 models in memory (the model being trained and its frozen reference copy) instead of 4 with PPO.
+
+**QLoRA compatibility**: DPO naturally combines with quantization (reducing weight precision to save memory) and LoRA adapters (Low-Rank Adaptation, a technique that trains only a small fraction of weights).
+
+<Callout type="tip" title={"DPO + QLoRA: Alignment for Everyone"}>
+With QLoRA (Quantized Low-Rank Adaptation) + DPO, you can align a 7-billion-parameter model on a single 24 GB GPU (RTX 4090, about $1,500). What required a research lab 2 years ago is now accessible to a solo developer or a small startup.
+</Callout>
+
+## The Honest Limitations of DPO
+
+**Data sensitivity**: if the "chosen" response and the "rejected" response are nearly equivalent, the DPO signal is very weak. The quality of contrast in the pairs is critical.
+
+**Distribution shift**: DPO trains on pairs generated by the SFT model. But as the model changes, these pairs become less representative. RLHF with PPO naturally corrects this by regenerating responses at each step.
+
+**No reusable reward model**: the RLHF reward model can be used to filter data, rank responses, evaluate other models. With DPO, you don't have one.
+
+**Possible collapse**: with beta too low or too many epochs, the model learns to strongly reject bad responses rather than producing good ones -- response diversity collapses.
+
+## Variants Born After DPO
+
+DPO inspired a series of improvements:
+
+- **IPO** (Identity Preference Optimization): changes the loss to avoid overfitting
+- **cDPO**: adds label smoothing for noisy annotations
+- **Online DPO / Iterative DPO**: regenerates new pairs at each iteration to correct distribution shift
+- **DPOP**: adds a term to prevent the model from collapsing the probability of the good response
+
+<Callout type="info" title={"DPO in the Open-source Industry"}>
+Many popular community models use DPO: Zephyr, Neural Chat, OpenHermes, and hundreds of models on HuggingFace Hub. Even major labs often combine DPO and RLHF -- DPO for the first alignment stages, RLHF to fine-tune the last few percent of performance.
+</Callout>
+
+## DPO vs RLHF: The Verdict
+
+| Criterion | RLHF (PPO) | DPO |
+|---|---|---|
+| Complexity | Very high | Low |
+| Stability | Difficult | Stable |
+| GPU memory | 4 models | 2 models |
+| Maximum performance | Slightly higher | Very close |
+| Online learning | Yes (new responses) | No by default |
+| Reusable reward model | Yes | No |
+
+For the vast majority of practitioners and modestly sized teams, DPO is the best starting point for alignment. It offers an excellent quality-to-complexity ratio and delivers competitive results with a fraction of the resources needed for RLHF. RLHF with PPO remains relevant for large labs seeking the last few percent of performance and with the teams and infrastructure to manage its complexity. In practice, many labs use both: DPO for initial alignment (fast and stable), then RLHF to fine-tune the final details.

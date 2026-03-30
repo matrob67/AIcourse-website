@@ -1,0 +1,96 @@
+---
+title: "Evolution of Context Windows"
+description: "From 32K to 256K tokens: how Mistral AI progressively extended its models' context windows through innovative attention techniques."
+---
+
+## Long Context: Reading Entire Books in One Go
+
+In September 2023, Mistral 7B offered 32K tokens of context (a short book). In 2025, Mistral Large 3 reaches **256K tokens** (2 to 3 complete books). In two years, the context window has been multiplied by 8.
+
+The context window is the amount of text a model can "read" and take into account to generate its response. The larger it is, the more ambitious the use cases become. It's one of the most impactful evolutions in generative AI.
+
+### The Progression at Mistral
+
+| Model | Date | Context | Gain vs Mistral 7B |
+|-------|------|---------|---------------------|
+| Mistral 7B | Sept 2023 | 32K | Baseline |
+| Mixtral 8x7B | Dec 2023 | 32K | 1x |
+| Mixtral 8x22B | Apr 2024 | 64K | 2x |
+| Mistral NeMo 12B | Jul 2024 | 128K | 4x |
+| Mistral Large 3 | 2025 | 256K | 8x |
+
+### Why This Is Transformative
+
+To understand the impact, let's look at what each threshold concretely enables:
+
+**32K tokens** (~24,000 words): a long article, a medium-sized code file, an extended chat conversation. Sufficient for normal chat and simple tasks.
+
+**64K tokens** (~48,000 words): a complete report, a book chapter, a code module with its dependencies. This starts to become really useful for document analysis.
+
+**128K tokens** (~100,000 words): an entire 300-page book. A complete software project with its dozens of files. You can analyze a document from start to finish without splitting it.
+
+**256K tokens** (~200,000 words): 2 to 3 books. A startup's entire codebase. The complete documentation of a framework. A **massive** context that opens unprecedented possibilities.
+
+<Callout type="info" title="Long context vs RAG: a paradigm shift">
+Before long context, analyzing a 100-page document required a complete pipeline: chunking, vectorization, storage in a vector database, retrieval, then generation. With 128K or 256K tokens of context, the entire document fits in the model's window. Your application architecture becomes radically simpler.
+</Callout>
+
+
+
+### The Technical Challenges: Why It's So Hard
+
+Extending the context window isn't just "increasing a parameter." Several major technical obstacles make this progression difficult:
+
+**Quadratic complexity of attention**: the standard attention mechanism has O(n^2) memory complexity relative to context length. Going from 32K to 256K tokens means multiplying the required memory by 64. With standard attention, this is simply impossible on current hardware.
+
+Mistral's solution: **Sliding Window Attention (SWA)**. Each attention layer only looks at the W most recent tokens (for example W = 4,096). But by stacking 32 layers, information propagates from layer to layer: in total, the model "sees" 32 x 4,096 = 131K tokens. It's like a human chain: each link only touches its neighbor, but a message can cross the entire chain.
+
+**Enormous KV (key-value) cache**: the KV cache grows linearly with context length. For Mistral Large (675B parameters) with 256K tokens of context, this cache represents **tens of gigabytes** of GPU memory.
+
+Solutions for managing this cache:
+- **GQA (Grouped-Query Attention)**: reduce the number of K/V heads (divided by 4 at Mistral)
+- **Rolling buffer**: fixed-size circular cache, oldest entries are overwritten
+- **KV quantization**: store keys and values at reduced precision (FP8 instead of FP16)
+- **PagedAttention** (vLLM): paged memory management, like an operating system manages RAM
+
+**Positional encoding for distant positions**: the model needs to know where each token sits in the sequence. Mistral uses **RoPE** (Rotary Position Embedding), which encodes positions via rotations in vector space. To extend beyond training size, scaling techniques adjust rotation frequencies (NTK-aware scaling, YaRN).
+
+**Training on long sequences**: the model must **learn** to use its long context. Mistral trains progressively: first on 4K token sequences, then 8K, then 32K, then 128K, then 256K. This progressive training is necessary for the model to learn to exploit information at all distances.
+
+<Callout type="paper" title="RoPE Scaling: extending the range">
+RoPE encodes token positions via rotations in vector space. To extend the model beyond its initial training size, rotation frequencies must be adjusted. Several techniques exist: NTK-aware scaling, YaRN, or simply additional fine-tuning on long sequences.
+</Callout>
+
+### Advanced Techniques for Long Context
+
+**FlashAttention**: not an algorithmic change, but an extremely optimized GPU implementation of the attention mechanism. By minimizing transfers between high-bandwidth memory (HBM) and the GPU's fast memory (SRAM), FlashAttention is 2 to 3x faster than the naive implementation. It's become an industry standard.
+
+**Hierarchical attention**: for ultra-long contexts, some models combine fine local attention (SWA over a few thousand tokens) with sparse global attention. A few "sentinel" tokens participate in global attention, allowing the model to maintain dependencies between distant parts of the context.
+
+**Context compression**: older parts of the context can be compressed (automatic summarization, embedding compression) to save memory while preserving essential information.
+
+### How to Verify the Model Actually Uses Its Context
+
+Having a 256K token window doesn't guarantee the model actually exploits all the information. Several evaluation techniques exist:
+
+**Needle in a Haystack**: you insert a specific fact (the "needle") at a random location in a long text (the "haystack") and ask the model to find it. It's the most basic test of retrieval capability.
+
+**RULER**: a more sophisticated benchmark that tests the model's ability to perform multi-hop retrieval, information aggregation, and variable tracking over long distances.
+
+**Lost in the Middle Effect**: research shows that LLMs use information at the beginning and end of context better, and tend to "forget" information in the middle. Mistral integrates specific training techniques to combat this bias.
+
+<Callout type="warning" title={"The Lost in the Middle effect"}>
+Even with 256K tokens of context, the model may underutilize information located in the middle of the window. In practice, structure your context intelligently: system instructions at the beginning, documents in the middle, question at the end. It's more effective than sending everything as a raw dump.
+</Callout>
+
+### Practical Recommendations
+
+**Don't always maximize context.** 256K tokens = high latency + high cost. If your task only needs 4K tokens, send 4K tokens. Paying for 256K when 4K is enough is wasteful.
+
+**Structure your information.** Even with an enormous context, organization helps the model. Recommended format: system instructions --> document context --> question. It's more effective than a raw text dump.
+
+**Test retention before deploying.** Before putting an application that uses 256K tokens into production, verify with Needle-in-a-Haystack tests that the model truly retains critical information at all positions in the context.
+
+---
+
+**Long context** enables LLMs to read entire books, complete codebases, and hundreds-of-page files in a single request. It's a paradigm shift that radically simplifies application architectures.

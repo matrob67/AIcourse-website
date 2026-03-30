@@ -1,0 +1,116 @@
+---
+title: "Tensor Parallelism: Splitting Layers Across GPUs"
+description: "Tensor Parallelism: instead of replicating the entire layer, split the weight matrix across multiple GPUs. Train massive layers."
+---
+
+## The key idea
+
+In Data Parallelism, each GPU has a complete copy of the model. But what do you do when a single layer is too large for one GPU? That's where **Tensor Parallelism** (TP) comes in: instead of replicating weight matrices, you **split** them and distribute the pieces across multiple GPUs.
+
+Imagine a brick wall to build. Instead of giving each bricklayer a complete blueprint and asking them to build the entire wall (Data Parallelism), you divide the wall into sections and each bricklayer builds their section. If an attention layer weighs 12 GB, you split it across 2 GPUs = 6 GB each. The model that wouldn't fit on one GPU now fits on two.
+
+## How it works: matrix splitting
+
+The core of TP relies on a simple mathematical property. For a matrix multiplication `Y = X * W`, there are two ways to split W:
+
+**By columns**: you partition W into columns, and each GPU computes its piece of Y in parallel. No communication needed at this step!
+
+$$W = [W_1 \mid W_2 \mid \ldots \mid W_P]$$
+
+$$Y = X \times W = [X \times W_1 \mid X \times W_2 \mid \ldots \mid X \times W_P]$$
+
+**By rows**: you partition W into rows. Each GPU computes a partial result, then you need to aggregate via an **all-reduce** to get the final result.
+
+$$W = \begin{bmatrix} W_1 \\ W_2 \\ \vdots \\ W_P \end{bmatrix}$$
+
+$$Y = \sum_i X_{[\ldots]} \times W_i \quad \text{(each GPU does a piece)}$$
+
+Megatron-LM's trick is to intelligently alternate these two modes to minimize communications.
+
+<Callout type="info" title="Architectural choice">
+In a Transformer, TP applies to the large matrix multiplications (attention, MLP). Lightweight operations like norms and embeddings stay replicated on all GPUs. The strategy: TP on expensive operations, replication on cheap operations.
+</Callout>
+
+## TP in multi-head attention
+
+Multi-head attention naturally lends itself to TP because it's composed of H **independent** heads. The distribution is trivial:
+
+- GPU 0 computes heads 0 to H/2-1
+- GPU 1 computes heads H/2 to H-1
+
+Each GPU processes its heads completely independently (zero communication during attention score computation). It's only afterward, during the output projection, that an **all-reduce** combines the results.
+
+This is where TP is the most natural and most efficient in a Transformer.
+
+## TP in the MLP layer
+
+For a typical MLP layer `Y = dropout(GELU(X * W1) * W2)`, the strategy is as follows:
+
+- **W1**: column partition. Since GELU is an element-wise operation, it applies independently on each piece.
+- **W2**: row partition, followed by an all-reduce to aggregate partial results.
+
+Concretely:
+- **GPU 0**: $\text{GELU}(X \times W1_0) \to Z_0$, then $Z_0 \times W2_0$
+- **GPU 1**: $\text{GELU}(X \times W1_1) \to Z_1$, then $Z_1 \times W2_1$
+- Finally, an all-reduce to get the final $Y$
+
+<Callout type="paper" title="Megatron-LM: optimal placement">
+The architecture proposed by Megatron-LM strategically places all-reduces to minimize communication. An entire Transformer block requires only 2 all-reduces in forward and 2 in backward. And this number is **independent of model size**: whether you have 7B or 175B parameters, it's always 4 all-reduces per block.
+</Callout>
+
+## The cost: communications on the critical path
+
+At each all-reduce, you communicate a tensor of size `B * L * d` (batch x sequence x hidden dimension). For P GPUs, the total volume is approximately `2 * (P-1)/P * B * L * d`.
+
+The critical point here: unlike DDP where communications can overlap with computation, in TP communications are **on the critical path**. The GPU computes, then **waits** for the all-reduce to finish before moving to the next layer. That's why inter-GPU bandwidth is so important.
+
+<Callout type="warning" title="TP requires NVLink">
+TP should only be used between GPUs in the same node connected via NVLink (900 GB/s on H100). Between nodes via InfiniBand (100-400 Gb/s), latency and limited bandwidth create a bottleneck that cancels the parallelism benefits. Golden rule: TP intra-node only.
+</Callout>
+
+## TP degree: how many GPUs?
+
+Typically: 2, 4, or 8, corresponding to the number of GPUs connected via NVLink within a node (for example a DGX H100 with 8 GPUs).
+
+| TP Degree | Comm. overhead | Typical use |
+|---|---|---|
+| 1 (no TP) | 0% | Models < 13B |
+| 2 | 3-5% | 13-30B |
+| 4 | 8-12% | 30-70B |
+| 8 | 15-25% | 70B+ |
+
+Beyond 8 GPUs in TP, the per-GPU matrices become too small to efficiently use Tensor Cores. Computations are then dominated by kernel launch overhead rather than useful computation.
+
+<Callout type="tip" title="Practical strategy">
+Use the **smallest** TP degree that lets the model fit in memory. Then complement with **Pipeline Parallelism** (distributing layers across multiple nodes) and **Data Parallelism** (distributing data). Classic combination: TP=8 within the node, pipeline between nodes, DDP for the batch.
+</Callout>
+
+## Sequence Parallelism (complementary optimization)
+
+Certain operations like LayerNorm, dropout, and residual connections don't lend themselves to TP. They are normally replicated on all GPUs in the TP group, which wastes both computation and memory.
+
+**Sequence Parallelism** (SP) solves this problem by partitioning these operations along the **sequence dimension** instead of the hidden dimension:
+
+- **TP**: partition by hidden dimension (for GEMMs)
+- **SP**: partition by sequence dimension (for norm, dropout, residual)
+- **Transitions**: all-gather and reduce-scatter convert between the two partition modes
+
+The gain is twofold: reduced memory (each GPU only stores a fraction of intermediate activations) and better distributed computation.
+
+## Combinations: 3D parallelism
+
+TP is rarely used alone. You generally combine it with other forms of parallelism:
+
+- **TP + Data Parallelism**: each TP group processes a different micro-batch
+- **TP + Pipeline Parallelism**: layers are distributed in stages, each stage uses TP internally
+- **TP + ZeRO/FSDP**: partitioning of optimizer states between TP groups
+
+This combination is called **3D parallelism** (TP x PP x DP). It's the standard for training large LLMs.
+
+<Callout type="info" title="Massive scalability">
+To train a 175B model like GPT-3, no individual technique is sufficient. You stack TP within the node (8 GPUs) + PP between nodes (tens of stages) + DP to distribute the batch (hundreds of replicas). The orchestration is complex but it's the only way to efficiently use thousands of GPUs.
+</Callout>
+
+## Conclusion
+
+Tensor Parallelism splits weight matrices to distribute them across multiple GPUs. It's essential for models where a single layer doesn't fit in memory. But this technique requires very high inter-GPU bandwidth since communications are on the critical path. That's why TP is limited to within a NVLink node, and you combine with PP and DP for multi-node scaling. If your model fits on one GPU, you don't need TP. If it doesn't, it's your first weapon.

@@ -1,0 +1,153 @@
+---
+title: "Why the Transformer replaced RNNs"
+description: "The real reasons behind the Transformer's dominance and attempts to return to linear architectures."
+---
+
+## The story: the sudden death of RNNs (2017-2020)
+
+Between 2017 and 2020, something spectacular happened in the NLP world: RNNs (LSTM, GRU -- Gated Recurrent Unit) **disappeared overnight**. From total dominance across all language processing tasks to near-extinction in 3 years. It's one of the fastest transitions in the history of computer science.
+
+This wasn't a fad. It was a brutal technical necessity: the Transformer **solves fundamental problems that RNNs cannot solve**, no matter what patches you apply. Let's go through these problems one by one.
+
+## Problem 1: the RNN is sequential, not parallel
+
+This is reason #1, and maybe the only one you really need to understand the Transformer's victory.
+
+An RNN processes words **one by one**, in order. Word 2 can't be processed before word 1 is finished, because word 2 needs the hidden state produced by word 1. It's like an assembly line with a single worker: even if you have 100 workers available, only one works at a time.
+
+**RNN**: Word 1 (wait), Word 2 (wait), Word 3 (wait)...
+- Steps are strictly sequential
+- A GPU with 8,000 compute cores sits 99% idle
+- Impossible to parallelize training along the time dimension
+
+**Transformer**: Word 1, Word 2, Word 3... all at the same time
+- All positions are processed simultaneously
+- All 8,000 GPU cores work in parallel
+- Training is **100 times faster** on the same hardware
+
+It's as simple as that. Modern GPUs are massively parallel machines: they excel when given thousands of independent computations to do at once. The Transformer gives them exactly that. The RNN gives them exactly the opposite: one computation at a time, with a rigid sequential dependency.
+
+Parallelism isn't a nice bonus. It's what made training models with hundreds of billions of parameters possible. Without parallelism, GPT-3 would have taken years to train instead of weeks.
+
+## Problem 2: the memory bottleneck
+
+An RNN has a critical design problem: it must **compress the entire history into a single vector** -- a hidden state, typically 256 to 1,024 dimensions.
+
+Take the sentence: "The black cat that was peacefully sleeping on the blue carpet suddenly woke up"
+
+The RNN must condense all this information into a single 512-dimensional vector. It's like summarizing an entire paragraph on a Post-it note. Inevitably, details get lost. After 30-50 words, the hidden state has almost completely "forgotten" what was said at the beginning of the sequence. The first words are overwritten by the last ones.
+
+**The Transformer** works radically differently: it maintains a separate representation **for each token** in the sequence. Each word keeps its own vector, and the attention mechanism can directly access any past word without going through a bottleneck.
+
+Nothing gets compressed. Nothing gets forgotten. Everything remains accessible at all times. It's a decisive advantage as soon as you work with sequences longer than a few dozen words.
+
+## Problem 3: long-range dependencies vanish
+
+Even with LSTMs (Long Short-Term Memory), the cream of RNN technology (with their famous forget, input, and output "gates"), dependencies between distant words remain hard to capture.
+
+Example: "The black cat that was sleeping on the blue carpet, next to the fireplace, under the window, near the piano... [20 words later] ...it woke up"
+
+The RNN must connect "it" with "cat" through 20 sequential processing steps. At each step, the signal degrades a bit (this is the vanishing gradients problem we saw in the backpropagation chapter). After 20 steps, the link between "it" and "cat" is so weakened that the RNN no longer knows who "it" refers to.
+
+**The Transformer** connects "it" directly to "cat" via the attention mechanism, in **a single step**. Whether 20 words or 200 separate them doesn't matter: the logical distance is always 1. Attention creates a direct path between any two positions in the sequence.
+
+<Callout type="info" title="Why LSTMs try to solve this">
+LSTMs add "gates" (forget gate, input gate, output gate) to control the flow of information in the hidden state. The idea: the forget gate can "protect" certain information from being forgotten by letting it pass through intact. It's an ingenious patch for the vanishing gradients problem, but it remains a patch. It requires a lot of parameters, delicate tuning, and only partially solves the problem.
+
+The Transformer avoids the problem entirely: no gates, no sequential hidden state, just direct attention between all positions. Simpler architecture, better result.
+</Callout>
+
+## Problem 4: RNNs don't scale well
+
+Adding more layers to an LSTM? It helps a little, then plateaus. Adding more parameters? Same thing. Diminishing returns come fast. Doubling the size of an LSTM often only brings a 5% improvement. Not worth it.
+
+The **Transformer**, on the other hand, follows remarkably predictable and regular **scaling laws**. Doubling the number of parameters and the amount of data produces a predictable, nearly constant improvement in performance. This is what the work of Kaplan et al. (2020) at OpenAI showed.
+
+This scaling property is what made the race to large models possible: 100 billion parameters? It works and it's proportionally better. 1 trillion? That works too. RNNs would have hit a ceiling long before, probably around 1 billion parameters.
+
+That's why all modern LLMs (GPT-4, Claude, LLaMA, Gemini) are Transformers. The architecture scales.
+
+## The Transformer's price: remaining problems
+
+The Transformer won the war, but it pays a price. Two major limitations deserve to be understood:
+
+### Limitation 1: Quadratic complexity
+
+| Architecture | Memory/compute complexity |
+|---|---|
+| RNN | $O(n)$ -- linear in the sequence length |
+| Transformer | $O(n^2)$ -- quadratic in the sequence length |
+
+For a sequence of 100,000 tokens, the attention matrix is 100k x 100k = **10 billion elements**. And each Transformer layer computes its own attention matrix. With 96 layers and dozens of attention heads, it blows up quickly in memory and compute.
+
+RNNs? Just $O(n)$ linear. One token, one step, constant memory per step. Much more economical.
+
+**Practical impact**: quadratic complexity is what imposes context limits on current LLMs. In 2026, GPT-5.4, Claude Sonnet 4.6, and Gemini 3.1 Pro handle 1M tokens, and Llama 4 Scout goes up to 10M. Techniques like Flash Attention have pushed the limits, but the fundamental $O(n^2)$ problem persists.
+
+<Callout type="warning" title={"The current AI bottleneck"}>
+$O(n^2)$ complexity is **the biggest technical challenge** in AI today (2024-2026). Flash Attention (an implementation optimization), Mamba (an alternative model), and linear attention variants are all trying to solve this problem. But no solution has yet replaced classical attention in terms of quality. The speed/quality trade-off remains open.
+</Callout>
+
+### Limitation 2: Streaming and inference difficulties
+
+RNNs are naturally **streaming**: you ingest a token, update the hidden state, produce an output. Constant $O(1)$ memory, no need to store anything from past tokens.
+
+The Transformer at inference must maintain the **KV cache**: all the Keys and Values computed for all previous tokens. Each new generated token needs to access this cache to compute attention. Memory grows linearly at $O(n)$ -- and for a 100k-token context with a 70-billion-parameter model, this cache can easily occupy tens of gigabytes of GPU memory.
+
+This is a major practical burden for deployment: serving an LLM to thousands of simultaneous users requires massive amounts of GPU memory, primarily because of the KV cache.
+
+## Comparison table
+
+| Aspect | RNN/LSTM | Transformer |
+|---|---|---|
+| Parallel training | No (sequential) | **Yes, massively** |
+| Long-range dependencies | Difficult (signal degrades) | **Easy (direct attention)** |
+| Per-step complexity | $O(n)$ linear | $O(n^2)$ quadratic |
+| Memory at inference | $O(1)$ constant | $O(n)$ growing (KV cache) |
+| Scaling (bigger = better) | Poor (diminishing returns) | **Excellent (scaling laws)** |
+| Practical max context | 512-2,000 tokens | 128k-200k tokens |
+
+**Verdict**: The Transformer wins on everything that matters for performance (parallelism, scaling, long-range dependencies). The RNN wins on memory efficiency. And in practice, performance has largely prevailed.
+
+## The return of linear architectures (since 2023)
+
+Since 2023, a new generation of architectures is trying to combine the best of both worlds: the Transformer's quality with the RNN's efficiency.
+
+### Mamba (State Space Models)
+
+Mamba, developed by Albert Gu and Tri Dao, is the most promising alternative. The idea: a **linear** architecture like RNNs (complexity $O(n)$), but **parallelizable** during training like the Transformer. The SSMs (State Space Models) on which Mamba is based draw from control theory to model sequences.
+
+- At inference: constant $O(1)$ memory, no KV cache. You can generate indefinitely without blowing up memory.
+- At training: full parallelism thanks to a clever mathematical reformulation (State Space Models can be computed as convolutions).
+
+This is the **most promising direction** for overcoming the $O(n^2)$ barrier.
+
+### RWKV: RNN with linear attention
+
+RWKV is an open-source project that reformulates the RNN with a form of linear attention. Performance approaches that of the Transformer on several benchmarks, with RNN-style inference memory. The model is actively developed and used by a growing community.
+
+### Jamba: the Mamba + Transformer hybrid
+
+Developed by AI21 Labs, Jamba alternates Mamba layers and Transformer layers within the same model. The idea: use Mamba for efficiency on long sequences, and the Transformer for complex relationships that require full attention. A pragmatic compromise that works well in practice.
+
+<Callout type="tip" title="Reality 2024-2026">
+Despite the enthusiasm around Mamba and SSMs, **the Transformer still dominates** production. Why? Modern GPUs and TPUs are specifically optimized for Transformers. Flash Attention exists and is mature; there's no equivalent "Flash Mamba" that's as optimized. Deployment infrastructures (vLLM, TensorRT-LLM) are built around Transformers.
+
+Reasonable prediction: the Transformer will remain dominant for another 3-5 years, with Mamba and hybrid architectures gradually gaining ground, especially for use cases where long sequences and memory efficiency are critical. No sudden revolution, but a slow and pragmatic transition.
+</Callout>
+
+## Why this matters
+
+Understanding why the Transformer replaced the RNN means understanding the deep forces shaping all of modern AI. It wasn't an arbitrary choice or a passing trend. It was a convergence of technical necessities:
+
+- GPUs demand **parallelism**, and the Transformer delivers
+- Language tasks require **long-range dependencies**, and attention solves them
+- The race for performance demands **predictable scaling**, and the Transformer obeys
+
+## Key takeaways
+
+1. **The Transformer dominates because of**: parallelism (full GPU utilization), scaling (predictable laws), and long-range dependencies (direct attention)
+2. **The Transformer's price**: $O(n^2)$ complexity in memory/compute and a KV cache that grows with each token
+3. **RNNs had**: linear $O(n)$ complexity and natural streaming with constant memory
+4. **Mamba and SSMs**: are trying to combine the Transformer's parallelism with the RNN's linear efficiency
+5. **In 2024-2026**: the Transformer remains king in production, but alternatives are gaining credibility

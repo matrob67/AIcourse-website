@@ -1,0 +1,178 @@
+---
+title: "Evaluation Metrics: Accuracy, Precision, Recall, F1"
+description: "How to truly evaluate a classifier. Why accuracy lies, and when to use precision, recall, and F1."
+---
+
+## Introduction: The Right Metric Changes Everything
+
+Training a model is easy. Knowing if it's **actually good** is another story.
+
+The choice of metric is never trivial: it encodes your **real priorities**. What matters most in **your context**? Let's take two medical scenarios to really understand. A false alarm in healthcare (a false positive diagnosis) causes unnecessary worry and additional tests. A missed case (a false negative diagnosis) is potentially someone dying. The cost of errors isn't symmetric, and your metric must reflect this asymmetry.
+
+Two different contexts = two different metrics. There is no "best universal metric." That's why you need to understand each one in depth.
+
+
+
+## Accuracy: The Misleading Metric
+
+**Accuracy** is the most intuitive metric: it's simply the percentage of correct predictions out of all predictions.
+
+$$
+\text{Accuracy} = \frac{\text{correct predictions}}{\text{total}}
+$$
+
+It answers the question: "across all my examples, how often was my model right?" That seems reasonable. The problem is that this question is often the wrong question to ask.
+
+Concrete example: imagine 95% of your data is class A and 5% is class B. A model that **always predicts A** --- without even looking at the data --- achieves 95% accuracy. That looks excellent on paper. In reality, this model is completely useless: it detects **zero** class B examples.
+
+<Callout type="warning" title={"Classic Accuracy Pitfalls"}>
+**Fraud detection**: 99.9% of transactions are legitimate. A model that systematically answers "no fraud" achieves 99.9% accuracy but detects exactly 0% of frauds. Your boss will be impressed by the number, but so will the fraudsters.
+
+**Cancer diagnosis**: 99% of patients are healthy. A "no cancer" model achieves 99% accuracy and misses every sick patient. Accuracy lies when classes are imbalanced.
+</Callout>
+
+**Rule of thumb**: use accuracy ONLY if your classes are relatively balanced (50-50 or close) AND you don't care about the type of error being made. As soon as classes are imbalanced or one type of error costs more than the other, move to the following metrics.
+
+
+
+## The Four Fundamental Outcomes
+
+Before talking about precision and recall, you need to understand the four possible outcomes in binary classification. Imagine a spam detector:
+
+**True Positive (TP)**: the model says "spam," and it was indeed spam. Well done, good detection.
+
+**False Positive (FP)**: the model says "spam," but it was a legitimate email. That's a **false alarm**. Your friend loses an important email in their spam folder.
+
+**True Negative (TN)**: the model says "not spam," and it was indeed legitimate. Good call, the email arrives normally.
+
+**False Negative (FN)**: the model says "not spam," but it was spam. That's a **missed case**. The spam lands in your inbox.
+
+To remember: the first word (True/False) tells you if the model was right or wrong. The second word (Positive/Negative) tells you what the model predicted. So "False Positive" = the model was wrong when it said positive.
+
+TP and TN = the model is right. FP and FN = the model is wrong. But the two types of errors (FP and FN) don't have the same cost depending on the context. That's where precision and recall come in.
+
+## Precision: When You Say Yes, Are You Right?
+
+Precision answers a very specific question: **among all the times the model said "yes" (positive), how many times was it right?**
+
+$$
+\text{Precision} = \frac{TP}{TP + FP}
+$$
+
+The denominator is the set of positive predictions (TP + FP). You're looking at the quality of the alerts issued by the model.
+
+Example: your spam filter flags 100 emails as "spam." Among them, 80 were actually spam and 20 were legitimate emails.
+Precision = 80/100 = 80%. In other words, 20% of your alerts are false alarms.
+
+**High precision** = few false alarms. When the model says "yes," you can trust it.
+
+**When it's critical**: recommending surgery to a healthy patient is serious. Sending an important email to spam is problematic. You want high precision when **false positives are expensive**: every "yes" must be reliable.
+
+## Recall: How Many Positive Cases Do You Find?
+
+Recall asks the inverse question: **among all the examples that were actually positive, how many did the model find?**
+
+$$
+\text{Recall} = \frac{TP}{TP + FN}
+$$
+
+The denominator here is the set of true positives in the data (TP + FN). You're looking at coverage: how many real cases do you catch.
+
+Example: there are 1,000 actual spams in your inbox. Your filter detects 800 and lets 200 through.
+Recall = 800/1,000 = 80%. You miss 20% of spams.
+
+**High recall** = few false negatives. The model finds the vast majority of real cases.
+
+**When it's critical**: cancer diagnosis, terrorism detection, defect identification on a production line. Missing a real case can be catastrophic. You want high recall: detect **all** true positives, even at the cost of some false alarms.
+
+<Callout type="info" title="The Fundamental Precision-Recall Trade-off">
+Precision and recall are often in **tension**. Imagine a decision threshold slider. If you raise it (you demand more certainty before saying "yes"), you improve your precision (fewer false alarms) but reduce your recall (you miss more true cases because you're too demanding). If you lower it, it's the opposite: you catch more cases (better recall) but with more false alarms (lower precision). The right balance depends entirely on your business context.
+</Callout>
+
+## F1-Score: The Smart Average
+
+The **F1-score** is the **harmonic mean** of precision and recall:
+
+$$
+F1 = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}
+$$
+
+Why the harmonic mean and not the regular arithmetic mean? Because it **severely penalizes extreme values**. Let's take an example: a model with Precision = 1.0 (perfect, no false alarms) but Recall = 0.01 (detects almost nothing, misses 99% of cases). The arithmetic mean gives (1.0 + 0.01) / 2 = 0.505. That looks acceptable. But the F1 = 2 * (1.0 * 0.01) / (1.0 + 0.01) = 0.02. Catastrophic, as it should be: a model that detects nothing doesn't deserve a 50% score.
+
+The F1 is particularly useful when you don't have a strong preference between precision and recall, or when your classes are imbalanced and accuracy alone is misleading.
+
+**F-score variants**:
+- **F0.5**: gives 2 times more weight to precision (if false positives are expensive, for example a surgery recommendation)
+- **F2**: gives 2 times more weight to recall (if false negatives are expensive, for example a missed diagnosis)
+
+## Extension to Multi-class (3+ classes)
+
+When you have 3, 5, or 10 classes instead of 2, you can't directly compute "the" model's precision. You first compute the metric for each class individually (treating each class as "positive" vs "everything else"), then aggregate the results. Three aggregation strategies exist:
+
+### Macro-averaging
+
+Simple average of the metric across all classes. Each class has exactly the same weight, whether it contains 10 or 10,000 examples.
+
+$$
+\text{Macro-F1} = \frac{F1_{\text{class1}} + F1_{\text{class2}} + \cdots}{K}
+$$
+
+Use macro-averaging when all classes matter equally, **even the rare ones**. If you have a class with 5 examples and one with 5,000, macro gives both equal importance. It's an ethical choice as much as a technical one.
+
+### Micro-averaging
+
+You first aggregate all TP, FP, FN from all classes, then compute the metric on these global totals.
+
+$$
+\text{Micro-Precision} = \frac{\text{total}_{TP}}{\text{total}_{TP} + \text{total}_{FP}}
+$$
+
+Result: frequent classes dominate the score. If 90% of your data is class A, it's the performance on A that determines the micro-score. Use it when frequent classes genuinely matter more.
+
+### Weighted-averaging
+
+Each class is weighted by its frequency in the data. It's a compromise between macro and micro, and it's often the default in libraries like scikit-learn.
+
+<Callout type="tip" title="Which Averaging to Choose?">
+**Macro**: when rare classes matter as much as frequent ones (rare disease diagnosis). **Micro**: when frequent classes are the most important. **Weighted**: reasonable default when you're not sure.
+</Callout>
+
+## Concrete Example: Medical Diagnosis
+
+Let's put it all together. Diagnosis with 1,000 patients: 950 healthy, 50 sick. Goal: detect all sick patients.
+
+**Model A** (cautious): predicts 40 sick, of which 30 are truly sick.
+- Accuracy = (30 + 910) / 1,000 = **94%**
+- Precision = 30 / 40 = **75%** (when it says "sick," it's right 3 out of 4 times)
+- Recall = 30 / 50 = **60%** (it misses 20 sick patients out of 50)
+- F1 = **67%**
+
+**Model B** (alarmist): predicts 200 sick, of which 45 are truly sick.
+- Accuracy = (45 + 795) / 1,000 = **84%**
+- Precision = 45 / 200 = **22.5%** (many false alarms)
+- Recall = 45 / 50 = **90%** (it only misses 5 sick patients out of 50)
+- F1 = **36%**
+
+Model A has better accuracy and a better F1. On paper, it "wins." But Model B detects **90%** of sick patients versus only 60% for A.
+
+**In medicine, you'd choose B** despite its overall inferior metrics. Why? An undetected sick patient can die. A false alarm just means an additional test. The asymmetric cost of errors dictates the choice, not the raw numbers.
+
+This is exactly why understanding these metrics in depth is essential: the numbers alone don't tell the whole story.
+
+
+
+## Summary Table
+
+| Metric | What it Measures | Use When |
+|---|---|---|
+| Accuracy | % of correct answers | Balanced classes |
+| Precision | Reliability of "yes" answers | False positives are expensive |
+| Recall | Detection of true positives | False negatives are expensive |
+| F1 | Overall balance | Imbalanced classes, no preference |
+| Macro-F1 | Fair for small classes | All classes matter equally |
+
+The choice of metric is **not technical**, it's **domain-driven**. It encodes your true objectives and what errors actually cost in your application domain.
+
+## Why This Matters
+
+A poorly chosen metric produces a biased model. You optimize what you measure. If you measure the wrong thing, your model will be excellent on a useless criterion and catastrophic on what actually matters. In production, this mistake can have real human and financial consequences. Take the time to think about your metric before writing a single line of training code.

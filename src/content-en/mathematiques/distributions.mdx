@@ -1,0 +1,147 @@
+---
+title: "Distributions: Gaussian, Bernoulli, categorical, softmax"
+description: "The essential probability distributions in machine learning: Bernoulli, categorical, univariate and multivariate Gaussian, and the softmax function."
+---
+
+## Distributions: the vocabulary of models
+
+A machine learning model, at its core, is a machine that produces probability distributions. A classifier produces a distribution over classes. An image generator produces a distribution over pixels. A language model produces a distribution over tokens. Understanding the fundamental distributions means understanding the language in which models express themselves.
+
+## Random variables: discrete vs continuous
+
+Before talking about distributions, we need to distinguish two types of random variables.
+
+### Discrete variable
+
+It takes a finite or countable number of values. Examples: the result of a die roll (1 to 6), the class predicted by a classifier (cat, dog, bird), the next token in a vocabulary of 50,000 words.
+
+It's described by a probability mass function: $P(X = x)$ for each possible value $x$, with $\sum_x P(X = x) = 1$.
+
+### Continuous variable
+
+It takes values in a real interval. Examples: temperature, pixel value, a weight in a neural network.
+
+It's described by a probability density function $f(x)$, with $\int_{-\infty}^{+\infty} f(x) \, dx = 1$. Be careful: $f(x)$ is not a probability! It can exceed 1. It's the integral over an interval that gives a probability.
+
+## Bernoulli distribution
+
+### The coin flip
+
+The simplest distribution: two possible outcomes, with probability $p$ for "success" and $1-p$ for "failure."
+
+$$P(X = 1) = p, \quad P(X = 0) = 1 - p$$
+
+We write $X \sim \text{Bernoulli}(p)$.
+
+### In ML: binary classification
+
+Each output neuron of a binary classifier models a Bernoulli. The sigmoid function $\sigma(z) = \frac{1}{1 + e^{-z}}$ transforms a logit $z$ into a parameter $p \in [0, 1]$:
+
+$$P(y = 1 | x) = \sigma(f_\theta(x))$$
+
+The binary cross-entropy loss follows directly from the log-likelihood of a Bernoulli.
+
+## Categorical distribution
+
+### The N-sided die
+
+A generalization of the Bernoulli to $K$ categories. We have a probability vector $(p_1, p_2, \ldots, p_K)$ with $\sum_{k=1}^K p_k = 1$.
+
+$$P(X = k) = p_k$$
+
+### In ML: multi-class classification
+
+An ImageNet classifier that distinguishes 1,000 classes produces a categorical distribution at each prediction. A language model with a vocabulary of 50,000 tokens produces a categorical distribution with 50,000 categories for each position.
+
+The cross-entropy loss for multi-class classification is exactly the negative log-likelihood of a categorical distribution.
+
+## The softmax function
+
+### Turning logits into probabilities
+
+The output layers of a network produce logits: arbitrary real numbers $z_1, z_2, \ldots, z_K$. To turn them into a valid categorical distribution, we need positive numbers that sum to 1. That's the role of softmax:
+
+$$\text{softmax}(z_i) = \frac{e^{z_i}}{\sum_{j=1}^K e^{z_j}}$$
+
+Each logit is exponentiated (making it positive), then normalized by the sum (ensuring the total equals 1).
+
+### Important properties
+
+- **Preserves order**: if $z_i > z_j$, then $\text{softmax}(z_i) > \text{softmax}(z_j)$
+- **Sensitive to gaps**: the exponential amplifies differences. A logit slightly larger than the others "wins" a disproportionate share of the probability
+- **Translation invariance**: $\text{softmax}(z + c) = \text{softmax}(z)$ for any constant $c$ (useful for numerical stability)
+
+### Temperature
+
+By dividing the logits by a factor $T$ (the temperature) before softmax, you control the "shape" of the distribution:
+
+$$\text{softmax}(z_i / T) = \frac{e^{z_i / T}}{\sum_{j=1}^K e^{z_j / T}}$$
+
+- $T \to 0$: the distribution becomes one-hot (argmax), the model is "confident"
+- $T = 1$: default behavior
+- $T \to \infty$: the distribution tends toward uniform, the model is "undecided"
+
+This parameter is ubiquitous in text generation with LLMs and in knowledge distillation.
+
+## Gaussian (normal) distribution
+
+### The bell curve
+
+The most important distribution in statistics and ML. It's defined by two parameters: the mean $\mu$ and the variance $\sigma^2$:
+
+$$f(x) = \frac{1}{\sqrt{2\pi\sigma^2}} \exp\left(-\frac{(x - \mu)^2}{2\sigma^2}\right)$$
+
+We write $X \sim \mathcal{N}(\mu, \sigma^2)$.
+
+### Why it's everywhere
+
+- **Central limit theorem**: the sum of many independent random variables tends toward a Gaussian, regardless of their original distribution. Since real-world data often results from multiple factors, it often approximately follows a normal distribution.
+- **Maximum entropy**: among all distributions with a given mean and variance, the Gaussian has the highest entropy. It's the most "neutral" choice when you don't know anything else.
+- **Algebraic properties**: sum of Gaussians = Gaussian. Conditioning a Gaussian = Gaussian. This enormously simplifies calculations.
+
+### In ML
+
+- Network weights are often initialized from a Gaussian
+- L2 regularization corresponds to a Gaussian prior on the weights
+- VAEs assume a Gaussian prior in the latent space
+- The noise added in diffusion models is Gaussian
+
+## Multivariate Gaussian
+
+### When you have multiple dimensions
+
+For a random vector $\mathbf{x} \in \mathbb{R}^d$, the multivariate Gaussian is parameterized by a mean vector $\boldsymbol{\mu} \in \mathbb{R}^d$ and a covariance matrix $\boldsymbol{\Sigma} \in \mathbb{R}^{d \times d}$:
+
+$$f(\mathbf{x}) = \frac{1}{(2\pi)^{d/2} |\boldsymbol{\Sigma}|^{1/2}} \exp\left(-\frac{1}{2} (\mathbf{x} - \boldsymbol{\mu})^\top \boldsymbol{\Sigma}^{-1} (\mathbf{x} - \boldsymbol{\mu})\right)$$
+
+### What the covariance matrix contains
+
+- **Diagonal**: the variances of each dimension (how much each variable varies)
+- **Off-diagonal**: the covariances between dimensions (how the variables vary together)
+
+If $\boldsymbol{\Sigma}$ is diagonal, the dimensions are independent. Otherwise, they are correlated, and the "bell" is tilted or stretched in certain directions.
+
+### In ML
+
+- **PCA**: finding the directions of maximum variance means diagonalizing the covariance matrix
+- **VAE**: the encoder produces $\boldsymbol{\mu}$ and $\boldsymbol{\Sigma}$ (often diagonal) for each point in latent space
+- **Gaussian Mixture Models**: each component is a multivariate Gaussian
+- **Diffusion models**: the noising and denoising process operates in a multivariate Gaussian space
+
+## Summary: which distribution for which use
+
+| Distribution | Type | Parameters | ML use |
+|---|---|---|---|
+| Bernoulli | Discrete (2 values) | $p$ | Binary classification, dropout |
+| Categorical | Discrete ($K$ values) | $(p_1, \ldots, p_K)$ | Multi-class classification, LLM |
+| Gaussian | Continuous | $\mu, \sigma^2$ | Weight initialization, VAE, diffusion |
+| Multivariate Gaussian | Continuous ($d$ dim.) | $\boldsymbol{\mu}, \boldsymbol{\Sigma}$ | PCA, latent space, GMM |
+
+## Key takeaways
+
+- ML models produce and manipulate probability distributions
+- Bernoulli for binary, categorical for multi-class, Gaussian for continuous
+- Softmax is the bridge between raw logits and a valid categorical distribution
+- Temperature controls the "certainty" of the softmax distribution
+- The Gaussian is ubiquitous thanks to the central limit theorem and its algebraic properties
+- The multivariate Gaussian encodes correlations between dimensions via the covariance matrix

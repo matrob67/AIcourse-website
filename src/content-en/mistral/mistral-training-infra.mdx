@@ -1,0 +1,133 @@
+---
+title: "Training Infrastructure"
+description: "NVIDIA Hopper GPUs with HBM3e, large-scale distributed training, and computational cost estimates for Mistral models."
+---
+
+
+
+## Mistral's GPU Farms: The Invisible Factory Behind the Models
+
+Training a model with 675 billion parameters isn't gaming on an RTX 4090. It's 2,000+ H100 GPUs running in parallel for weeks, consuming the electricity of a small town. The cost? Tens, even hundreds of millions of dollars per model.
+
+That's the infrastructure Mistral built to manufacture its models. Here's how this machinery works.
+
+### The Hardware: NVIDIA Hopper GPUs
+
+Mistral's recent models (notably Mistral Large 3) are trained on NVIDIA GPUs from the Hopper generation, primarily the H100 and H200.
+
+#### NVIDIA H100: The Workhorse
+
+The H100 is the reference GPU for LLM training since 2023. It's the basic building block of any serious AI compute farm.
+
+| Specification | Value |
+|--------------|--------|
+| Architecture | Hopper (GH100) |
+| CUDA cores | 16,896 |
+| Tensor Cores | 528 (4th generation) |
+| HBM3 memory | 80 GB |
+| Memory bandwidth | 3.35 TB/s |
+| FP16 performance | 989 TFLOPS (with sparsity) |
+| BF16 performance | 989 TFLOPS (with sparsity) |
+| TDP | 700W |
+| Interconnect | NVLink 4.0 (900 GB/s) |
+
+#### NVIDIA H200: More Memory, Faster
+
+The H200 is an evolution of the H100 with faster and significantly larger HBM3e memory. This is a difference that matters especially for MoE models.
+
+| Specification | H100 | H200 |
+|--------------|------|------|
+| Memory | 80 GB HBM3 | 141 GB HBM3e |
+| Bandwidth | 3.35 TB/s | 4.8 TB/s |
+| Increased capacity | - | +76% memory |
+
+<Callout type="info" title="Why Memory Bandwidth Is Crucial for MoE">
+The MoE architecture requires rapidly loading the weights of different experts for each token. It's the memory bandwidth (not compute power) that limits the speed of this operation. The H200, with 4.8 TB/s (vs 3.35 TB/s for the H100), offers a 43% gain in bandwidth. In practice, this translates directly into improved training throughput for MoE models. It's like going from a 2-lane highway to a 3-lane highway.
+</Callout>
+
+### Cluster Organization: Thousands of GPUs Networked Together
+
+Training a model like Mistral Large 3 (675B parameters) requires a cluster of thousands of interconnected GPUs, organized in a hierarchy of network connections.
+
+#### Network Topology
+
+**Intra-node (within a server):** 8 H100/H200 GPUs per node, connected via NVLink 4.0 (900 GB/s bidirectional). The NVSwitch enables all-to-all communication at full bandwidth between the 8 GPUs in a single node. It's like 8 people sitting around the same table: communication is instantaneous.
+
+**Inter-node (between servers):** Nodes are connected via InfiniBand NDR (400 Gb/s per port), with a fat-tree topology that maximizes aggregate bandwidth. It's like tables connected by corridors: slower than intra-table communication, but sufficient to coordinate work.
+
+**At cluster scale:** A typical cluster for training a frontier model comprises between 1,000 and 10,000 GPUs, spread across hundreds of nodes. This is industrial infrastructure, not a research lab.
+
+### Multi-Dimensional Parallelism: How to Distribute a Giant Model
+
+A 675B parameter model doesn't fit in a single GPU (even with 141 GB of HBM3e). The model, data, and computation must be intelligently distributed across thousands of GPUs. There are four forms of parallelism, often combined.
+
+#### Data Parallelism (DP): The Most Intuitive
+
+Each GPU (or group of GPUs) processes a different subset of the data batch with a copy of the model. Gradients are then averaged across all replicas. It's like having 100 graders who each grade different papers, then agree on the final corrections.
+
+#### Tensor Parallelism (TP): Splitting Operations
+
+Individual matrix operations (the large matrix multiplications in attention and FFN layers) are split and distributed across multiple GPUs within a single node. This requires ultra-fast inter-GPU communication (NVLink), which is why it's limited to intra-node.
+
+#### Pipeline Parallelism (PP): The Assembly Line
+
+The model is split into "stages," each stage containing a subset of layers. Micro-batches flow between stages like parts on an assembly line. When stage 1 finishes with batch A and starts batch B, stage 2 works on batch A. Every GPU stays busy at all times.
+
+#### Expert Parallelism (EP): Specific to MoE
+
+Different experts are distributed across different GPUs. When the router selects an expert, the token is sent to the GPU hosting that expert via all-to-all communication. It's a form of parallelism naturally suited to the MoE architecture.
+
+<Callout type="paper" title={"The Art of Combining Parallelisms"}>
+In practice, these forms of parallelism are combined. A typical configuration might be: TP=8 (8 GPUs per tensor group, intra-node), PP=4 (4 pipeline stages), EP=8 (8 expert groups), and DP=N (N data replicas). Finding the optimal combination is a complex engineering problem requiring understanding the trade-offs between network, compute, and memory. It's one of Mistral's most valuable areas of expertise.
+</Callout>
+
+### Training Optimizations
+
+#### Mixed Precision Training
+
+Training uses mixed precisions: forward and backward passes are performed in BF16 (bfloat16), while "master" weights are maintained in FP32 for numerical stability. Why BF16? The H100's Tensor Cores are optimized for this format, delivering maximum performance. BF16 also has an advantage over FP16: its dynamic range is identical to FP32, which avoids numerical overflows during training.
+
+#### Gradient Checkpointing
+
+To save memory, instead of storing all intermediate activations during the forward pass (for reuse during backward), they're recomputed on the fly. It's a compute-for-memory trade-off: memory footprint is reduced by a factor of 3-5x, at the cost of about 30% extra compute. On giant models, it's indispensable.
+
+#### ZeRO (Zero Redundancy Optimizer)
+
+Developed by Microsoft (DeepSpeed), ZeRO eliminates redundancy in optimizer state storage. Instead of each GPU storing a complete copy of Adam moments, gradients, and weights, this data is distributed across GPUs. Each GPU stores only a fraction, and asks others when it needs something. The per-GPU memory footprint is drastically reduced.
+
+### Cost Estimates: Orders of Magnitude
+
+Mistral doesn't disclose its exact costs, but we can estimate orders of magnitude from comparable public models.
+
+#### Mistral 7B
+- **Estimate:** 1,000-5,000 GPU-hours H100
+- **Estimated cloud cost:** 2-10 million dollars
+- **Probable duration:** a few days on a 256 GPU cluster
+
+#### Mixtral 8x7B
+- **Estimate:** 10,000-50,000 GPU-hours H100
+- **Estimated cloud cost:** 20-100 million dollars
+- **Probable duration:** 1-2 weeks on a 512+ GPU cluster
+
+#### Mistral Large 3
+- **Estimate:** 100,000+ GPU-hours H100/H200
+- **Estimated cloud cost:** 50-150+ million dollars
+- **Probable duration:** several weeks on a 2,000+ GPU cluster
+
+<Callout type="warning" title="These Are Only Estimates">
+These figures are based on public cost models and extrapolations. Actual costs depend on many factors: GPU prices (rental vs ownership), training efficiency, number of tokens processed, number of restarts after hardware failures, electricity cost. Hardware ownership (as with Mistral Compute) considerably reduces cost compared to cloud rental.
+</Callout>
+
+### Mistral Compute: The Sovereign Infrastructure
+
+With its datacenter located in Essonne (Ile-de-France), Mistral AI has its own training infrastructure. This datacenter, equipped with latest-generation NVIDIA GPUs and developed in partnership with NVIDIA, offers three strategic advantages: total control over training (no dependency on cloud providers), long-term cost reduction, and the guarantee that training data stays on French territory.
+
+### Operational Challenges of Large-Scale Compute
+
+**Hardware failures.** On a cluster of thousands of GPUs, failures aren't exceptions: they're statistical certainties. A GPU going down, a broken network link, a memory error. Regular checkpointing and automatic restart mechanisms are essential to avoid losing days of compute.
+
+**Numerical stability.** Training large-scale MoE models is numerically unstable. Fine-tuning hyperparameters (learning rate, warmup, load balancing coefficient) is critical. Bad settings can cause training to diverge after days of compute, wasting millions of dollars.
+
+**Cluster efficiency.** Effective GPU utilization (MFU - Model FLOPs Utilization) rarely exceeds 50% on large clusters, due to network communications and load imbalances. Going from 40% to 50% MFU can represent millions of dollars in savings on a training run.
+
+Compute infrastructure is a strategic competitive advantage. Mistral's investment in its own capacity, combined with its team's expertise in distributed training, is what allows it to maintain a high pace of innovation despite resources far below those of the American giants.

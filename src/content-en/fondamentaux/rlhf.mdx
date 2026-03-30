@@ -1,0 +1,123 @@
+---
+title: "RLHF"
+description: "Reinforcement Learning from Human Feedback: reward model, PPO, human preferences, and the InstructGPT approach that made LLMs useful."
+---
+
+## The Problem: A Genius That Doesn't Know How to Be Helpful
+
+Imagine hiring the world's greatest linguistics expert to answer your questions. But he has a problem: instead of answering, he continues your sentences as if he were writing a book. You ask "What is the capital of France?" and he follows up with "What is the capital of Italy? What is the capital of Spain?"
+
+This is exactly the base model after pre-training. It's brilliant at predicting the next token. It doesn't know how to *help you*.
+
+In 2022, OpenAI publishes **InstructGPT** and presents a solution: **RLHF** (Reinforcement Learning from Human Feedback). It's the technique that transformed GPT-3 into ChatGPT. And that changed the entire industry.
+
+<ArxivLink id="2203.02155" title="Training language models to follow instructions with human feedback (Ouyang et al., 2022)" />
+
+
+
+## The Three-Step Pipeline
+
+### Step 1: SFT -- Show by Example
+
+Before even talking about reinforcement, you do something simple: you **show the model what you expect from it**.
+
+Human annotators -- people specifically trained for this -- write thousands of exemplary dialogues. For each question, they write the ideal answer: helpful, honest, well-structured, politely refusing dangerous requests.
+
+These examples are used for standard supervised fine-tuning, called **SFT** (Supervised Fine-Tuning). The model learns to respond instead of completing text.
+
+<Callout type="info" title="SFT: Changing the Format, Not the Knowledge">
+An important detail: SFT doesn't give the model new knowledge. It already knows that Paris is the capital of France. It only learns that it should *answer* the question, not follow up with more questions. It's a change in behavior, not intelligence.
+</Callout>
+
+SFT already produces a much better model. But it's limited by the number of examples written by humans. To go further, you need a mechanism that allows the model to improve at scale.
+
+### Step 2: Reward Model -- Learning What Humans Prefer
+
+How do you automatically measure whether a response is good? That's the job of the **reward model** -- a second model trained to mimic human preferences.
+
+The creation process:
+1. Take a prompt and have the SFT model generate **4 to 9 different responses**
+2. Human annotators **rank** these responses from best to worst
+3. Train a model to predict this ranking
+
+The reward model learns a function that takes a prompt and a response and returns a numerical score -- an estimate of "how much humans would like this response."
+
+<Callout type="tip" title="Why Rank Rather Than Rate?">
+Giving an absolute rating ("this response is worth 7.5/10") is difficult and inconsistent across annotators. On the other hand, comparing two responses ("A is better than B") is much more natural and reliable. It's like choosing your favorite pizza from a menu rather than rating each pizza out of 20.
+</Callout>
+
+The reward model's training loss is based on pairwise comparisons. For each pair (preferred response $y_w$, rejected response $y_l$) to the same prompt $x$:
+
+$$\mathcal{L} = -\log \sigma\left(r(x, y_w) - r(x, y_l)\right)$$
+
+Term by term:
+- $r(x, y_w)$: the score the reward model gives to the **good** response
+- $r(x, y_l)$: the score it gives to the **bad** response
+- The subtraction $r(x, y_w) - r(x, y_l)$: the gap between the two scores. We want it to be positive (good > bad)
+- $\sigma$: the sigmoid function, which converts this gap into a probability between 0 and 1
+- $-\log(...)$: transforms this probability into a loss -- when the probability is high (the model ranked correctly), the loss is low; when it's low, the loss is high
+
+In summary: the reward model is penalized when it gives a higher score to the bad response than to the good one.
+
+
+
+### Step 3: PPO -- Improving Through Rewards
+
+The third step uses **PPO** (Proximal Policy Optimization), a reinforcement learning algorithm. The idea: use the reward model as an "automatic judge" to train the LLM to produce better responses.
+
+For each training step:
+1. Draw a random prompt from the dataset
+2. The model generates a response
+3. The reward model assigns a score
+4. The score is used to compute a gradient that pushes the model to produce more similar responses (if the score is high) or fewer (if the score is low)
+
+But there's a catch. Without guardrails, the model learns to "cheat": it discovers that long, confident responses get high scores... and it starts producing long, confident responses even when they're wrong. This is **reward hacking**.
+
+The solution: a **KL penalty** that prevents the model from straying too far from the original SFT model:
+
+$$R_{\text{total}} = r(x, y) - \beta \cdot D_{KL}(\pi_{RL} \| \pi_{SFT})$$
+
+Term by term:
+- $r(x, y)$: the reward score for response $y$ to prompt $x$
+- $\pi_{RL}$: the current model (the one being trained with PPO)
+- $\pi_{SFT}$: the frozen reference model (the copy from before PPO)
+- $D_{KL}(\pi_{RL} \| \pi_{SFT})$: the KL divergence (Kullback-Leibler) -- measures how far the current model has drifted from the reference. The more it drifts, the larger this term
+- $\beta$: a coefficient that controls the leash strength. Too large, the model is too constrained and doesn't improve; too small, the leash is too loose and reward hacking returns
+
+<Callout type="paper" title={"InstructGPT's Shocking Result"}>
+OpenAI showed that RLHF could make a **1.3-billion-parameter** model preferred by humans over a **175-billion-parameter** model without alignment. A model 130 times smaller can be more useful if well-aligned. This is proof that alignment is at least as important as size.
+</Callout>
+
+## PPO: The Algorithm Under the Hood
+
+PPO maintains **four models in memory simultaneously** -- which largely explains why RLHF is so expensive:
+
+1. **The current model (policy model)** -- this is the model obtained after supervised fine-tuning (step 1), which continues to be trained with PPO. At each step, it generates a response to a prompt, and its weights are updated based on the rewards received. It's the only one of the four models whose weights change during PPO training.
+
+2. **The reference model** -- a copy of the current model, taken **before the start of PPO**, that is frozen and never touched. Why? Because over the course of training, the current model can drift: it discovers "exploits" that get high reward model scores without actually being useful (ultra-long responses, excessively confident ones...). The frozen copy serves as a **leash**: at each step, the current model's probabilities are compared to those of this copy. If the two diverge too much (high KL divergence), there's a penalty. This forces the model to stay in the vicinity of what it was before PPO.
+
+3. **The reward model** -- trained in step 2 on human preferences, it's also frozen during PPO. Its role: take the prompt and generated response, and return a score. It's the "automatic judge" that replaces human annotators.
+
+4. **The critic model (value model)** -- this is the least intuitive model. In RL, you don't just want to know "this response got a good score," you want to know "is this response **better than what we expected**?" The critic estimates the average reward expected for a given prompt (the *value*). The difference between the actual reward and this estimate is called the **advantage**: this is the signal that actually guides weight updates. Without the critic, training would be much noisier and more unstable.
+
+PPO's **clipping** is an additional safety mechanism: it limits the size of updates to prevent the model from jumping too far in a bad direction at each step.
+
+<Callout type="warning" title="RLHF Is Notoriously Difficult to Implement">
+Ask any ML (Machine Learning) engineer who has implemented PPO for LLMs: training curves can collapse without warning, reward hacking is a constant problem, and hyperparameters are extremely sensitive. It's not uncommon to spend weeks debugging an RLHF pipeline. This is one of the major reasons why DPO (next section) was welcomed with enthusiasm.
+</Callout>
+
+## RLHF Challenges in Practice
+
+**Reward hacking**: the model optimizes the proxy (the reward model) rather than the real objective (being helpful). It learns the annotators' biases and the reward model's artifacts.
+
+**Annotation quality**: human annotators have biases, blind spots, and are inconsistent with each other. Studies show that human preferences vary significantly based on culture, education, and even mood.
+
+**Instability**: PPO with LLMs is fragile. KL divergences can explode, rewards can collapse, the model can degenerate into repetitive text. Constant monitoring required.
+
+**Cost**: qualified human annotators (slow and expensive) + four models in memory + numerous iterations = substantial budget, accessible only to large labs.
+
+## The Legacy: A Revolution Despite Everything
+
+Despite these difficulties, RLHF was a historic turning point. ChatGPT, Claude, Gemini -- all modern AI assistants use some form of alignment derived from RLHF. It proved that making an LLM useful and safe is both possible and essential.
+
+Its limitations also motivated a wave of innovation. **DPO** eliminates the reward model and RL. **Constitutional AI** reduces dependence on human annotations. **ORPO** and **KTO** simplify things even further. These are the alternatives we explore in the following sections.

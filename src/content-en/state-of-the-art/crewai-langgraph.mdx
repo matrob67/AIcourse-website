@@ -1,0 +1,164 @@
+---
+title: "CrewAI and LangGraph: Agent Orchestration"
+description: "CrewAI simplifies creating agent teams by roles, while LangGraph offers granular control via state graphs. Two complementary approaches."
+---
+
+## Two Philosophies: Team vs Graph
+
+When you want to make multiple AI agents work together, two major approaches dominate. You can sum them up with a simple analogy:
+
+**CrewAI** is like assembling a **project team**. You define roles (researcher, writer, analyst), give them missions, and a team lead coordinates everything. It's intuitive: you think in terms of "who does what."
+
+**LangGraph** is like drawing a **decision flowchart** (a graph). Each step is a node, each arrow is a transition. The system's state flows from one node to another. You think in terms of "when do we do what, and what happens if a given condition is met."
+
+<Callout type="info" title="Choosing Between the Two">
+CrewAI if you want to prototype quickly with clear roles and simple logic.
+LangGraph if you need fine control over the flow, with conditional branching and rigorous state management.
+</Callout>
+
+## CrewAI: The Intuitive Team
+
+CrewAI rests on three abstractions that speak for themselves:
+
+- **Agent**: a character with a role, an objective, a backstory, and tools at their disposal
+- **Task**: a specific task assigned to an agent, with an expected output
+- **Crew**: the team that orchestrates all agents' work
+
+The idea is natural: you build your team like a manager would build a task force. The researcher researches, the writer writes, and CrewAI ensures results pass from one agent to another in the right order.
+
+```python
+from crewai import Agent, Task, Crew
+
+researcher = Agent(
+    role="Researcher",
+    goal="Find precise information",
+    backstory="Expert in document research",
+    tools=[search_tool, scrape_tool],
+)
+
+writer = Agent(
+    role="Writer",
+    goal="Clear and engaging articles",
+    backstory="Journalist with 10 years experience",
+)
+
+research_task = Task(
+    description="Research advances in generative AI",
+    agent=researcher,
+    expected_output="Structured summary of advances",
+)
+
+writing_task = Task(
+    description="Write article",
+    agent=writer,
+    context=[research_task],  # Depends on research_task
+    expected_output="Blog article, 800 words",
+)
+
+crew = Crew(
+    agents=[researcher, writer],
+    tasks=[research_task, writing_task]
+)
+result = crew.kickoff()
+```
+
+**Execution modes**:
+- **Sequential**: tasks execute in order, each receiving the result of the previous one. This is the default mode, simple and predictable.
+- **Hierarchical**: a "manager agent" is automatically created. It receives the tasks and decides which agent to mobilize, much like a project manager who delegates intelligently.
+
+**CrewAI's strengths**:
+- Readable and intuitive API, you understand the code just by reading it
+- The team metaphor makes design natural for non-technical people
+- Easy tool integration (web search, scraping, APIs...)
+- Support for delegation between agents
+
+## LangGraph: Total Control via State Graph
+
+LangGraph takes a radically different approach. Instead of thinking in people and tasks, you model the workflow as a **directed graph**:
+
+- **State**: a typed dictionary representing the current system state (the question asked, documents found, answer generated...)
+- **Nodes**: Python functions that transform the state. Each node reads part of the state, does its work, and updates the state.
+- **Edges**: transitions between nodes, which can be conditional (if documents are relevant, go to "generate"; otherwise, go to "web_search")
+
+```python
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, List
+
+class RAGState(TypedDict):
+    question: str
+    documents: List[str]
+    answer: str
+    needs_web_search: bool
+
+graph = StateGraph(RAGState)
+
+# Nodes
+graph.add_node("retrieve", retrieve_from_vectordb)
+graph.add_node("grade", grade_relevance)
+graph.add_node("web_search", search_web)
+graph.add_node("generate", generate_answer)
+
+# Edges
+graph.set_entry_point("retrieve")
+graph.add_edge("retrieve", "grade")
+graph.add_conditional_edges("grade", decide_route, {
+    "relevant": "generate",
+    "not_relevant": "web_search",
+})
+graph.add_edge("web_search", "generate")
+graph.add_edge("generate", END)
+
+app = graph.compile()
+```
+
+This code implements an adaptive RAG: you search the database, evaluate relevance, and if the results aren't good, you do a web search before generating. This kind of conditional logic is trivial with LangGraph, but painful to implement with CrewAI.
+
+**LangGraph's strengths**:
+- Total control over every transition and condition
+- Excellent debugging thanks to graph visualization
+- Native persistence (checkpointing): resume an interrupted workflow exactly where it stopped
+- Built-in token-by-token streaming
+- Advanced human-in-the-loop: pause the graph at any node to request human validation
+
+<Callout type="tip" title="LangGraph for Production">
+LangGraph offers a predictability that conversational frameworks don't. A graph is deterministic and testable: for a given state, the path taken is always the same. That's exactly what you need in production.
+</Callout>
+
+
+
+## Direct Comparison
+
+| Aspect | CrewAI | LangGraph |
+|---|---|---|
+| Paradigm | Team by roles | State graph |
+| Abstraction | High | Low |
+| Flow control | Sequential/hierarchical | Arbitrary graph |
+| Learning curve | Low | Medium |
+| Debugging | Moderate | Excellent (viz) |
+| Persistence | Limited | Native |
+| Human-in-the-loop | Basic | Advanced |
+| Production-ready | Improving | Yes |
+
+## When to Choose What
+
+**CrewAI is ideal for**:
+- Rapid prototyping of multi-agent systems
+- Use cases with well-defined roles (research, analysis, writing)
+- Less technical teams who want readable code
+- Linear pipelines: A does its work, passes to B, who passes to C
+
+**LangGraph is ideal for**:
+- Complex workflows with conditional branching and loops
+- Production with reliability and monitoring requirements
+- Advanced RAG systems with intelligent routing between sources
+- Cases where humans need to intervene at specific points in the workflow
+
+<Callout type="warning" title="Multi-Agent Is Expensive">
+Regardless of the chosen framework, multi-agent systems are inherently less reliable and slower than a single well-tooled agent. Before creating an army of agents, ask yourself: wouldn't a single agent with the right tools be enough? Organizational complexity has a real cost in tokens, latency, and debugging.
+</Callout>
+
+## The Evolving Ecosystem
+
+The agent framework ecosystem is gradually converging. We're seeing solutions that seek to combine CrewAI's design simplicity with LangGraph's execution control. For example, **Smolagents** from Hugging Face offers a lighter code-first approach, and no-code platforms allow building agent graphs visually.
+
+The best choice depends on your concrete needs: if you want to move fast and your workflow is simple, CrewAI. If you want control, testability, and robustness in production, LangGraph. And in some cases, combining both is the best strategy.

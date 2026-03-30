@@ -1,0 +1,174 @@
+---
+title: "Variational Autoencoders (VAE)"
+description: "Variational autoencoders, the reparameterization trick, the ELBO loss function, and how VAEs enable generating new data."
+---
+
+## From classic to probabilistic
+
+A classic autoencoder does two things: it **compresses** an input (for example an image) into a compact vector z (the latent space), then it **reconstructs** the input from z. The problem? The resulting latent space is chaotic. Two nearby points z don't necessarily correspond to similar images. And if you sample a random z, you get noise, not a coherent image. The classic autoencoder is a compressor, not a generator.
+
+The **VAE** (Variational Autoencoder), proposed by Kingma and Welling in 2013, solves this problem by adding a **probabilistic structure** to the latent space. Instead of producing a single point z, the encoder produces the parameters of a **distribution** over z. It's this nuance that transforms a simple compressor into a true generative model.
+
+<ArxivLink id="1312.6114" title="Auto-Encoding Variational Bayes" />
+
+<ImageWithSource
+  src="/images/admin/img-1774011088432.png"
+  alt="Diagram of a Variational Autoencoder (VAE)"
+  sourceUrl="https://learnopencv.com/variational-autoencoder-in-tensorflow/"
+  size="medium"
+/>
+
+## Intuition: a probabilistic generative model
+
+The fundamental idea of the VAE is to model the **generation** process of data. We assume that each data point (image, text, etc.) was "generated" by a two-step process:
+
+1. Nature chooses a latent vector $z$ from a simple distribution: $z \sim \mathcal{N}(0, I)$ (standard Gaussian). This starting distribution is called the **prior** -- it's our hypothesis about what z looks like *before* having seen any data.
+2. This vector z is transformed into observable data $x$ by a complex process: $x \sim p(x | z)$
+
+The VAE's decoder learns this generation process: given a z, it produces a realistic x. To generate a new image, you simply draw a random z and pass it through the decoder. Simple and elegant.
+
+### The role of the encoder
+
+But to train this system, you need the inverse: given an image x, which z generated it? This is the encoder's role, which approximates $p(z | x)$ -- the **posterior distribution**. The prior is what we believe about z *before* seeing the image. The posterior is what we believe about z *after* seeing the image. The encoder tries to guess: "this cat image, which z probably generated it?"
+
+Concretely, the encoder doesn't produce a single z but the **parameters of a Gaussian distribution**:
+
+$$q(z | x) = \mathcal{N}(\mu(x), \sigma^2(x))$$
+
+For each input image, the encoder computes a vector of **means** $\mu$ and a vector of **variances** $\sigma^2$. Each image thus has its own distribution in latent space. A smiling face will have its distribution centered somewhere, a neutral face somewhere else, and the two distributions overlap if the faces are similar.
+
+<Callout type="info" title="Why distributions?">
+Using distributions rather than fixed points is what **structures** the latent space. Similar images produce overlapping distributions, creating continuous regions in latent space. Between a handwritten "3" and an "8," there exist valid intermediate forms. This is what makes generation and interpolation possible -- and this is what classic autoencoders were missing.
+</Callout>
+
+## The gradient problem: the reparameterization trick
+
+### Why it's a problem
+
+During training, you need to sample $z \sim \mathcal{N}(\mu, \sigma^2)$ between the encoder and decoder. But sampling is a **stochastic** and **non-differentiable** operation. However, backpropagation needs to compute derivatives through the entire network.
+
+The problem is clear: how do you pass a gradient through a random draw? If you draw z = 3.7 from a Gaussian, what's the "derivative" of that draw with respect to parameters $\mu$ and $\sigma$? It's not defined in a standard way.
+
+### The solution: externalize the randomness
+
+The reparameterization trick is a simple but brilliant mathematical trick. Instead of directly drawing $z \sim \mathcal{N}(\mu, \sigma^2)$, you decompose the draw into two parts:
+
+$$z = \mu + \sigma \cdot \epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+
+The randomness is "externalized" into $\epsilon$, which is pure noise independent of the network's parameters. The variable z is now a **deterministic transformation** of $\mu$, $\sigma$, and $\epsilon$. The gradient can flow freely through $\mu$ and $\sigma$ because these are standard operations (multiplication, addition).
+
+The analogy: instead of saying "draw a random number between 3 and 7" (opaque operation), you say "take 5 (the mean) and add noise times 2 (the standard deviation)." The result is statistically the same, but the second formulation allows computing how the result changes if you modify the mean or standard deviation.
+
+<Callout type="tip" title="Mathematically equivalent, numerically differentiable">
+The reparameterization trick changes nothing about the distribution of z -- it's exactly the same Gaussian $\mathcal{N}(\mu, \sigma^2)$. But it makes the computation **differentiable**, which allows training the VAE with standard gradient descent (SGD, Adam, etc.). Without this trick, you'd need Monte Carlo gradient estimators (like the REINFORCE algorithm, used in reinforcement learning), which are much noisier and slower to converge.
+</Callout>
+
+## The ELBO loss: the heart of the VAE
+
+### What are we optimizing?
+
+The ideal objective would be to maximize the log-likelihood of the data: $\log p(x)$. In plain language: "the probability that our model generates data that looks like real data should be maximal."
+
+Unfortunately, computing $p(x)$ exactly is impossible (you'd need to integrate over all possible z values). Instead, we optimize a **lower bound** called the **ELBO** (Evidence Lower BOund -- literally "lower bound of the evidence"). The "evidence" here is just another name for $p(x)$, the probability the model assigns to the data. We can't compute this value directly, but we can compute a lower bound -- a number that's always below the true value. By maximizing this bound, we indirectly push $p(x)$ upward:
+
+$$\text{ELBO} = \mathbb{E}_{q}[\log p(x | z)] - D_{KL}(q(z | x) \| p(z))$$
+
+**Why is it a lower bound?** You can show that the log-likelihood decomposes exactly into:
+
+$$\log p(x) = \text{ELBO} + D_{KL}(q(z|x) \| p(z|x))$$
+
+The second term is the KL divergence between our approximation $q(z|x)$ and the *true* posterior $p(z|x)$. Since a KL divergence is always $\geq 0$, we have $\text{ELBO} \leq \log p(x)$ -- it is indeed a lower bound. We can't compute $\log p(x)$ directly because the true posterior $p(z|x)$ is intractable (you'd need to know $p(x)$, which is precisely what we're trying to estimate). But the ELBO is computable. By maximizing it, we maximize an approximation of $\log p(x)$, and the closer our approximation $q(z|x)$ is to the true posterior, the tighter the bound.
+
+Or, as a "loss to minimize":
+
+$$\mathcal{L} = \underbrace{-\mathbb{E}_{q}[\log p(x | z)]}_{\text{Reconstruction}} + \underbrace{D_{KL}(q(z | x) \| p(z))}_{\text{Regularization}}$$
+
+### The two terms in detail
+
+**Term 1: Reconstruction** ($-\mathbb{E}_q[\log p(x | z)]$)
+
+This term measures reconstruction quality. Concretely, you sample a z from $q(z|x)$, pass it through the decoder, and measure how closely the output resembles the input. In practice, it's an MSE (Mean Squared Error) for grayscale images or a BCE (Binary Cross-Entropy) for binary images.
+
+This term pushes the encoder to put **enough information** in z so the decoder can faithfully reconstruct. If z doesn't contain enough info, the reconstruction is blurry.
+
+**Term 2: KL Regularization** ($D_{KL}(q(z | x) \| p(z))$)
+
+This is the KL (Kullback-Leibler) divergence between the learned distribution $q(z|x)$ and the prior $p(z) = \mathcal{N}(0, I)$ (the standard Gaussian we chose as our starting hypothesis). Intuitively, this divergence measures "how much extra information" is needed to describe $q(z|x)$ when we expected $p(z)$. The more the encoded distribution deviates from the standard Gaussian, the more this penalty increases.
+
+This term forces the latent space to remain **regular and structured**. Without it, the encoder could place each image at an isolated point in space (variance -> 0), which would destroy the continuity needed for generation.
+
+For two Gaussians, the KL has a simple analytical form that's fast to compute:
+
+$$D_{KL} = -\frac{1}{2} \sum_{j} \left(1 + \log(\sigma_j^2) - \mu_j^2 - \sigma_j^2\right)$$
+
+Intuition for each term in the sum (for dimension $j$):
+- **$1$**: normalization constant ensuring $D_{KL} = 0$ when $q = p$
+- **$\log(\sigma_j^2)$**: penalizes variances that are too small -- the model shouldn't be too "confident" by concentrating all its mass on a single point
+- **$-\mu_j^2$**: penalizes means far from 0 -- pushes the encoded distribution toward a centered Gaussian
+- **$-\sigma_j^2$**: penalizes variances that are too large -- the model shouldn't be too "uncertain" by spreading its distribution everywhere
+
+When $\mu_j = 0$ and $\sigma_j = 1$, you get $-\frac{1}{2}(1 + 0 - 0 - 1) = 0$: the encoder produces exactly the prior $\mathcal{N}(0, 1)$, and there's no penalty.
+
+<Callout type="info" title="The fundamental tension">
+The two loss terms are in **conflict**. The reconstruction term wants precise, informative codes (small variance, positions far from each other). The KL term wants smooth, regular codes (close to $\mathcal{N}(0,I)$, overlapping distributions). Training a VAE is a balancing act: enough information to reconstruct, enough regularity to generate.
+</Callout>
+
+## Problem: posterior collapse
+
+### When the model cheats
+
+Sometimes the model finds an undesirable shortcut: it learns to **completely ignore z**. The decoder, if it's powerful enough (e.g., an autoregressive decoder), can generate plausible data without using the information from z. The encoder, having no reason to put info in z, sees its distribution $q(z|x)$ collapse to the prior $\mathcal{N}(0,I)$. The KL drops to 0, reconstruction is fine, but z has become useless.
+
+This is **posterior collapse**: the VAE degenerates into a classic autoencoder without the desired generative properties.
+
+### Solutions
+
+- **KL annealing**: gradually increase the weight of the KL term during training. Start with a weight of 0 (the encoder first learns to encode useful information), then gradually ramp up to 1 (to regularize)
+- **Free bits**: impose a minimum KL per latent dimension (the model must use at least X bits of information per dimension)
+- **beta-VAE**: put a coefficient $\beta$ in front of the KL term. $\beta < 1$ favors reconstruction, $\beta > 1$ favors latent space structure (and encourages "disentangled" representations)
+- **Weak decoder**: intentionally limit the decoder's capacity so it needs z
+
+Posterior collapse has been studied in depth by Chen, Kingma et al. in the *Variational Lossy Autoencoder*. Their key insight: you need to explicitly control the information flow between encoder and decoder. If the decoder has access to too much context (e.g., via powerful autoregressive connections), it has no reason to use z. The paper proposes techniques to "force" information to flow through the latent code, by strategically limiting what the decoder can see directly.
+
+<ArxivLink id="1611.02731" title="Variational Lossy Autoencoder (Chen et al., 2017)" />
+
+## Generation and latent space exploration
+
+### Generating new data
+
+This is the VAE's reason for being. Once trained:
+
+1. Draw a random z from the prior: $z \sim \mathcal{N}(0, I)$
+2. Pass z through the decoder: $x = \text{decoder}(z)$
+
+Thanks to KL regularization, the prior $\mathcal{N}(0, I)$ covers the latent space well. A randomly drawn z therefore has a good chance of corresponding to coherent data.
+
+### Interpolation
+
+Interpolation is one of the most satisfying properties of the VAE:
+
+1. Encode two images by taking their means: $z_1 = \mu(x_1)$, $z_2 = \mu(x_2)$
+2. Linearly interpolate: $z_\alpha = \alpha \cdot z_1 + (1 - \alpha) \cdot z_2$ for $\alpha$ from 0 to 1
+3. Decode each intermediate point: $\text{decoder}(z_\alpha)$
+
+You get **smooth, semantically coherent** transitions. Between a handwritten "3" and an "8," you'll gradually see the 3 transform into an 8, passing through plausible intermediate forms. This is proof that the VAE has learned a continuous, structured representation.
+
+### Latent arithmetic
+
+Just like with word embeddings (king - man + woman = queen), you can do arithmetic in latent space:
+
+$$z_{\text{smile}} - z_{\text{neutral}} + z_{\text{other\_neutral}} \approx z_{\text{other\_smile}}$$
+
+This isn't guaranteed to work perfectly, but when it does, it's proof that the latent space has captured interpretable **semantic factors**. The "smile vector" is a direction in latent space that you can apply to any face.
+
+<Callout type="paper" title="Extensions and evolutions">
+The VAE has spawned a rich family of models:
+- **Conditional VAE (CVAE)**: conditions generation on a label or class (generates a "5" on demand)
+- **VQ-VAE**: replaces the continuous latent space with a **discrete** space (a codebook of vectors). It's the basis of DALL-E 1 and many audio models
+- **Hierarchical VAE**: latent variables at multiple scales (global -> local), to capture both the overall structure and fine details
+- **Diffusion VAE**: recent work links VAEs and diffusion models in a unified theoretical framework
+</Callout>
+
+## Final summary
+
+The VAE transforms the classic autoencoder into a generative model through a simple idea: replacing points with distributions in the latent space. The reparameterization trick makes this trainable by gradient descent. The ELBO loss balances faithful reconstruction and a structured latent space. The result: a model capable of generating new data, interpolating between them, and navigating a space of continuous representations. Its main limitation -- sometimes blurry reconstructions (because the pixel-by-pixel loss doesn't capture human perception) -- motivated the development of diffusion models, which have largely taken over for high-quality image generation.

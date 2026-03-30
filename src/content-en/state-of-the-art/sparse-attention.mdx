@@ -1,0 +1,100 @@
+---
+title: "Sparse attention: when you only compute the attention that matters"
+description: "Sparse attention: instead of computing attention with all tokens, just connect the truly important ones. Longformer, BigBird explained."
+---
+
+
+
+## The observation: most of the attention is zero
+
+Researchers looked at the attention matrices of trained Transformers. Surprise: **90-95% of the values are close to zero**.
+
+Each token really attends to only 5-10% of the other tokens. The rest of the computation? Wasted. It's as if, in a room of 1000 people, each person only listened to 50-100 people. Why compute the interaction of each person with all 999 others?
+
+Remember the complexity of standard attention: $O(L^2)$ in memory and compute, where $L$ is the sequence length. For 4096 tokens, that's ~16 million interactions. For 16K tokens, ~256 million. For 1M tokens, a trillion. Sparse attention starts from a simple observation: why compute millions of interactions if most are useless?
+
+## The idea: connect strategically
+
+Instead of `O(L^2)` computed pairs, compute just the relevant ones. But which ones? You need **predefined connectivity patterns**.
+
+Three patterns emerge from empirical observations:
+
+- **Local**: a token looks at its close neighbors. This is natural -- in language, nearby words often have the most interaction ("the black cat" -- "black" mostly needs to see "cat"). Think of it as conversations between neighbors in a neighborhood.
+
+- **Global**: certain special tokens (CLS, SEP, sentence-start tokens) have the right to see and be seen by everyone. These are the "megaphones" of the sequence -- they aggregate and broadcast global information. Without them, distant tokens could never communicate.
+
+- **Random**: a few long-range connections drawn at random. This might seem weird, but it's crucial to ensure information can travel from one end of the sequence to the other. It's the "small world" principle from graph theory: a few random shortcuts are enough to connect a network.
+
+## Longformer: three types of attention combined
+
+Longformer, developed by Allen AI, combines three attention mechanisms in each layer:
+
+**Local attention (sliding window)**: 512-token window. Each token sees its 256 neighbors before and 256 after. This is the foundation -- most useful interactions are local.
+
+**Dilated attention**: in addition to the contiguous window, the token skips and takes one token every 8 in a larger window. Like looking into the distance with binoculars: you don't see everything, but important distant elements become accessible without excessive cost.
+
+**Global attention**: certain designated tokens (the CLS token for classification, question tokens in QA) have full attention -- they see everything and are seen by everyone.
+
+Result: complexity `O(L * (W + G))` where W = window size, G = global tokens. If both are constant relative to L, you get **linear** complexity `O(L)`. You go from quadratic to linear -- that's a fundamental change.
+
+<Callout type="paper" title="Longformer results">
+Longformer processes 4K tokens (8x more than BERT-512) with comparable memory. On long document tasks (TriviaQA, WikiHop), it significantly outperforms baselines that truncate documents. Proof that seeing more context helps, even with restricted attention.
+</Callout>
+
+## BigBird: rigorous theory
+
+BigBird, developed by Google Research, formalizes sparse attention with **random graph theory**. The idea is to mathematically prove that sparse attention can be as expressive as full attention.
+
+Three components:
+1. **Local**: window of size W around each token
+2. **Global**: designated tokens that attend to everyone
+3. **Random**: each token attends to R randomly drawn tokens in the sequence
+
+Key theorem: this combination forms an **"expander graph"** -- a graph with the property that information can propagate from any node to any other in very few hops. Concretely, this means that despite sparsity, the model retains the same theoretical power as full attention for approximating any sequence function.
+
+### BigBird vs Longformer
+
+| Aspect | Longformer | BigBird |
+|--------|-----------|---------|
+| Local | Yes | Yes |
+| Global | Fixed tokens | Fixed tokens |
+| Random | No | **Yes** |
+| Dilated | Yes | No |
+| Theory | Empirical | Rigorous (expanders) |
+
+<Callout type="tip" title={"Randomness helps"}>
+Adding randomness seems counterintuitive, but it's mathematically smart. In graph theory, a few random connections transform a local network into a "small world" network where each node can reach every other node in few hops. It's the same phenomenon as the "six degrees of separation" between humans: a few random links are enough to connect everyone.
+</Callout>
+
+## Other notable approaches
+
+**Sparse Transformer (OpenAI, 2019)**: the pioneer. Combines local + strided attention (every $\sqrt{L}$ tokens). Complexity `O(L * sqrt(L))`. The first demonstration that you could break the quadratic barrier without losing quality.
+
+**ETC (Extended Transformer Construction)**: introduces auxiliary "global" tokens that serve as communication hubs. Local tokens talk to globals, globals talk among themselves, and redistribute information -- like a telephone relay network.
+
+**LongT5**: local attention combined with "transient global attention" with dynamic segment summaries. Particularly effective for summarization tasks.
+
+## The big problem: GPU implementation
+
+Theoretically, sparse attention should be ultra-fast. In practice? It's much more complicated.
+
+**Irregular patterns** = chaotic memory accesses = GPUs hate them. GPUs are massive parallel compute machines, optimized for regular and predictable operations. When you tell the GPU "read positions 3, 17, 42, 891," it has to make lots of small scattered memory accesses, which kills performance.
+
+The paradoxical result: **Flash Attention** on dense attention can be faster than poorly implemented sparse attention, up to 16K-32K tokens! Flash Attention avoids materializing the attention matrix in memory and perfectly exploits the GPU's memory hierarchy, which compensates for computing "too many" pairs.
+
+<Callout type="warning" title="The theory-practice gap">
+GPUs are optimized for dense, regular operations. Sparse attention fragments operations into small irregular pieces. Without specialized, optimized kernels, sparse attention can be SLOWER than dense attention. It's a classic case where algorithmic complexity ($O(L)$ vs $O(L^2)$) doesn't tell the whole story -- hidden constants and hardware efficiency matter enormously.
+</Callout>
+
+## Why it no longer dominates
+
+With Flash Attention (hyper-optimized dense attention that efficiently handles up to 32K-128K tokens) and SSMs like Mamba (native linear complexity without sparse patterns), sparse attention has lost relevance for general-purpose LLMs.
+
+Niches where sparse attention remains relevant:
+- **Encoders for long documents**: classification or information extraction on documents of hundreds of pages
+- **Vision**: images have natural 2D patterns (a pixel mostly interacts with its spatial neighbors)
+- **Specialized domains**: proteins (local interactions in the chain + 3D contacts), molecules, graphs
+
+<Callout type="info" title="Legacy">
+Sparse attention showed that you don't need the full attention matrix -- a revolutionary idea at the time. This intuition directly paved the way for Flash Attention (which never materializes the matrix, just blocks), SSMs like Mamba (implicit linear attention with fixed memory), and modern hybrid architectures. Sparse attention may have lost the practical battle, but it won the intellectual war.
+</Callout>

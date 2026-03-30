@@ -1,0 +1,188 @@
+---
+title: "Advanced GAN Architectures: StyleGAN, CycleGAN, WGAN"
+description: "Advanced GAN architectures: DCGAN, WGAN with the Wasserstein distance, StyleGAN with style mixing, and CycleGAN for unpaired image translation."
+---
+
+## After the vanilla GAN: innovate or die
+
+The original GAN is a brilliant idea, but in practice, it's a nightmare to train. Three major problems plague it. First, **instability**: training oscillates violently and often collapses for no apparent reason. Second, **mode collapse**: instead of producing the full diversity of real data (thousands of different faces, for example), the generator learns to produce only a few convincing examples and recycles them in a loop. Third, **erratic gradients** that make hyperparameter tuning nearly impossible: a learning rate that works at one epoch can break everything at the next.
+
+The years 2015 to 2021 saw a true innovation race, with each new architecture trying to solve one or more of these problems. Here are the most important ones.
+
+## DCGAN -- Deep Convolutional GAN (2015): convolutional foundations
+
+### The guidelines that saved GANs
+
+Radford et al. published something seemingly modest: a set of practical recipes for making GANs work with convolutions. But the impact was enormous.
+
+**The founding rules**:
+- **No pooling**: use strided convolutions (stride 2) to reduce resolution, giving the network the freedom to learn its own downsampling method
+- **Batch normalization** everywhere (except at the generator's output and the discriminator's input), to stabilize internal distributions
+- **Zero fully connected layers** in the intermediate layers (except output/input), preserving the spatial structure of images
+- **ReLU in the generator** (except the output which uses tanh), **LeakyReLU in the discriminator** to avoid "dead" neurons
+
+Why are these rules so important? Before DCGAN, trying to build a convolutional GAN was an exercise in frustration: gradients exploded, mode collapse was almost systematic, results were blurry and unstable. These four principles, validated empirically, stabilized training to the point of becoming the reference foundation that all subsequent GAN architectures inherited and refined.
+
+<Callout type="tip" title={"DCGAN's latent space"}>
+DCGAN revealed something fascinating: the latent space z has an arithmetic structure. For example, $z_{\text{man with glasses}} - z_{\text{man}} + z_{\text{woman}} \approx z_{\text{woman with glasses}}$. And all of this without any supervision! The generator spontaneously learns coherent semantic representations.
+</Callout>
+
+## WGAN (2017): Wasserstein distance
+
+### The fundamental mathematical problem
+
+The original GAN's loss uses the Jensen-Shannon divergence to measure the difference between the real and generated distributions. The problem: in high dimensions (and images live in very high-dimensional spaces), the two distributions almost always occupy completely different subspaces, with no overlap whatsoever. When this happens, the JS divergence **saturates at its maximum value** and its gradient drops to zero. The generator receives no useful signal to improve. It's gradient vanishing, but in the loss itself!
+
+### Wasserstein = Earth Mover's Distance
+
+The idea behind WGAN is to replace this problematic divergence with the Wasserstein distance. The intuition is elegant: imagine the two distributions are piles of dirt. The Wasserstein distance measures the **minimum transport cost** to transform one pile into the other, moving the dirt grain by grain.
+
+The advantages are major:
+- **Meaningful gradient** even when the distributions are completely disjoint, because the distance measures "how much needs to be transported," not "do they overlap"
+- **Continuous and differentiable** everywhere, guaranteeing a stable learning signal
+- **Correlated with perceptual quality** of generated images, which was not the case with the original loss. For the first time, you could look at the loss curve and infer whether the model was improving
+
+### The critic
+
+In WGAN, the discriminator changes name and role: it becomes a **critic**. Instead of classifying "real" or "fake" with a sigmoid (probability between 0 and 1), it assigns an **unbounded real score** to each input. The higher the score, the more real the data appears to the critic.
+
+$$\mathcal{L}_D = \mathbb{E}_{x}[D(x)] - \mathbb{E}_{z}[D(G(z))] \quad \text{(to be maximized for } D\text{)}$$
+
+The difference in mean scores approximates the Wasserstein distance.
+
+There's an important mathematical constraint: for the score difference to properly approximate the Wasserstein distance, the critic D must be **1-Lipschitz** -- a function whose output cannot vary faster than its input, meaning the norm of its gradients is bounded by 1. Intuitively, the critic must not be able to change its mind too abruptly between two nearby points.
+
+Two approaches exist to enforce this constraint. **Weight clipping** (original version) brutally bounds weights within [-c, c] after each update -- concretely, after each optimization step, all critic weights exceeding this interval are forced back to the nearest bound. It's simple but problematic: it pushes weights toward the extremes and underutilizes the network's capacity. **Gradient penalty (WGAN-GP)** is a more elegant approach: you add a penalty to the loss that encourages the gradient norm of D to stay close to 1. It's the preferred method in practice because it's more stable and gives better results.
+
+<Callout type="paper" title="WGAN impact">
+WGAN was a turning point in the theoretical understanding of GANs. For the first time, the loss is directly correlated with the quality of generated images, training is much more stable, and hyperparameter tuning becomes significantly less chaotic. A true paradigm shift.
+</Callout>
+
+<ImageWithSource
+  src="/images/admin/img-1774034702746.png"
+  alt="Diagram of a WGAN with data flow"
+  caption="This diagram illustrates the architecture of a WGAN (Wasserstein GAN) where the discriminator uses a loss function based on the Wasserstein distance combined with a gradient penalty. This allows for better training stability and a deeper theoretical understanding of GANs."
+  size="large"
+/>
+
+## StyleGAN (2019): controlled synthesis
+
+### Innovation: the style-based generator
+
+Developed by NVIDIA, StyleGAN redefined quality standards in image generation, particularly for human faces (1024x1024 portraits nearly indistinguishable from real photos). But its deepest innovation isn't quality: it's **control**. For the first time, you could precisely manipulate generated attributes.
+
+### Radical architecture
+
+StyleGAN's architecture breaks down into three distinct components.
+
+<ImageWithSource
+  src="/images/admin/img-1774034471771.png"
+  alt="StyleGAN architecture with mapping and synthesis networks"
+  source="https://machinelearningmastery.com/introduction-to-style-generative-adversarial-network-stylegan/"
+  caption="This diagram illustrates StyleGAN's tripartite architecture: a mapping network (left) transforming the latent vector into style, a synthesis network (right) generating the image via AdaIN layers and convolutions, and a noise injection mechanism (B) to enhance realism."
+  size="large"
+/>
+
+The **Mapping Network** is an 8-layer MLP (Multi-Layer Perceptron) that transforms the noise vector z into a vector w in an intermediate latent space called W. Why this extra step? The Z space (Gaussian noise) is very "entangled": changing one dimension affects multiple attributes at once. The W space, after passing through the mapping network, is much more **disentangled**: each dimension tends to control a distinct semantic attribute (age, gender, face orientation) without interfering with the others.
+
+The **Synthesis Network** starts from a learned constant (not from the noise z directly, which is a major departure). At each resolution layer, the vector w modulates activations via **AdaIN** (Adaptive Instance Normalization): it adjusts the mean and variance of feature maps. Each layer can use a different w, enabling granular control.
+
+**Noise injection** adds independent stochastic noise at each resolution. This noise doesn't control the overall structure but fine random details: skin pores, the exact direction of hair strands, micro-texture. Separating stochastic noise from semantic content is a key idea of StyleGAN.
+
+### Style mixing: the magic
+
+Thanks to the z -> w -> synthesis separation, you can mix:
+
+- **Low resolution** (4x4-8x8): global structure (pose, face shape, presence of glasses)
+- **Medium** (16x16-32x32): intermediate features (hairstyle, eyes)
+- **High** (64x64+): fine details (color, microstructure)
+
+Concretely, you can use w_1 for low resolutions (which determines the face structure), w_2 for medium resolutions (which sets the hairstyle and features), and w_3 for high resolutions (which controls color and texture). The result: you can "blend" attributes from multiple generated images with unprecedented precision.
+
+<Callout type="info" title="Progressive growing">
+StyleGAN inherits the "progressive growing" approach introduced by ProGAN: training starts at 4x4 resolution, then layers are progressively added up to 1024x1024. The idea is to learn the global structure first, then the fine details -- which considerably stabilizes training. StyleGAN2 abandoned this approach in favor of other architectural improvements.
+</Callout>
+
+### StyleGAN2/3
+
+**StyleGAN2**: fixes water droplet-shaped artifacts that appeared in certain generations, and improves latent space regularization.
+
+**StyleGAN3**: solves **aliasing** problems -- visual artifacts caused by undersampling, such as staircase patterns or textures that "stick" to the pixel grid instead of moving with the object -- during transformations (translation, rotation), introducing strict equivariance that makes animations much more natural.
+
+## CycleGAN (2017): translation without pairs
+
+<ImageWithSource
+  src="/images/admin/img-1774044764730.png"
+  alt="CycleGAN diagram with image translation flow"
+  source="CycleGAN (2017)"
+  caption="This diagram illustrates the workings of CycleGAN, which allows translating an image from one domain to another (e.g., zebra to horse) without needing corresponding image pairs. The reconstruction cycle ensures shape consistency."
+  size="large"
+/>
+
+### The realistic problem
+
+Imagine you want to transform photos of horses into photos of zebras. The naive approach would require paired images: the exact same scene, once with a horse, once with a zebra. Obviously, such pairs almost never exist. CycleGAN elegantly solves this problem: it learns translation from **two unpaired collections** (a bunch of horse photos and a bunch of zebra photos, with no correspondence between them).
+
+### Architecture
+
+Two generators + two discriminators:
+- G_AB: domain A -> B
+- G_BA: domain B -> A
+- D_A: discriminates real A vs translated A
+- D_B: discriminates real B vs translated B
+
+### Cycle consistency loss
+
+The central innovation is a remarkably elegant constraint: if you translate an image from domain A to B, then translate it back from B to A, you should recover the original image. It's like translating a sentence from English to French then from French back to English: if the translation is good, you should get back your original sentence.
+
+$$\mathcal{L}_{\text{cycle}} = \| G_{BA}(G_{AB}(x_A)) - x_A \| + \| G_{AB}(G_{BA}(x_B)) - x_B \|$$
+
+This cycle consistency constraint, combined with standard adversarial losses, ensures that translation **preserves content** (the scene, pose, composition) while changing the **style** (appearance, texture, visual domain). Without this constraint, the generator could produce any convincing zebra image, with no relation to the original horse scene.
+
+<Callout type="tip" title="Magical applications">
+CycleGAN opened the door to spectacular applications: transforming photos into Monet-style paintings, converting summer landscapes to winter, turning horses into zebras. More seriously, it's also used in domain adaptation (simulation to reality) and medical imaging (MRI to CT scan conversion). It truly revolutionized unpaired image translation.
+</Callout>
+
+## Other notable architectures
+
+### Pix2Pix
+
+Image-to-image translation **with training pairs**. U-Net generator, PatchGAN discriminator (classifies patches, not the entire image).
+
+Applications: segmentation -> photo, sketch -> image, colorization.
+
+<ImageWithSource
+  src="/images/admin/img-1774044824799.png"
+  alt="Sketch transformed into a realistic photo by pix2pix"
+  source="https://www.tomsguide.com/us/pix2pix-faq,news-25334.html"
+  caption="This image illustrates an advanced application of GANs (Generative Adversarial Networks) for converting a sketch into a realistic photo. The pix2pix model processes the input (sketch) to produce a visually coherent output."
+  size="large"
+/>
+
+### BigGAN
+
+BigGAN applies a simple but powerful lesson: size drives quality. Massive batches (2048 images instead of 64), much wider models, more channels in each convolution layer. Class conditioning is much more pronounced -- the generator knows exactly which category to produce.
+
+The result speaks for itself: class-conditional generations on ImageNet of unprecedented fidelity for GANs. It's not an architectural novelty; it's proof that with enough compute resources, GANs can achieve remarkable visual quality.
+
+<Callout type="paper" title={"The post-GAN legacy"}>
+Diffusion models have surpassed GANs for high-resolution image generation. But GAN innovations survive and continue to influence the field:
+- StyleGAN's W space and attribute disentangling
+- The Wasserstein distance and its stable metrics
+- Cycle consistency for unpaired translation
+- Even in modern diffusion models, these principles reappear in different forms.
+</Callout>
+
+<ImageWithSource
+  src="/images/admin/img-1774044927513.png"
+  alt="Class-conditional samples generated by BigGAN"
+  source="https://sh-tsang.medium.com/review-biggan-large-scale-gan-training-for-high-fidelity-natural-image-synthesis-35537c97f2fa"
+  caption="Class-conditional samples generated by BigGAN"
+  size="large"
+/>
+
+## Summary
+
+Each advanced GAN architecture addresses a specific limitation. DCGAN established convolutional best practices that stabilized training. WGAN solved the fundamental mathematical problem by replacing the Jensen-Shannon divergence with the Wasserstein distance, finally providing a usable gradient signal. StyleGAN separated content from style through the W space, enabling unprecedented control at each resolution. CycleGAN eliminated the need for annotated image pairs through cycle consistency.
+
+Diffusion models have since surpassed GANs for high-resolution generation. But the ideas introduced here -- attribute disentangling, Wasserstein distances, cycle consistency -- continue to influence the architecture of modern generative models. Understanding these GANs means understanding the problems that the entire next generation of models sought to solve.

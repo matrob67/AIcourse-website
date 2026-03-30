@@ -1,0 +1,108 @@
+---
+title: "Sliding Window Attention: Mistral's simple trick"
+description: "Sliding window attention: forget tokens that are too old, just keep the last 4K. It makes inference ultra-fast."
+---
+
+
+
+## The problem: the cache grows infinitely
+
+You generate a token. Then another. And another.
+
+Each new token needs its keys and values stored in the "KV cache" so that following tokens can attend to it. After 1000 tokens, your cache is heavy. After 10K, it's huge. After 100K, your GPU explodes.
+
+To be concrete: with a model like LLaMA-7B in FP16, each token in the KV cache takes up about 1 MB (across all layers). A 100K token context = 100 GB of KV cache. That's more than the total memory of an A100 (80 GB). And this cache only grows during generation -- it's a major bottleneck for production inference.
+
+The problem isn't just memory: the bigger the cache, the slower each attention operation (it has to scan the entire cache). Latency increases linearly with sequence length.
+
+## Mistral's idea: forget the old stuff
+
+**Sliding Window Attention** (SWA) is a disarmingly simple idea: each token only looks at the `W` previous tokens, and forgets the rest.
+
+$$
+\text{Token at position } i \rightarrow \text{can see tokens } [i - W + 1, \; i]
+$$
+
+For example, with `W = 4096`, token #5000 sees tokens #905 to #5000, but not tokens #1 to #904. It's like a window that slides along the sequence -- hence the name.
+
+The intuition behind this approach: in practice, a token only needs its **local context** to make a good prediction. The word you're reading right now mostly depends on the 50-100 previous words, not the first word of the chapter. Very long-range dependencies exist (pronouns referring to a character mentioned 3 pages earlier), but they're rare compared to local dependencies.
+
+### A constant cache
+
+Instead of a cache that grows indefinitely with generated tokens (`O(L)`), it stays constant at `O(W)`:
+
+| Approach | Cache after 8K tokens | Cache after 100K tokens |
+|----------|------|------|
+| Global attention | 8K entries | 100K entries |
+| Sliding Window (W=4K) | 4K entries | 4K entries |
+
+Whether you generate 8K or 1M tokens, the cache always stays at 4K. Memory is **predictable and bounded**. For a production system that needs to serve hundreds of requests in parallel, this is crucial: you can plan exactly how much memory each request will consume.
+
+<Callout type="info" title="Effective range larger than the window">
+Each layer only sees a window of W tokens. But a Transformer has 32 stacked layers. At layer 1, the token sees W tokens. At layer 2, it sees tokens that themselves saw W tokens -- so potentially 2W tokens. Theoretically, with 32 layers and W=4096, the effective range is $32 \times 4096 = 131072$ tokens (~128K). In practice, information attenuates through layers, but the range remains much larger than W.
+</Callout>
+
+## Implementation: rolling buffer
+
+The implementation is brutally simple. A circular buffer of size `W`. When it's full, new K/V entries overwrite the oldest ones.
+
+$$
+\text{index} = \text{position} \mod W
+$$
+
+That's it. No memory copying, no dynamic malloc/free. Just a pointer going round and round in a fixed-size array. In C, it's literally one line of code. This implementation simplicity is a major advantage: less code = fewer bugs, less latency overhead, more reliability.
+
+<Callout type="tip" title="Zero overhead">
+The implementation is so simple that there's literally zero overhead compared to standard attention. It's actually **faster** than global attention, because the cache is smaller and fits better in the GPU's fast memory levels (SRAM/L2 cache). Less data to scan = less time.
+</Callout>
+
+## Mistral 7B: textbook case
+
+Mistral 7B, the model that popularized SWA, uses a 4096-token window combined with **grouped attention heads** (GQA): 8 key/value heads instead of 32 (the 32 query heads share 8 K/V sets).
+
+The combined effect is spectacular:
+- SWA reduces cache size (4K instead of the entire sequence)
+- GQA reduces the cache by an additional factor of 4 (8 K/V instead of 32)
+- Result: tiny KV cache, allowing servers to process **many more requests in parallel**
+
+In production, this changes everything. A server with an A100 GPU can serve 3-4x more simultaneous users with Mistral 7B than with an equivalent model without SWA/GQA, simply because the memory cache per request is much smaller.
+
+## Strengths and weaknesses
+
+### The advantages
+- **Bounded KV cache**: predictable memory, constant throughput regardless of sequence length
+- **Ultra-compatible**: works with Flash Attention, GQA, quantization -- everything combines easily
+- **Hardware efficiency**: a contiguous window gives sequential memory accesses, which GPUs love. Much more efficient than an arbitrary selection of tokens
+- **Simplicity**: trivial to implement, trivial to debug, trivial to deploy
+
+### The problems
+- **Forced forgetting**: information beyond the window is irretrievably lost for a given layer
+- **Long-recall tasks**: retrieving specific information from the beginning of a long document is difficult
+
+<Callout type="warning" title={"Concrete failure example"}>
+Imagine a 100K token document. The question is about sentence 2 (at the very beginning). With a 4K window, the answer token at position 100K can only directly see positions 96K-100K. The information from position 2 must "survive" by being propagated layer by layer through 96K tokens. In theory it's possible (effective range = 128K), in practice the information attenuates heavily -- it's the neural network version of the "telephone game."
+</Callout>
+
+## Smart variants
+
+### Sink tokens (Attention Sink)
+Keep the first tokens (the system prompt, instructions) **permanently** in the cache, even when the window would have forgotten them. Empirical observation: the first tokens often receive disproportionate attention (they serve as an "attention sink"). Keeping them considerably stabilizes performance on long sequences.
+
+### Local + global attention
+Combine a local window with a few "global" tokens visible to everyone. This is the Longformer/BigBird approach applied to decoding. A compromise between SWA's efficiency and global attention's range.
+
+### Dilated attention
+Instead of a contiguous window of W tokens, take the `W/2` most recent tokens AND spaced-out tokens (every 4th token in a larger window). This covers a much greater temporal range for the same memory budget.
+
+## Comparison with other approaches
+
+| Technique | Complexity | Cache | Global recall | Implementation |
+|-----------|-----------|-------|---|---|
+| Standard attention | O(L^2) | O(L) | Perfect | Standard |
+| Sliding Window | O(L*W) | O(W) | Via multi-layer | Trivial |
+| Sparse (Longformer) | O(L*(W+G)) | O(L) | Via global tokens | Complex |
+| SSM (Mamba) | O(L) | O(1) fixed | Compressed in state | Specialized |
+
+<Callout type="info" title="Verdict: pragmatic and effective">
+Sliding Window Attention isn't intellectually spectacular -- it's a simple, almost trivial idea. But that's exactly what makes it strong. The Mistral models proved that well-calibrated local attention rivals global attention on the vast majority of tasks, while being more memory and latency efficient. In production, simple and reliable beats complex and theoretically optimal. That's why SWA has become an industry standard.
+</Callout>

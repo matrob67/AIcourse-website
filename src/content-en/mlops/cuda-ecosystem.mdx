@@ -1,0 +1,137 @@
+---
+title: "CUDA, cuDNN, NCCL: NVIDIA's Software Moat"
+description: "Why nobody can compete with NVIDIA. The CUDA ecosystem that has dominated deep learning for 15 years."
+---
+
+## NVIDIA's real secret isn't the hardware, it's the software
+
+NVIDIA GPUs are excellent, but it's not the hardware that makes them unbeatable. **The real moat is CUDA**: a software ecosystem built over 15 years of continuous investment. Over 900 optimized libraries. 4 million developers who depend on it. A massive network effect.
+
+When you type `model.cuda()` in PyTorch, you activate a remarkably sophisticated software chain: the CUDA runtime allocates GPU memory, cuBLAS executes matrix multiplications, cuDNN optimizes deep learning operations, NCCL coordinates communication between GPUs. Every link is optimized and tested for each chip generation. It's this vertical integration that makes the difference.
+
+<Callout type="info" title="CUDA by the numbers">
+CUDA has existed since 2006, giving it nearly 20 years of head start. In 2025: over 4 million developers, 900+ accelerated libraries, 3,000+ applications. It's this massive ecosystem that justifies the premium of NVIDIA GPUs over alternatives. Even if a competitor makes a faster chip, it would take them years to rebuild the software around it.
+</Callout>
+
+## CUDA: the foundation of everything
+
+**CUDA** = Compute Unified Device Architecture. It's both a programming model and a platform for harnessing the parallel power of GPUs.
+
+### How it actually works
+
+The core idea: you write **kernels**, functions that execute on the GPU across thousands (or millions) of simultaneous threads. Think of it as an army of small workers all performing the same operation on different data.
+
+Threads are organized in a hierarchy:
+
+- **Thread**: the minimal execution unit, a single computation
+- **Warp**: 32 threads that execute exactly the same instruction at the same time. This is the actual hardware execution unit.
+- **Block**: a group of threads (up to 1024) that share fast memory and can synchronize with each other
+- **Grid**: all the blocks together, your complete job
+
+Why this hierarchy? Because GPU hardware is organized in layers. Understanding this organization lets you write code that leverages each level efficiently.
+
+### CUDA Toolkit: the toolbox
+
+The CUDA toolkit contains everything needed for GPU development:
+
+- **nvcc**: the compiler that transforms your CUDA code into GPU instructions
+- **CUDA Runtime**: GPU memory management, kernel launching, synchronization
+- **Libraries**: cuBLAS (linear algebra), cuFFT (Fourier transforms), cuRAND (random numbers), cuSPARSE (sparse matrices)
+- **Nsight**: profiling and debugging tools to understand why your code is slow
+
+<Callout type="tip" title={"In practice, ML practitioners almost never write CUDA"}>
+PyTorch and TensorFlow call CUDA under the hood. You don't need to know how to write a CUDA kernel to train a model. But understanding the basics helps enormously with debugging: when your training is slow, knowing the problem comes from non-coalesced memory access or warp divergence changes everything.
+</Callout>
+
+## cuBLAS: the matrix multiplication engine
+
+**cuBLAS** is the GPU implementation of BLAS (Basic Linear Algebra Subroutines). This is where matrix multiplications live, the fundamental operation of deep learning.
+
+A neural network, at its core, is essentially a series of **GEMM** (General Matrix Multiply) operations. The forward pass of a linear layer = a matrix multiplication. The backward pass = more matrix multiplications. A Transformer = dozens of chained GEMMs.
+
+cuBLAS doesn't just do a single naive multiplication. It chooses the optimal algorithm based on:
+- **Matrix size**: a 4096x4096 matrix isn't optimized the same way as a 32x32
+- **Data type**: FP32, FP16, BF16, FP8, INT8 leverage different GPU units
+- **GPU architecture**: each generation has different characteristics
+- **Tensor Cores**: specialized units that compute entire matrix blocks in a single cycle
+
+**cuBLASLt** is the flexible version for advanced cases: custom operations, fusion with other operations, non-standard memory layouts. This is what PyTorch uses under the hood for complex cases.
+
+## cuDNN: ultra-optimized deep learning operations
+
+**cuDNN** (CUDA Deep Neural Network library) contains optimized implementations of all common deep learning operations:
+
+- **Convolutions**: forward and backward, with several algorithm choices (Winograd, FFT, implicit GEMM). cuDNN automatically benchmarks and picks the fastest one for your case.
+- **Attention**: optimized scaled dot-product attention, essential for Transformers
+- **Normalization**: BatchNorm, LayerNorm, GroupNorm, RMSNorm
+- **Activations**: ReLU, GELU, SiLU, Swish
+- **Pooling**: max, average, adaptive
+- **Softmax**: standard and log-softmax
+
+### Operation fusion: the game-changer
+
+Without fusion, a matmul -> bias -> activation sequence executes as 3 separate kernels. Each kernel reads its data from HBM (slow memory), computes, and writes the result back to HBM. Three round trips to the GPU's slowest memory.
+
+With **kernel fusion**, everything executes in a single kernel: data stays in registers or shared memory (ultra-fast) between operations. You go from 3 HBM reads/writes to just 1.
+
+<Callout type="paper" title={"Fusion is the key to modern performance"}>
+Operation fusion typically provides a 2 to 4x speedup. This is particularly critical for modern Transformers, where individual operations are small and numerous. Without fusion, the GPU spends more time moving data than computing.
+</Callout>
+
+## NCCL: multi-GPU communication
+
+**NCCL** (NVIDIA Collective Communications Library, pronounced "nickel") handles all communication between GPUs, whether within the same server (via NVLink) or across servers (via InfiniBand or RoCE).
+
+### Collective operations
+
+When you train a model on multiple GPUs, you need to synchronize gradients. NCCL provides the communication primitives:
+
+- **AllReduce**: each GPU contributes a tensor (its gradients), all receive the sum. This is the fundamental operation of data parallelism: each GPU computes its local gradients, AllReduce aggregates them, and everyone updates their weights identically.
+- **AllGather**: each GPU shares its data, all receive the complete set. Used in model parallelism to reconstruct activations.
+- **ReduceScatter**: combines reduction and distribution. Used in ZeRO/FSDP.
+- **Broadcast**: one GPU sends to all others (e.g., distributing initial weights)
+- **AllToAll**: each GPU sends different data to each other GPU. Essential for Mixture of Experts.
+
+### Automatic topology optimization
+
+NCCL automatically detects how your GPUs are connected (direct NVLink? InfiniBand between servers? Plain PCIe?) and chooses the optimal communication algorithm:
+
+- **Ring**: GPUs form a ring and pass data from neighbor to neighbor. Simple and efficient for small clusters.
+- **Tree**: tree hierarchy, reduces communication steps. Better for large clusters.
+- **SHARP**: aggregation directly in InfiniBand network switches, without going through GPUs. Drastically reduces required bandwidth.
+
+<Callout type="warning" title={"Communication is the real bottleneck of distributed training"}>
+At the scale of several hundred GPUs, communication can represent 30-50% of total training time. That's why NVIDIA invests heavily in NVLink (900 GB/s between GPUs), NVSwitch (connects all GPUs in a server), and InfiniBand (400 Gb/s between servers). Optimizing the network has become as important as optimizing the compute itself.
+</Callout>
+
+## TensorRT: optimization for inference
+
+**TensorRT** takes a trained model and transforms it into an ultra-optimized inference engine. It's a model compiler that applies every possible optimization:
+
+- **Layer fusion**: combines successive operations into a single kernel
+- **Automatic quantization**: converts to INT8 or FP8 with calibration to minimize precision loss
+- **Memory optimization**: reuses buffers between layers to reduce footprint
+- **Kernel selection**: benchmarks each operation on your specific GPU and picks the fastest kernel
+- **Plugins**: allows adding custom optimized operations
+
+**TensorRT-LLM** is the specialized version for LLMs, with paged KV-cache, continuous batching, optimized attention (FlashAttention), and multi-GPU management. This is what powers many LLM deployments in production.
+
+## Triton: the open-source challenger
+
+**Triton** (created by OpenAI) lets you write GPU kernels in pure Python, without touching CUDA C++. It dramatically simplifies writing performant kernels by automatically handling tiling, memory management, and parallelization.
+
+FlashAttention, the attention optimization that revolutionized Transformers, was initially written in CUDA then ported to Triton. Major projects like Unsloth and vLLM use it extensively. It's the modern alternative to raw CUDA C++ for those who want to write custom kernels.
+
+## The full stack in action
+
+When you launch a PyTorch training run on GPU, here's what happens under the hood:
+
+1. **PyTorch**: your Python API, autograd for gradients
+2. **ATen**: tensor operations in C++
+3. **cuDNN**: optimized deep learning operations
+4. **cuBLAS**: matrix multiplications
+5. **NCCL**: communication between GPUs
+6. **CUDA Runtime**: memory management and kernel launching
+7. **CUDA Driver**: direct interface with the hardware
+
+It's this complete vertical integration, from Python down to silicon, optimized over 15 years, that makes NVIDIA nearly impossible to compete with. Reproducing a single link is feasible; reproducing the entire chain at once is not.

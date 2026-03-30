@@ -1,0 +1,157 @@
+---
+title: "Score-based generative models and flow matching"
+description: "How generative models learn to transform noise into real data: from score matching to flow matching."
+---
+
+## A story: finding your way through the fog
+
+Imagine you're lost in thick fog. You can't see more than 10 feet ahead. But someone at the top of a tower shouts to you, every second: "Go more to the left! Now go up a bit! Turn right!" By following these directional cues, you eventually make it out of the fog and reach the exit of the maze.
+
+This is **exactly** what **score**-based generative models do with data. Except instead of a maze, it's a complex, very high-dimensional space, and instead of a person, it's a trained neural network shouting the directions.
+
+The **score** is that shout: an arrow pointing toward where the real data is denser. Mathematically, it's the gradient (the slope) of the probability density:
+
+$$
+s(x) = \nabla_x \log p(x)
+$$
+
+Translation: "In which direction does the density of real data increase the most?"
+
+<Callout type="info" title="Why the score and not the density directly?">
+Modeling the density $p(x)$ directly is a mathematical nightmare: you need to compute a normalization constant $Z = \int p^*(x)\,dx$ that is intractable in high dimensions. The score naturally eliminates this problem because the gradient of the log makes this constant disappear ($\nabla_x \log \frac{p^*(x)}{Z} = \nabla_x \log p^*(x)$). It's like asking "which direction should I go?" instead of "what's the exact probability here?" Much easier to learn.
+</Callout>
+
+
+
+## Score matching: learning from blurry photos
+
+The idea is clever: train the network not directly on clear images, but on versions **noised** at different blur levels.
+
+Take a beautiful photo (real data). Now add random noise. A little. Then a lot. Then a huge amount. You get increasingly blurry images.
+
+For each blurry image, the **score** (the direction to follow) is easy to compute: it's simply "how many pixels would you need to shift to get back to the original image?", divided by the amount of noise.
+
+Now: train the network on all these blurry cases. "Here's a blurry image. Tell me which direction to move the pixels to make it less blurry."
+
+1. **Noise the data**: $\tilde{x} = x + \epsilon$
+2. **The score is simple**: $s = -(\tilde{x} - x) / \sigma^2$
+3. **Train the network**: $L = \| s_\theta(\tilde{x}) - s_{\text{real}} \|^2$
+
+The trick: the network learns to **remove noise** without ever seeing a fully clear image. Just the pattern of "which direction to clean."
+
+<Callout type="tip" title="Multi-scale: from fog to detail">
+Real data is never uniformly distributed. With little noise, the network learns fine details (eyes in an image). With a lot of noise, it learns global shapes (is this a face?). The network learns both simultaneously.
+</Callout>
+
+## Generation: following the arrow from fog to clarity
+
+After training, how do you generate an image? It's **Langevin dynamics**:
+
+1. Start with **pure noise** (a random image, total chaos)
+2. At each step, ask the network: "Which way should I go to get closer to real data?"
+3. Move a little bit in that direction
+4. Add a tiny bit of random noise for exploration (this noise prevents getting stuck in a local minimum)
+5. Repeat hundreds of times
+
+$$
+x_{t+1} = x_t + \frac{\eta}{2} \, s_\theta(x_t) + \sqrt{\eta} \, z, \quad z \sim \mathcal{N}(0, I)
+$$
+
+It's like walking through fog asking for directions at every step. You never go in a straight line, but eventually, you emerge toward a real data point.
+
+In practice, for images (which have millions of pixels), you start with **lots** of noise and **gradually reduce** it -- this is "noise annealing." First, the network learns rough shapes. Then details. Then fine textures.
+
+
+## Technical corner: SDEs (Stochastic Differential Equations)
+
+In 2021, Song et al. discovered something fascinating: **all** generative models (DDPM, score matching, diffusion) are special cases of the same mathematical framework: **SDEs** (Stochastic Differential Equations).
+
+In simple terms: how do you progressively transform one thing into another by adding/removing noise?
+
+$$
+\text{Forward:} \quad dx = f(x, t)\,dt + g(t)\,dW
+$$
+
+$$
+\text{Backward:} \quad dx = \left[f(x,t) - g(t)^2 \, \nabla_x \log p_t(x)\right] dt + g(t)\,d\bar{W}
+$$
+
+Let's break it down: you have **deterministic movements** (the drift $f(x,t)$, which pulls the system in a predictable direction) + **randomness** (the Brownian noise $dW$, a random component). Forward: you start from real data and add noise. Backward: you start from pure noise and remove noise using the score you've learned.
+
+It's beautiful because it shows that **all the generative models we've invented are actually the same thing, just different implementations of the same stochastic process**.
+
+<Callout type="paper" title="Song et al. 2021 - Generative Modeling by Estimating Gradients of the Data Distribution">
+A groundbreaking paper that unified the field. Before its publication, the community thought DDPM, score matching, and diffusion were fundamentally different approaches. After: we understand they are all variants of the same mathematical concept -- solving a reverse SDE guided by the score. This unification considerably accelerated research by enabling the transfer of ideas from one framework to another.
+</Callout>
+
+## Flow matching: the modern and simple approach
+
+After complex SDEs, a simpler idea emerged: **forget stochastic equations, just think about direct paths**.
+
+The idea: take noise. Take a real data point. Now imagine a straight line connecting them. Ask the network: "At each point along this line, what's the velocity vector to move toward the real data?"
+
+$$
+x_t = (1 - t) \cdot z + t \cdot x_1, \quad z \sim \mathcal{N}(0, I)
+$$
+
+$$
+v = x_1 - z
+$$
+
+$$
+L = \| v_\theta(x_t, t) - v \|^2
+$$
+
+Incredibly simple. No noise, no complex schedules. Just: "predict the direction of movement."
+
+The results? **Excellent**. Stable Diffusion 3 and modern generative models use it. Why? Because:
+
+1. **Simple to implement** (the core of the algorithm fits in a few lines of code)
+2. **Easy to train** (no delicate hyperparameters like noise schedules)
+3. **Converges quickly** (generation in 10-100 steps instead of 1000)
+
+<Callout type="tip" title="The beauty of flow matching">
+It's the kind of idea you look at in hindsight and think "why didn't anyone think of this before?" A network learns a velocity field -- a constant direction arrow on each path between noise and data. That's all. No stochastic noise, no decreasing variance. Just geometry and optimal transport.
+</Callout>
+
+## Rectified flows: the shortest paths possible
+
+Here's a natural question: rather than curved, winding paths from noise to data, why not have **perfectly straight** paths?
+
+If the paths are straight, you can generate in a single step. One giant step in the right direction. Instead of 100 steps, just one. **100 times faster**.
+
+**Rectified flows** use an iterative trick to straighten the paths:
+
+1. Train normal flow matching
+2. Generate many trajectories with this model
+3. Analyze them -- notice they're curved
+4. Retrain on these trajectories to make them straighter
+5. Repeat -- the trajectories become straighter with each iteration
+
+Result after a few iterations: **single-step generation**. You start from pure noise, take one enormous step in the direction the network has learned, and you get a photorealistic image. One step. This is the direction the most recent generative models are heading.
+
+## Practical comparison
+
+| Approach | Training | Inference | Quality |
+|----------|---------|-----------|---------|
+| DDPM | Simple, stable | Slow (1000 steps) | Excellent |
+| Score SDE | Theoretically rich | Flexible (10-1000 steps) | Excellent |
+| Flow matching | Very simple | Fast (10-100 steps) | Excellent |
+| Rectified flows | Simple + rectification | Ultra-fast (1-10 steps) | Very good |
+
+<Callout type="info" title="The 2025-2026 consensus">
+Flow matching has won. Stable Diffusion 3 and new generative models use flow matching. It's the framework you'll see everywhere: simple, efficient, theoretically clean. SDEs and DDPM remain important for understanding the history and theoretical foundations, but flow matching is today's standard practice.
+</Callout>
+
+## Why this matters
+
+Generative models are revolutionizing AI. DALL-E, Midjourney, Stable Diffusion: all based on these ideas. Understanding how to transform noise into realistic images means understanding the heart of modern generative AI.
+
+## Key takeaways
+
+1. **The score** = the direction toward real data (gradient of the log density)
+2. **Score matching** = training on noisy images to learn the score without knowing the normalization constant
+3. **Langevin dynamics** = iteratively following the score direction to generate new data
+4. **SDE** = the mathematical framework that unifies DDPM, score matching, and diffusion into a single formalism
+5. **Flow matching** = the modern approach that replaces stochastic noise with deterministic paths, combining simplicity and efficiency
+6. **Rectified flows** = straightened trajectories for ultra-fast generation in 1 to 10 steps

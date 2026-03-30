@@ -1,0 +1,134 @@
+---
+title: "RWKV: Large-Scale Linear RNN"
+description: "Study of RWKV, the architecture combining the advantages of RNNs and Transformers via a linear recurrent attention mechanism for parallelizable training and efficient inference."
+---
+
+
+
+## The dream of reconciling two opposing worlds
+
+**RNNs** (recurrent networks: LSTM, GRU) dominated NLP for nearly a decade. Their strength: efficient inference with a fixed-size state --- like a constant working memory that updates at each word. Their fatal flaw: they can't be trained in parallel. Each token waits for the previous one to be processed. On modern GPUs, designed for massive parallelism, this is catastrophic.
+
+**Transformers** solved the parallelization problem with attention. Training became 10x to 100x faster. But at inference, the price is steep: a KV cache that grows with each generated token, memory that explodes with context length, and a per-token cost that increases instead of staying constant.
+
+**RWKV** (pronounced "RWaKuV") is the most accomplished attempt to reconcile these two worlds: train in parallel like a Transformer, infer efficiently like an RNN. All backed by a remarkably active open-source community.
+
+<ArxivLink id="2305.13048" title="RWKV: Reinventing RNNs for the Transformer Era" />
+
+## The four letters of RWKV
+
+The name isn't a mysterious acronym --- it describes the four key components of the mechanism, each playing a role analogous to an element of classic attention:
+
+- **R (Receptance)**: analogous to the Query. A sigmoid gate that controls how much accumulated information to accept into the current output. It's the output filter --- it decides what deserves to be communicated.
+- **W (Weight)**: the temporal decay factor. A vector of learned parameters controlling how quickly the model "forgets" past tokens. It's the model's internal clock.
+- **K (Key)**: analogous to attention keys. Represents the "content" of the current token --- what it contributes to the collective memory.
+- **V (Value)**: analogous to attention values. Contains the concrete information to propagate to future positions.
+
+## The WKV mechanism: RWKV's core
+
+RWKV's Time Mixing replaces attention with the WKV mechanism:
+
+$$
+\text{wkv}_t = \frac{\sum_i \exp(-(t-1-i) \cdot w + k_i) \cdot v_i \;+\; \exp(u + k_t) \cdot v_t}{\sum_i \exp(-(t-1-i) \cdot w + k_i) \;+\; \exp(u + k_t)}
+$$
+
+The formula looks intimidating, but the intuition is clear:
+- `exp(-(t-1-i)*w)`: exponential decay with distance. Recent tokens weigh much more than older tokens --- it's automatic and systematic.
+- `k_i`: each token's "key" modulates its importance. A token with a high key remains influential even from afar.
+- `u + k_t`: a special bonus for the current token. The parameter `u` is a "freshness premium" --- the token just read has a systematic advantage.
+- The division normalizes the weights so they sum to 1, like softmax in standard attention.
+
+<Callout type="info" title="Exponential decay: a deliberate choice">
+Unlike standard attention where any token can have an arbitrary weight regardless of distance, RWKV imposes a rigid structure: recent tokens count more, exponentially so. It's a strong inductive bias. It helps in the majority of cases (most linguistic dependencies are local), but it can limit performance on tasks that require recalling a precise detail mentioned very far back in the text.
+</Callout>
+
+### Channel Mixing: replacing the feed-forward
+
+In addition to Time Mixing, each RWKV block contains a **Channel Mixing** --- the equivalent of the Transformer's feed-forward layer:
+
+$$
+\begin{aligned}
+r_t &= \sigma\!\bigl(W_r \cdot (\mu_r \cdot x_t + (1 - \mu_r) \cdot x_{t-1})\bigr) \\
+k_t &= W_k \cdot (\mu_k \cdot x_t + (1 - \mu_k) \cdot x_{t-1}) \\
+o_t &= r_t \cdot \bigl(W_v \cdot \max(k_t, 0)^2\bigr)
+\end{aligned}
+$$
+
+RWKV's distinctive feature is visible here: the **token shift**. Each layer mixes the current token with the previous token according to learned coefficients (`mu_r`, `mu_k`). This mixing gives each layer a minimal local context window of 2 tokens. Stacked across 24 or 32 layers, these micro-windows compose to cover increasingly large spans --- somewhat like a convolutional network whose receptive field grows with depth.
+
+## The training/inference duality: why it works
+
+### Training mode: fully parallel
+
+During training, all tokens in the sequence are known in advance. The WKV formulation can be reformulated to be computed in parallel via tensorized operations --- exactly like a matrix multiplication. Each position can be processed simultaneously. No sequential recurrence, the GPU runs at full speed.
+
+### Inference mode: fixed state, constant cost
+
+At inference, RWKV transforms into a pure RNN. The recurrent state reduces to only two vectors per layer:
+
+$$
+\begin{aligned}
+a_t &= \exp(-w) \cdot a_{t-1} + \exp(k_t) \cdot v_t \\
+b_t &= \exp(-w) \cdot b_{t-1} + \exp(k_t) \\
+\text{wkv}_t &= \frac{a_t}{b_t}
+\end{aligned}
+$$
+
+Each new token is processed in **O(1)**: one multiplication, one addition, one division. No KV cache. The state remains fixed-size regardless of context length --- 100 tokens or 100,000 tokens, same cost per token.
+
+<Callout type="tip" title={"RWKV's practical advantage"}>
+For a chatbot deployed on mobile or on a memory-constrained server, RWKV is ideal. Generation throughput is constant --- the 50,000th token is generated as fast as the first. No progressive slowdown, no growing KV cache, no memory threshold forcing context truncation. It's the inference cost predictability that Transformers can't offer.
+</Callout>
+
+## RWKV-5 (Eagle) and RWKV-6 (Finch): the evolutions
+
+### RWKV-5 Eagle: toward multi-head
+
+RWKV-5 introduces several improvements inspired by recent advances in SSMs and attention:
+
+- **Multi-head WKV**: like Multi-Head Attention, RWKV-5 organizes the WKV mechanism into multiple heads with distinct decay parameters `w`. Each head can specialize on a different time scale --- one head attentive to adjacent words, another to recent sentences, a third to previous paragraphs.
+- **Matrix states**: the hidden state goes from a vector to a **matrix**, significantly increasing representation capacity at the cost of slightly higher memory.
+- **Better initialization**: inspired by HiPPO work on SSMs, for better long-range dependency capture from the start of training.
+
+### RWKV-6 Finch: selectivity arrives
+
+RWKV-6 makes a crucial evolution by drawing direct inspiration from Mamba: making parameters **input-dependent**.
+
+- **Data-dependent decay**: the decay factor `w` is no longer fixed --- it's computed from the current token. An important keyword can be assigned a slow decay rate (it will be remembered for a long time), while a mundane function word will be forgotten quickly.
+- **Data-dependent token shift**: the mixing coefficients `mu` become adaptive, adjusting the mix between current and previous token based on context.
+
+<Callout type="paper" title="Convergence with Mamba">
+RWKV-6 and Mamba independently arrive at the same fundamental conclusion: state transition parameters must be **adaptive** to achieve optimal performance. RWKV comes from the RNN world and adds selectivity. Mamba comes from the SSM world and adds the same selectivity. This independent convergence is a strong signal that selectivity isn't an implementation detail --- it's a fundamental principle.
+</Callout>
+
+## Available models and performance
+
+RWKV stands out for a remarkably active open-source community that has trained models at impressive scales for a community project:
+
+- **RWKV-4**: from 169M to 14B parameters
+- **RWKV-5 Eagle**: from 400M to 7B parameters
+- **RWKV-6 Finch**: from 1.6B to 14B parameters
+
+On standard language benchmarks, RWKV positions itself competitively against same-size Transformers. The slight disadvantage appears, unsurprisingly, on very long-range recall tasks --- where compressing history into a fixed state penalizes against the exact KV cache of Transformers.
+
+## Advantages and limitations in plain terms
+
+**What RWKV does well:**
+- O(1) inference per token, independent of context length
+- No KV cache: fixed and predictable inference memory
+- Parallel training as fast as a Transformer
+- Very active open-source community with freely available and regularly updated models
+
+<Callout type="warning" title="What RWKV does less well">
+Like all recurrent models, RWKV compresses history into a fixed-size state. Precisely retrieving a proper noun or exact number mentioned 5,000 tokens earlier is difficult --- the information is there in compressed form, but the fine details are lost. Question-answering tasks on very long documents or few-shot learning with complex examples can suffer compared to a same-size Transformer.
+</Callout>
+
+**What it does less well:**
+- Precise recall over long distances (names, dates, exact numbers)
+- Few-shot in-context learning (learning from complex examples in the prompt)
+- Industrial adoption still limited compared to the Transformer ecosystem
+- Fewer optimized inference tools and deployment frameworks available
+
+## Conclusion
+
+RWKV proves you can build competitive language models at billions of parameters without a quadratic attention mechanism. Its pragmatic approach --- taking the best of RNNs (constant inference) and Transformers (parallel training) --- makes it a serious alternative for deployments where inference efficiency and cost predictability are priorities. The evolution toward selectivity in RWKV-6 confirms the underlying trend: all families of sequential architectures converge toward the same principles --- adaptive parameters, multi-head, and contextual gating mechanisms.

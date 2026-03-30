@@ -1,0 +1,137 @@
+---
+title: "DeepSeek R1: Open-Source Reasoning"
+description: "DeepSeek R1 is the first open-source reasoning model that rivals o1, demonstrating that advanced reasoning can be developed and shared openly."
+---
+
+## The Shock That Changed Everything
+
+January 2025. DeepSeek, a Chinese company, publishes an open-source reasoning model (MIT license) that **rivals OpenAI's o1** on the most demanding benchmarks.
+
+Not just "close." **Equivalent, even better** on certain benchmarks.
+
+And the real bombshell is everything they publish with it: the **complete** code, the **detailed** paper with all the recipes, and freely downloadable model weights. Overnight, advanced reasoning is no longer a black box guarded by an American lab.
+
+<ArxivLink id="2501.12948" title="DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning (DeepSeek-AI, 2025)" />
+
+<Callout type="info" title={"Why this is a historic moment"}>
+1. Advanced reasoning is not a technological monopoly.
+2. The process is reproducible: we know exactly how it's done.
+3. It's open: the entire community can study, improve, and adapt.
+This is a true paradigm shift for the field.
+</Callout>
+
+## The Training Pipeline: Four Fascinating Phases
+
+### Phase 1: Pure RL Without Examples (R1-Zero)
+
+This is the most surprising experiment in the paper, and probably one of the most striking in recent deep learning history.
+
+You take a base model (DeepSeek-V3, 671B parameters) that's good overall but with no reasoning specialty. And you train it **solely through reinforcement learning, without showing it a single reasoning example**.
+
+The setup is disarmingly simple:
+- You give it a math problem
+- It generates an answer
+- You automatically verify: correct ($r=1$) or incorrect ($r=0$)
+- The RL algorithm (GRPO) reinforces correct answers and penalizes wrong ones
+
+**The result is stunning**: the model **spontaneously invents** Chain-of-Thought. Without ever being shown an example of step-by-step reasoning, it discovers on its own that decomposing a problem into steps, verifying each step, and backtracking when stuck is the best strategy for getting the reward.
+
+<Callout type="paper" title={"The natural emergence of reasoning"}>
+Without explicit CoT training, the model spontaneously develops: step decomposition, intermediate verification, backtracking, exploring alternatives. Reasoning emerges as the optimal strategy for maximizing reward. It's a powerful demonstration that reasoning doesn't need to be explicitly taught — it can be discovered.
+</Callout>
+
+### R1-Zero's Problems
+
+The result is intellectually impressive but chaotic in practice:
+- Random mixing of languages (French, English, code in the same answer)
+- Bizarre and inconsistent formatting
+- Excessively long reasoning chains (the model "thinks" way too much)
+- Sometimes logical inconsistencies
+
+The reasoning is there, but the form is unusable in production.
+
+### Phase 2: Cold Start (Supervised Bootstrapping)
+
+To discipline R1-Zero's wild reasoning:
+
+1. Collect a few thousand **high-quality** reasoning examples (written by human experts and high-performing models)
+2. Do SFT (Supervised Fine-Tuning) on these examples to give the model a clean starting point
+3. Then relaunch RL
+
+It's like giving a few calligraphy lessons to someone who already knows how to write but illegibly. The substance is good, you polish the form.
+
+### Phase 3: Large-Scale RL
+
+With this solid starting point, you launch RL on a **large set** of problems covering different domains:
+
+- **Math** (automatic answer verification)
+- **Code** (unit test execution)
+- **Formal logic** (symbolic verification)
+- **Open-ended questions** (evaluation by a reward model)
+
+### Phase 4: Distillation
+
+You take the quality reasoning outputs produced by R1 (the large 671B model) and use them to train **much smaller models** via distillation.
+
+| Model | Base | Params | AIME Score |
+|---|---|---|---|
+| R1-Distill-Qwen-1.5B | Qwen 2.5 1.5B | 1.5B | 28.9% |
+| R1-Distill-Qwen-7B | Qwen 2.5 7B | 7B | 55.5% |
+| R1-Distill-Qwen-32B | Qwen 2.5 32B | 32B | 72.6% |
+| R1-Distill-Llama-70B | Llama 3.3 70B | 70B | 70.0% |
+
+The number that makes you think: a **7B distilled model** reasons better than GPT-4o (13.4% on AIME). A model that fits on a laptop outperforms one of the best proprietary models in the world on mathematical reasoning.
+
+## Technical Corner: GRPO, The Algorithm
+
+GRPO (Group Relative Policy Optimization) is a clever simplification of PPO (Proximal Policy Optimization), the classic RL algorithm.
+
+The central idea: instead of training a separate "critic model" that estimates the value of each answer, you use **relative comparison within a group** of answers.
+
+For each problem:
+1. Generate $G$ different answers
+2. Verify each one: correct ($r = 1$) or incorrect ($r = 0$)
+3. Normalize within the group: answers above average are reinforced, those below are penalized
+4. Update the model
+
+The advantage? More stable than PPO, no need to train and maintain a separate critic model, and simpler to implement. It's this simplicity that enabled the community to reproduce results quickly.
+
+## Results: Truly Competitive
+
+| Benchmark | GPT-4o | o1 | DeepSeek-R1 |
+|---|---|---|---|
+| AIME 2024 | 9.3% | 79.2% | 79.8% |
+| MATH-500 | 76.6% | 96.4% | 97.3% |
+| Codeforces | 808 | 1891 | 2029 |
+| GPQA Diamond | 53.6% | 78.0% | 71.5% |
+
+On math and code, o1 and R1 are neck and neck. R1 even does better on Codeforces (competitive programming). GPQA Diamond (advanced science questions) remains an area where o1 keeps the edge.
+
+<Callout type="tip" title={"R1-Distill for everyday use"}>
+In practice, you won't be working with a 671B parameter model locally. The distilled versions (Qwen-32B, Llama-70B) offer an excellent quality-to-cost ratio: world-class reasoning, runnable on your own machine.
+</Callout>
+
+## Impact on the Community
+
+### Reproducibility
+
+The detailed paper enabled the community to reproduce the results on smaller models, apply GRPO to other architectures (Llama, Mistral, etc.), and experiment with variants. Within weeks, dozens of open-source projects had picked up the recipe.
+
+### Technological Sovereignty
+
+Beyond the technical aspects, R1 carries a **geopolitical message**: advanced reasoning capabilities are not the exclusive privilege of major American laboratories. It's an important signal for global technological sovereignty.
+
+<Callout type="warning" title="Watch out for token costs">
+Like o1, R1 generates long reasoning chains. A complex problem can cost 5,000 to 50,000 tokens. Keep an eye on your API consumption. Use reasoning models only when the task truly justifies it.
+</Callout>
+
+## Key Takeaways
+
+DeepSeek-R1 demonstrated four fundamental things:
+
+1. **Reproducible**: RL is enough, no secret proprietary magic needed
+2. **Open-sourceable**: these capabilities can be shared with the entire community
+3. **Democratizable**: distilled versions make advanced reasoning accessible
+4. **Competitive**: open-source rivals proprietary models
+
+Advanced reasoning is now a public good. The AI landscape has changed irreversibly.

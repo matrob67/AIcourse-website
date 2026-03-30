@@ -1,0 +1,157 @@
+---
+title: "Whisper: Universal Speech Recognition"
+description: "OpenAI's Whisper is a multilingual speech recognition model trained on 680K hours of audio, offering robust transcription in 99 languages."
+---
+
+
+
+## The Problem: Speech Recognition Was Fragile
+
+For three decades, speech recognition systems (ASR - Automatic Speech Recognition) suffered from the same flaw: they worked well in lab conditions but fell apart in the real world. Dictate into a quality mic, alone in a quiet room, and the transcription was accurate. But add background noise, a regional accent, or an uncommon language, and errors skyrocketed.
+
+A first turning point came with **Deep Speech 2** from Baidu Research in 2015: by combining a simple architecture (RNN + CTC, Connectionist Temporal Classification) with a massive volume of data, they showed you could match or even beat ultra-complex traditional ASR pipelines. It's the paper that launched the "end-to-end" philosophy in speech recognition --- the idea that Whisper would perfect a few years later.
+
+<ArxivLink id="1512.02595" title="Deep Speech 2 (Amodei et al., 2015)" />
+
+**Whisper radically changes the game.** By training on 680,000 hours of audio collected from the web, OpenAI created a universally robust model. Background noise in a cafe? No problem. Quebec or Southern French accent? Handled. 99 different languages? Supported. It's robustness through volume.
+
+<ArxivLink id="2212.04356" title="Robust Speech Recognition via Large-Scale Weak Supervision (Radford et al., 2022)" />
+
+<Callout type="info" title={"Whisper's Approach: Quantity Compensates for Imperfection"}>
+Rather than training on carefully annotated ASR datasets (expensive and limited in size), Whisper uses **weak supervision**: audio-transcription pairs harvested en masse from YouTube, podcasts, etc. The transcriptions are imperfect, sometimes wrong. But the colossal volume (680K hours) more than compensates for the noise. It's exactly the same philosophy as LLMs: tons of imperfect data beats a small amount of perfect data.
+</Callout>
+
+## Architecture: A Standard Encoder-Decoder Transformer
+
+### A Deliberately Simple Design
+
+Whisper doesn't reinvent the architectural wheel. It uses a standard **encoder-decoder Transformer**:
+
+- **Audio Encoder**: a Transformer encoder that processes the mel spectrogram of the audio (the "picture" of the sound)
+- **Text Decoder**: an auto-regressive Transformer decoder that generates the transcription word by word
+
+It's the same architecture as the original 2017 Transformer, simply applied to speech. The novelty isn't in the architecture, but in the scale of training.
+
+### How Audio Is Prepared
+
+The preprocessing pipeline is simple and well thought out:
+
+1. Raw audio is **resampled to 16 kHz** (the standard for human speech)
+2. An **80-channel mel spectrogram** is computed over 25-millisecond windows --- this is the transformation from sound to "image"
+3. The spectrogram is split into **30-second segments** (the context limit)
+4. Each segment is processed independently by the model
+
+### Model Sizes: Choose Based on Your Resources
+
+| Model | Parameters | Required RAM | Relative Quality |
+|---|---|---|---|
+| tiny | 39M | 1 GB | 60% |
+| base | 74M | 1 GB | 70% |
+| small | 244M | 2 GB | 82% |
+| medium | 769M | 5 GB | 90% |
+| large-v3 | 1.55B | 10 GB | 100% (reference) |
+| turbo | 809M | 6 GB | 97% |
+
+**Practical advice**: turbo offers the best quality/speed ratio for the vast majority of use cases. Reserve large-v3 for situations where that extra 3% quality really matters (medical, legal) and you have the GPU for it.
+
+### One Model, Four Tasks
+
+Whisper is trained simultaneously on multiple tasks, controlled by special input tokens:
+
+- **Transcription**: converting audio to its source language (the most common case)
+- **Translation**: converting audio to English, regardless of the source language
+- **Language detection**: identifying which language is spoken in the clip
+- **Voice activity detection**: distinguishing segments with speech from silence or noise segments
+
+A single model doing four distinct things, simply by changing the command token. That's the elegance of the multi-task approach.
+
+<Callout type="tip" title="Whisper turbo: The Rational Choice">
+For most use cases, **Whisper turbo** is the right choice: 8 times faster than large-v3 with only 3% quality degradation. It's the optimal quality/speed ratio. Only use large-v3 when transcription must be as accurate as possible (medical transcription, legal proceedings) and you have the GPU budget.
+</Callout>
+
+## Performance: How Reliable Is It?
+
+### Word Error Rate (WER): The Reference Metric
+
+WER measures the percentage of incorrectly transcribed words. For Whisper:
+
+- **Whisper large-v3**: WER of about 3-5% in English, comparable to the best proprietary systems
+- **For French**: WER of about 5-8% depending on the audio type (spontaneous conversation vs. prepared speech)
+
+To put these numbers in perspective: professional human transcribers make about 4-5% errors on English. Whisper large-v3 is therefore roughly at human level.
+
+### The Strengths That Set It Apart
+
+- **Noise robustness**: works remarkably well with background noise, music, car sounds
+- **Natively multilingual**: 99 languages, from Mandarin to Swahili, without switching models
+- **Zero configuration**: works out of the box, no need to adapt vocabulary or fine-tune
+- **Varied accents**: handles regional and non-native accents thanks to the diversity of training data
+
+### The Weaknesses to Know About
+
+- **30-second segments**: context is limited to 30 seconds, which can cause problems when a sentence straddles two segments
+- **Hallucinations**: Whisper can generate text that doesn't exist in the audio, especially on silent or very noisy passages
+- **No native streaming**: the model processes complete segments, not a real-time audio stream
+
+## Practical Implementation
+
+### With Transformers (The Simplest)
+
+```python
+from transformers import pipeline
+
+transcriber = pipeline("automatic-speech-recognition",
+                      model="openai/whisper-large-v3")
+result = transcriber("audio.mp3", return_timestamps=True)
+print(result["text"])
+```
+
+Two lines to load the model and transcribe a complete audio file.
+
+### Faster Whisper (Optimized for Production)
+
+CTranslate2 implementation, 4 times faster thanks to INT8 quantization:
+
+```python
+from faster_whisper import WhisperModel
+
+model = WhisperModel("large-v3", compute_type="int8")
+segments, info = model.transcribe("audio.mp3")
+for segment in segments:
+    print(f"[{segment.start:.2f}s → {segment.end:.2f}s] {segment.text}")
+```
+
+Recommended for production: faster, less memory-hungry, same results.
+
+### Whisper.cpp
+
+A C++ port for pure CPU inference. Ideal for embedded devices: phones, Raspberry Pi, desktop applications without a GPU.
+
+<Callout type="warning" title="Whisper's Hallucinations: A Real Problem">
+Whisper can "hallucinate": inventing text that isn't in the audio, especially on silent or very noisy segments. The model, trained to always produce text, fills gaps with invention. Practical solutions:
+- Use a voice activity detector (VAD) to filter out segments without speech **before** sending them to Whisper
+- Monitor token confidence scores: abnormally low probabilities often signal a hallucination
+- Systematically double-check low-confidence segments
+</Callout>
+
+## Evolutions and Alternatives
+
+### Distil-Whisper
+
+Distilled (compressed via knowledge distillation) versions of Whisper. Result: **6 times faster** with only ~1% WER degradation. Perfect for large-scale production where every millisecond counts.
+
+### Fine-Tuning on Your Domain
+
+Fine-tuning Whisper on domain-specific data drastically improves quality for specialized vocabulary. In medicine, law, and engineering, technical terms are often poorly transcribed by the generalist model. A few hours of annotated data in your domain are enough to correct these errors.
+
+### Alternatives and Competitors
+
+- **Canary (NVIDIA)**: high-performance multilingual ASR, particularly strong on Asian languages
+- **Conformer**: hybrid CNN (convolutional neural network) + Transformer architecture, very effective for real-time ASR
+- **Universal Speech Model (Google)**: support for 1,000+ languages, but less accessible than Whisper
+
+## Impact and Perspective
+
+Whisper democratized quality automatic transcription. Before, getting a good transcription required expensive proprietary services, specialized expertise, and cloud infrastructure. Now it's free, open-source, and runs on a laptop.
+
+The future of ASR is heading in four directions: better long-context understanding (beyond 30 seconds), hallucination reduction, improvement on rare languages, and real-time streaming support. Whisper isn't perfect, but it's the best quality/accessibility ratio available today.

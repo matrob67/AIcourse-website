@@ -1,0 +1,156 @@
+---
+title: "MCP: Model Context Protocol"
+description: "Anthropic's Model Context Protocol standardizes communication between LLMs and external data sources/tools, creating an interoperable ecosystem for agents."
+---
+
+## The Integration Nightmare
+
+To understand why MCP exists, you first need to understand the problem it solves.
+
+Imagine the computing world before USB. Your mouse used a serial connector. Your keyboard, PS/2. Your printer, a parallel port. Your scanner, SCSI. Each peripheral had its own physical connector, its own driver, its own protocol. Plugging in a new device was an adventure.
+
+That's exactly the situation with AI agents today. You want to connect your agent to PostgreSQL? You need a custom connector. To Slack? Another connector. To Google Drive? Yet another. And if you have 50 different tools? You write 50 different integrations, each with its own quirks, its own bugs, and its own maintenance.
+
+**MCP is the "USB standard" of AI agents**. A single open protocol. Any MCP-compatible agent can connect to any MCP-compatible tool. Without specific integration code.
+
+<Callout type="info" title={"The USB Analogy, in Detail"}>
+USB standardized the physical layer (the connector) AND the logical layer (the communication protocol). MCP does the same for AI agents: it standardizes the message format (JSON-RPC) AND the interaction semantics (how to expose a tool, how to read a resource, how to manage permissions). The result: an ecosystem where pieces fit together without friction.
+</Callout>
+
+## Architecture: The Three Pieces of the Puzzle
+
+MCP follows a simple but well-thought-out client-server architecture:
+
+1. **MCP Host**: your AI application --- Claude Desktop, an IDE like Cursor, or a custom agent you've developed. It's the "brain" that decides when and how to use tools
+2. **MCP Client**: the technical component on the host side that manages communication (opening connections, sending requests, receiving responses). Generally, you don't interact with it directly
+3. **MCP Server**: the service that exposes resources and tools to the agent. This is where the magic happens --- a PostgreSQL MCP server knows how to read a database, a GitHub MCP server knows how to navigate repos
+
+### The Underlying Protocol
+
+MCP uses **JSON-RPC 2.0** --- a proven internet standard for remote function calls --- over different transports:
+
+- **Stdio**: communication via standard input/output (ideal for local servers)
+- **HTTP/SSE**: web communication with Server-Sent Events (for remote servers)
+
+Each MCP server exposes three types of capabilities:
+
+- **Resources**: data the LLM can read. Local files, SQL query results, API content, Google Drive documents
+- **Tools**: functions the LLM can call to take action. Create a Jira ticket, send a Slack message, execute a command
+- **Prompts**: pre-configured and optimized prompt templates for specific tasks
+
+### The Communication Flow in Action
+
+Here's what concretely happens when you ask Claude to analyze your data:
+
+1. **You** &rarr; **Claude**: "Analyze last quarter's sales in my database"
+2. **Claude** recognizes it needs data and formulates a query
+3. **MCP Client** &rarr; JSON-RPC &rarr; **MCP PostgreSQL Server**
+4. The server executes the SQL query and returns the results
+5. **Claude** receives the data and produces its analysis
+6. **Claude** &rarr; **You**: "Here's the analysis: sales increased by 15%..."
+
+The entire process is transparent. You only see the final result.
+
+## The MCP Server Ecosystem
+
+### Data Servers
+
+- **Filesystem**: read and navigate your local files
+- **PostgreSQL / SQLite / MySQL**: access your databases
+- **Google Drive**: read your cloud documents
+- **GitHub**: access repositories, issues, pull requests
+
+### Tool Servers
+
+- **Brave Search**: perform real-time web searches
+- **Puppeteer**: automated web navigation (scraping, tests)
+- **Memory**: persistent memory so the agent remembers between sessions
+- **Sequential Thinking**: structured reasoning tools for complex problems
+
+### Custom Servers
+
+Any developer can create their own MCP server to expose their internal data and tools. And it's accessible: the official SDKs make the task simple.
+
+<Callout type="tip" title="Creating Your Own MCP Server">
+The official SDKs (Python, TypeScript/JavaScript) allow creating a functional server in 30 lines of code. A community registry gathers hundreds of ready-to-use servers. For most popular tools (Slack, Notion, Jira), someone has already done the work.
+</Callout>
+
+
+
+## Concrete Example: A Minimalist MCP Server in Python
+
+```python
+from mcp.server import Server, stdio_transport
+from mcp.types import Tool, TextContent
+
+server = Server("my-server")
+
+@server.tool("query_database")
+async def query_db(query: str) -> list[TextContent]:
+    """Execute a SQL query on the database."""
+    results = await db.execute(query)
+    return [TextContent(type="text", text=str(results))]
+
+@server.tool("get_weather")
+async def get_weather(city: str) -> list[TextContent]:
+    """Get current weather for a city."""
+    weather = await weather_api.get(city)
+    return [TextContent(type="text", text=f"{city}: {weather.temp} degrees")]
+
+async def main():
+    async with stdio_transport() as transport:
+        await server.run(transport)
+```
+
+This server exposes two tools: querying a database and getting the weather. Once launched, any MCP host (Claude Desktop, Cursor, a custom agent) can use them. The LLM sees the tool descriptions, understands when to use them, and calls them automatically when relevant.
+
+## Security: Who Can Do What?
+
+Security is a critical aspect of MCP --- an agent that has access to your database and your email is an agent that needs serious protection.
+
+### Layered Security Model
+
+MCP implements multiple levels of protection:
+
+- **User confirmation**: before calling a potentially dangerous tool (deleting a file, sending an email), the host requests explicit user approval
+- **Scoping**: each server only exposes authorized data --- a filesystem server can be restricted to a single folder, not the entire disk
+- **Process isolation**: each server runs in its own process. If one crashes or is compromised, the others continue functioning normally
+- **Audit**: every interaction is logged, allowing you to trace what the agent did and why
+
+<Callout type="warning" title="Watch Out for Injections via MCP">
+Like any agent system, data returned by MCP servers can contain malicious text --- this is the attack vector called "indirect prompt injection." An attacker could insert instructions into a document that the server returns to the agent. MCP hosts must treat all responses as untrusted content and validate them before presenting them to the LLM.
+</Callout>
+
+## Adoption: Who Uses MCP Today?
+
+### Compatible Hosts
+
+- **Claude Desktop**: native support, it's the reference host
+- **Cursor**: AI IDE with MCP support for development tools
+- **Zed**: next-generation code editor with MCP integration
+- **Continue**: VS Code extension with MCP support
+- **Cline**: autonomous coding agent with MCP
+
+### The Community Ecosystem
+
+Hundreds of MCP servers now cover the main needs:
+
+- **Databases**: PostgreSQL, MySQL, MongoDB, Supabase, Redis
+- **Cloud**: AWS, GCP, Azure
+- **Dev tools**: GitHub, GitLab, Jira, Linear
+- **Communication**: Slack, Discord, Email
+- **Productivity**: Notion, Google Workspace, Todoist
+
+## Why MCP Matters for the Future of AI
+
+MCP isn't just a handy tool --- it's an attempt to standardize the AI agent ecosystem before fragmentation becomes irreversible. The advantages of a widely adopted standard are considerable:
+
+- **End of redundant code**: no more writing 50 different integrations. If an MCP server exists for your tool, you use it as-is
+- **Massive reuse**: a PostgreSQL MCP server created by one team is usable by thousands of others
+- **Vendor independence**: the protocol is open and decentralized. No vendor lock-in
+
+<Callout type="paper" title="An Open Standard, Not an Anthropic Product">
+MCP is an open protocol with a public specification. Anyone can implement a compatible client or server, without a license or permission from Anthropic. This openness is deliberate and crucial: for a standard to become universal, it cannot be controlled by a single company.
+</Callout>
+
+**The big stakes**: adoption by other model providers. OpenAI, Google, and Meta have started showing interest. If MCP reaches a critical mass of adoption, it could become the de facto standard for agentic AI --- like HTTP became for the web. The race is on.

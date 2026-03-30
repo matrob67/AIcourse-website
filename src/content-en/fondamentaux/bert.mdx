@@ -1,0 +1,161 @@
+---
+title: "BERT: understanding bidirectionality and masking"
+description: "How BERT revolutionized NLP by reading text in both directions through Masked Language Modeling. The architecture, training, and fine-tuning explained."
+---
+
+## The thunderclap: October 2018
+
+Google shows up with **BERT** and literally breaks the NLP leaderboard. 11 benchmarks conquered in a single publication. This is the moment everything pivots: no more task-specific models, make way for **massive pre-training + small adaptation** -- the paradigm that governs AI today.
+
+<ArxivLink id="1810.04805" title="BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding" />
+
+
+
+## The classic problem: limited attention vs full vision
+
+Before BERT, there were two schools:
+
+**Unidirectional models** (GPT-1, June 2018 -- yes, GPT is contemporaneous!):
+- Read **left to right** only
+- To predict the next word, only see previous tokens
+- Excellent for generation (natural: you generate word by word)
+- Catastrophic for comprehension: miss future context
+
+Example: "The lawyer argued before the [???]". The missing word is on the right. A unidirectional reading can't see it. The model must guess blindly.
+
+**BERT's central idea**: What if we masked random words and asked the model to guess them by looking at **all available context** -- before and after the missing word?
+
+That's called **Masked Language Modeling** (MLM).
+
+| Step | Text |
+|---|---|
+| Original text | "The black cat sleeps" |
+| Mask | "The [MASK] cat sleeps" |
+| Objective | Predict "black" by seeing ["The", "cat", "sleeps"] |
+
+What's revolutionary here: the model can exploit the full context -- words before and after -- **without cheating**. Since it can't see the real token (replaced by `[MASK]`), there's no information leakage. But it has enough context to make an informed prediction. Result: BERT learns representations that integrate meaning from both directions, something no autoregressive model can do naturally.
+
+<Callout type="tip" title="Bidirectionality without the trick">
+If BERT saw the masked word, it could "cheat": learn that [MASK] = what you need to predict. Instead, BERT asks itself "What is this masked token?" and has to look for clues around it. Result: it learns a rich representation of the bidirectional context.
+</Callout>
+
+## The architecture: just an encoder
+
+BERT uses the **encoder** of a standard Transformer. No decoder (unlike T5). Why? Because BERT isn't made to generate text, it's for **understanding**.
+
+Structure:
+- Each token looks at **all other tokens** via multi-head attention
+- 12 stacked layers (BERT-base) or 24 (BERT-large)
+- 768 (base) or 1024 (large) dimensions
+- 110 million (base) or 340 million (large) parameters
+
+**Special tokens** (specialized vocabulary tokens):
+- `[CLS]`: always at the beginning. Its final vector = representation of the entire sentence
+- `[SEP]`: separates two sentences (for pair tasks)
+- `[MASK]`: replaces masked words during training
+
+
+## Technical corner: the MLM objective and its subtleties
+
+**MLM** = Masked Language Modeling, BERT's main training objective.
+
+Process:
+1. Take 15% of tokens at random
+2. For each one, three options:
+   - 80% of the time: replace with the `[MASK]` token (the hole)
+   - 10% of the time: replace with a random token from the vocabulary (noise)
+   - 10% of the time: keep unchanged (no change)
+
+| Variant | Text |
+|---|---|
+| Initial input | "The cat sleeps on the couch" |
+| Masked (80%) | "The [MASK] sleeps on the [MASK]" |
+| With noise (10%) | "The telephone sleeps on the hamburger" |
+| Unchanged (10%) | "The cat sleeps on the couch" |
+
+**Objective**: predict "cat" and "couch" despite the perturbations.
+
+### Why this weird 80-10-10 ratio?
+
+Intuition: if you always said "[MASK]" for a word to predict, BERT would learn: "[MASK] = there's something to predict here." A shortcut. But during fine-tuning (fine-tuning = adaptation to your task), [MASK] tokens no longer exist! So this shortcut doesn't work.
+
+The 10% random tokens force BERT to create robust representations for **all tokens**, not just masked ones. The 10% unchanged ones reinforce that the model must read every token with attention.
+
+Result: a very rich, general internal representation that's not over-optimized for training.
+
+<Callout type="info" title="MLM vs next-token prediction (GPT)">
+GPT predicts the next token (classic). BERT predicts a random token from context (revolutionary). MLM forces a richer bidirectional understanding. That's why BERT excels at classification and extraction, not generation.
+</Callout>
+
+## The second objective: NSP (and why it failed)
+
+BERT adds a second objective: **NSP** (Next Sentence Prediction).
+
+You give the model two sentences and it must say: "Does the second sentence logically follow the first?"
+
+| Type | Sentence A | Sentence B | Label |
+|---|---|---|---|
+| Positive (consecutive) | "Paris is the capital" | "It is beautiful" | 1 |
+| Negative (random) | "Cats eat fish" | "The Moon orbits Mars" | 0 |
+
+**The verdict**: Later, researchers discovered that NSP barely helped. RoBERTa (2019) showed that removing NSP and focusing solely on MLM gave the same performance, often better.
+
+Why does NSP fail? The task is too easy to solve in the wrong way. Negative sentences are randomly drawn from other documents, so they're often thematically incompatible with the anchor sentence. The model learns to detect superficial thematic coherence, not fine discursive logic. That's not the useful skill. MLM, on the other hand, truly forces the model to understand the meaning of each word in its complete context -- that's much richer.
+
+<Callout type="warning" title="Bad ideas persist">
+NSP seemed logical a priori. But the empirical data spoke. This is the normal cycle: hypothesis -> implementation -> data beats intuition. That's why ablation (testing each component) is crucial.
+</Callout>
+
+## Training data and resources
+
+BERT needs colossal amounts of data:
+- **BooksCorpus**: 800 million words (from books, high quality)
+- **English Wikipedia**: 2.5 billion words
+
+**Total**: ~3.3 billion words. Sequences of 512 tokens each. Batch of 256. 1 million training steps.
+
+**Cost**: multiple high-end GPUs for **4 days** (estimated). In 2018, that's on the order of hundreds of thousands of dollars in compute.
+
+Result: a free pre-trained model that anyone can use and adapt.
+
+## The secret: efficient fine-tuning
+
+Here's the magic of BERT pre-training:
+
+**Phase 1 (once, in the lab)**: Pre-train BERT on 3 billion words. Expensive, time-consuming, done once.
+
+**Phase 2 (you, right now)**: Take the pre-trained BERT and **adapt it to your task** in a few hours:
+
+1. Remove the "MLM prediction" part -> add a simple layer for your task
+2. Train on **your labeled data** (often just a few thousand examples)
+3. A few epochs (usually 2-4), and you're done
+
+**Fine-tuning examples**:
+- **Classification** (sentiment, spam, topic): remove MLM, add a softmax layer. Use the [CLS] embedding as the sentence representation.
+- **Extraction** (QA): predict the start and end position of the answer in the passage
+- **NER** (Named Entity Recognition): classify each token individually
+- **Similarity**: compare the embedding of two sentences with cosine
+
+The result: state of the art on your task with **5 hours of work and 1,000 labeled examples**. Without BERT, you'd need 100,000 examples and months of training from scratch.
+
+<Callout type="paper" title={"Pre-training: the investment that pays off"}>
+BERT represents roughly a million-dollar training investment, done once. Thousands of teams around the world use and adapt it, collectively saving billions in compute and research. It's a force multiplier: a massive centralized effort democratizes access to the technology for everyone.
+</Callout>
+
+## The impact: NLP changed shape
+
+BERT revolutionized the field:
+
+- **Democratization**: Before BERT, achieving state-of-the-art NLP (Natural Language Processing) required 100,000 labeled examples and a team of experts. After: 5,000 examples, 3 hours, one engineer. Direct access to the technological frontier.
+- **Benchmarks**: GLUE (General Language Understanding Evaluation), SQuAD (Stanford Question Answering Dataset), all leaderboards were broken at once
+- **Ecosystem**: RoBERTa (better training recipe), DistilBERT (compressed via distillation), ALBERT (A Lite BERT, ultra-compressed), DeBERTa (Decoding-enhanced BERT, refined attention) were born directly from the BERT idea
+- **Real deployment**: Google put BERT in its search engine in 2019. That affects the results you see. Impact: billions of queries per day.
+- **Transition**: Encoder-decoder models (T5, BART) and decoder-only models (GPT) progressed at the same time. In 2026, decoder-only dominates. But BERT remains the best encoder.
+
+## Why this matters
+
+BERT showed that **reading bidirectionally** (via intelligent masking) produces qualitatively superior representations. It's not just a 10% improvement. It's a massive leap on many tasks.
+
+The **massive pre-training + lightweight fine-tuning** paradigm became the industry standard. It's simple, effective, and democratizes access to technology.
+
+BERT isn't "dead" (many production systems use it), but for **generalist generation tasks** (dialogue, free-form summarization, creation), decoder-only models (GPT, Claude) now dominate. Each architecture has its strengths.

@@ -1,0 +1,174 @@
+---
+title: "Modern Optimizers: Adam, AdamW, and LAMB"
+description: "From SGD to Adam: optimizers that adapt to each weight. How Adam revolutionized training and why AdamW makes it even better."
+---
+
+## Introduction: Why a Universal Optimizer Isn't Enough
+
+With classic SGD (Stochastic Gradient Descent), **all** network weights use the same learning rate. But when you think about it, that makes no sense.
+
+In a neural network, some weights are constantly solicited and receive large gradients at every training step. Others, on the contrary, receive tiny gradients because they're associated with rare or very specific features. Think of a word embedding: the word "the" appears in almost every sentence (frequent and large gradients), while the word "stethoscope" appears rarely (rare and small gradients).
+
+Applying the same learning rate to these two types of weights is absurd. A learning rate large enough to move the rare weights will make the frequent weights explode. A learning rate small enough to stabilize the frequent weights will leave the rare weights virtually immobile.
+
+**Adaptive optimizers** solve this dilemma: each weight receives a personalized learning rate, automatically adjusted based on its gradient history.
+
+## Adam: The Revolutionary Optimizer
+
+<ArxivLink id="1412.6980" title="Adam: A Method for Stochastic Optimization" />
+
+The central idea of Adam: instead of using the raw gradient from a single step to update a weight, Adam builds an overview from recent history. For each weight in the network, it maintains **two exponential memories** that summarize what happened during previous steps.
+
+<ImageWithSource
+  src="/images/admin/img-1774018032359.png"
+  alt="Comparison of GD vs Adam optimization paths"
+  sourceUrl="https://www.vizuaranewsletter.com/p/adam-the-most-famous-ml-optimizer"
+  size="medium"
+/>
+
+### Memory 1: Momentum (m)
+
+It's the exponential moving average of past gradients:
+
+$$
+m_t = \beta_1 \cdot m_{t-1} + (1 - \beta_1) \cdot g_t
+$$
+
+Concretely, m accumulates momentum in a direction. If the gradients have been pointing in the same direction for several steps, m becomes large in that direction and the weight accelerates. If the gradients oscillate (positive, negative, positive...), m stays close to zero and the weight barely moves. It's the same principle as a ball rolling down a hill: it picks up speed on smooth descents and hesitates in chaotic zones.
+
+### Memory 2: Volatility (v)
+
+It's the exponential moving average of the **squares** of the gradients:
+
+$$
+v_t = \beta_2 \cdot v_{t-1} + (1 - \beta_2) \cdot g_t^2
+$$
+
+By taking the square, we measure the **amplitude** of gradients, regardless of their direction. If v is large for a given weight, it means that weight receives high-amplitude gradients, possibly erratic. It's in a "turbulent" zone of the loss surface and deserves cautious treatment. If v is small, the weight receives weak and steady gradients: it's a calm zone where we can move faster.
+
+### The Update
+
+$$
+\theta_t = \theta_{t-1} - \eta \cdot \frac{m_t}{\sqrt{v_t} + \epsilon}
+$$
+
+**The key intuition**:
+
+A weight that usually receives large gradients (large v) is divided by a large number: it advances cautiously, because it's in a chaotic zone of the loss surface where large steps risk overshooting the optimum.
+
+A weight that usually receives small gradients (small v) is divided by a small number: it can advance faster, because it's in a flat zone where you need to push harder to make progress.
+
+This is what makes Adam so much more robust than SGD: it automatically calibrates the learning speed for each weight individually, without you having to find a single learning rate that works for the entire model at once.
+
+<Callout type="info" title={"Adam's magic numbers"}>
+Beta_1 = 0.9 (momentum memory)
+Beta_2 = 0.999 (volatility memory)
+Learning rate = 0.001 or 0.0001 generally
+
+These default values work remarkably well in the vast majority of cases. Beta_1 at 0.9 means the momentum "forgets" about 10% at each step (short memory). Beta_2 at 0.999 means the volatility has a much longer memory (forgets only 0.1% per step), making it more stable. In practice, you almost never need to modify these values.
+</Callout>
+
+## Adam's Trap: Weight Decay
+
+**L2 regularization** (weight decay) is a classic technique to prevent overfitting. The idea is simple: you add a penalty that pushes all weights to stay small, by adding the square of the weights to the loss:
+
+$$
+\mathcal{L}_{\text{total}} = \mathcal{L} + \lambda \sum \theta^2
+$$
+
+With SGD, this works perfectly: the gradient of the penalty ($2\lambda\theta$) is added to the loss gradient, and the update pushes weights toward zero proportionally to their size.
+
+With Adam, there's a subtle but devastating problem. The gradient of the L2 penalty goes through the same adaptive mechanism as the normal gradient: it's divided by $\sqrt{v}$. For very active weights (which have a large v), this division makes the regularization penalty tiny. The network "thinks" it's being regularized, but in reality, the most important weights are barely affected by the penalty. You think you're regularizing, but you're barely doing anything.
+
+### AdamW: The Simple Fix
+
+<ArxivLink id="1711.05101" title="Decoupled Weight Decay Regularization" />
+
+AdamW decouples weight decay. Instead of adding the penalty to the gradient (which gets divided by v), you add it **after** the Adam update:
+
+$$
+\theta_t = \theta_{t-1} - \eta \cdot \frac{m_t}{\sqrt{v_t}} - \lambda \cdot \theta_{t-1}
+$$
+
+This way, regularization doesn't undergo the division by v effect. It works as intended for **all** weights.
+
+<Callout type="tip" title="AdamW is now the standard">
+It's the default optimizer for Transformers, LLMs, and the majority of modern deep learning. If you need to remember ONE optimizer, it's AdamW. Typical weight decay: 0.01-0.1.
+</Callout>
+
+<ImageWithSource
+  src="/images/admin/img-1774018126586.png"
+  alt="Performance comparison of Adam and AdamW optimizers"
+  sourceUrl="https://www.iprally.com/news/recent-improvements-to-the-adam-optimizer"
+  size="medium"
+/>
+
+## LAMB: For Massive Distributed Training
+
+For training on **thousands of GPUs** (industrial-scale training), you use enormous batches: 8,000, 16,000, 32,000 examples.
+
+Problem: with Adam, increasing the batch size beyond a threshold **degrades the final model quality**, even when adjusting the learning rate. It's counter-intuitive but well documented.
+
+**LAMB** (Layer-wise Adaptive Moments optimizer for Batch training) normalizes each layer independently:
+
+$$
+\theta_t = \theta_{t-1} - \eta \cdot \frac{\|\theta_{t-1}\|}{\|u_t\|} \cdot u_t
+$$
+
+Each layer maintains an appropriate "scale" even with an enormous batch.
+
+Result: BERT (Bidirectional Encoder Representations from Transformers) trained in **76 minutes** instead of 3 days on several thousand TPUs (Tensor Processing Units, Google's specialized processors).
+
+<Callout type="warning" title={"LAMB is not for you"}>
+LAMB is designed for massive distributed training. If you're training on 1-4 GPUs with batches of 32-512, you don't need it. AdamW is better for you.
+</Callout>
+
+## Quick Comparison Table
+
+| Optimizer | When to use | Advantage | Pitfall |
+|---|---|---|---|
+| SGD + Momentum | Classic vision (ResNet) | Sometimes generalizes better | Sensitive to learning rate |
+| Adam | Rapid prototyping | Converges fast, little tuning | Weight decay broken |
+| AdamW | 90% of cases (Transformers, LLM) | Everything works well | Very slightly slower than Adam |
+| LAMB | Massive distributed training | Enormous scaling | Very complex |
+
+## The Importance of Learning Rate Scheduling
+
+Regardless of the optimizer, you should **vary the learning rate** during training.
+
+The most common strategy today is **Warmup + Cosine Decay**:
+
+| Phase | Epochs | Learning rate |
+|---|---|---|
+| Warmup | 0-10 | Gradually increases from 0 to 0.001 |
+| Cosine decay | 10-100 | Gradually decreases following a cosine curve to ~0 |
+
+Why warmup? At the very beginning of training, Adam's m and v statistics aren't yet reliable (they're initialized to zero). Gradually increasing the learning rate gives these statistics time to calibrate before making large updates. Without warmup, the first steps can send weights in catastrophic directions.
+
+Why decay? At the end of training, the model is close to a good optimum. Steps that are too large would make it oscillate around this optimum without ever converging. Gradually reducing the learning rate allows for fine-tuning the last adjustments. It's a technical detail that seems minor, but it **almost always** improves the final model quality.
+
+## Practical Details
+
+### Memory
+
+Adam stores two additional states (m and v) for each weight. For a 7 billion parameter (7B) model, that's:
+
+| Component | Calculation | Memory |
+|-----------|------------|---------|
+| Weights | $7 \times 10^9 \times 4$ bytes | 28 GB |
+| $m$ (momentum) | $7 \times 10^9 \times 4$ bytes | 28 GB |
+| $v$ (variance) | $7 \times 10^9 \times 4$ bytes | 28 GB |
+| **Total** | | **84 GB** (instead of 28 GB) |
+
+That's **3 times more memory** than simply storing the weights. For very large models, this is a real problem: the optimizer consumes more memory than the model itself. Variants like **Adafactor** (used by Google for T5) reduce this footprint by storing only approximations of the m and v statistics instead of the full states. But in terms of training performance, AdamW remains the reference standard.
+
+## Practical Summary
+
+For 99% of your projects:
+- **Use AdamW**
+- Initial learning rate: 0.001 or 0.0001
+- Weight decay: 0.01-0.1
+- Learning rate schedule: linear warmup + cosine decay
+- Batch size: 32-256 (adjust based on your GPU memory)
+
+This is a robust configuration that gives excellent results in the vast majority of cases. You'll rarely beat this recipe by changing optimizers: the time spent experimenting with other configurations would almost always be better invested in data quality or model architecture.

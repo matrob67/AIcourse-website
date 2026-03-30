@@ -1,0 +1,130 @@
+---
+title: "Medusa: multi-head generation"
+description: "Adding extra heads to the model to generate multiple tokens at once."
+---
+
+## The problem with classic speculative decoding
+
+Speculative decoding is a brilliant idea: use a small, fast model to propose tokens, then verify them with the large model. But this approach requires maintaining a **second model in memory**. That's extra VRAM overhead, deployment complexity, and the small model needs to be well calibrated with the large one.
+
+Medusa proposes a more elegant solution: instead of an external draft model, add **extra heads** directly to the main model. The model becomes its own speculator.
+
+<ArxivLink id="2401.10774" title="Medusa: Simple LLM Inference Acceleration with Multiple Decoding Heads (Cai et al., 2024)" />
+
+<Callout type="info" title={"The idea in one sentence"}>
+Instead of generating a single token at a time with the standard output head, you add K parallel heads that predict the next K tokens simultaneously. A tree-based verification mechanism selects the best candidate sequence.
+</Callout>
+
+## Medusa architecture
+
+### The extra heads
+
+A standard Transformer has a single output head: it takes the last hidden layer and predicts the next token. Medusa adds parallel heads, each specialized in predicting a future token:
+
+**Hidden layer** ($d = 4096$)
+
+- **Head 0** (standard) &rarr; token $t+1$
+- **Medusa Head 1** &rarr; token $t+2$
+- **Medusa Head 2** &rarr; token $t+3$
+- ...
+- **Medusa Head K** &rarr; token $t+K$
+
+Each Medusa head is a small MLP (2 layers) with a residual layer. It takes the same hidden representation as the standard head and predicts a more distant token. It's like having multiple scouts each looking one step further down the path.
+
+### Parameter cost
+
+For a 7B model with 5 Medusa heads: about **750M additional parameters**. That's roughly 10% of the original model. It's not negligible, but it's much less than a complete 1-2B parameter draft model that you'd need for classic speculative decoding.
+
+## Training: two strategies
+
+### Medusa-1: only the heads learn
+
+The main model is **completely frozen**, only the Medusa heads are trained:
+
+$$
+\mathcal{L} = \sum_{k=0}^{K} \text{CE}(\text{head}_k(h)) = \text{CE}(\text{head}_0(h)) + \text{CE}(\text{head}_1(h)) + \cdots + \text{CE}(\text{head}_K(h))
+$$
+
+Each head independently learns to predict its target token. The advantages are considerable:
+- Fast training (2-4 hours on a single GPU)
+- No risk of degrading the main model
+- **This is the recommended approach**
+
+### Medusa-2: joint fine-tuning
+
+You train the main model **and** the heads together. The hidden layer adapts to better serve all heads simultaneously. Better prediction quality, but much slower and more expensive.
+
+<Callout type="tip" title="Medusa-1 is enough in most cases">
+In practice, Medusa-1 (heads only) gives results nearly as good as Medusa-2 for a fraction of the cost. 10,000 to 20,000 text examples are enough to train the heads. It's the default approach.
+</Callout>
+
+## Tree-based verification (Tree Attention)
+
+### The combinatorial challenge
+
+Here's the problem: if each head proposes its top-5 candidates, you end up with $5^K$ possible combinations. For K=5 heads, that's 3,125 candidate sequences. Impossible to verify them all one by one.
+
+### Tree Attention: the clever solution
+
+The key is to structure candidates as a **tree** rather than a flat list:
+
+1. **Construction**: build a candidate tree by pruning unlikely branches
+2. **Special mask**: create a tree-shaped attention mask, where each node only "sees" its ancestors
+3. **Parallel verification**: all branches are verified in **a single forward pass** thanks to the mask
+4. **Selection**: keep the longest branch where all tokens are accepted
+
+This is elegant: instead of K forward passes to verify K sequences, you do a single one. The compute overhead is minimal compared to the gain in accepted tokens.
+
+## Concrete results
+
+### Measured speedup
+
+| Model | Heads | Speedup (greedy) | Speedup (sampling) |
+|---|---|---|---|
+| Vicuna-7B | 3 | 2.2x | 1.8x |
+| Vicuna-13B | 3 | 2.3x | 1.9x |
+| Vicuna-33B | 5 | 2.8x | 2.3x |
+
+An interesting pattern: the bigger the model, the greater the speedup. This makes sense: on a large model, each forward pass is expensive, so accepting multiple tokens at once has a proportionally greater impact. The Medusa heads remain small regardless of model size.
+
+## Advantages over classic speculative decoding
+
+1. **No draft model**: significant memory savings, a single model to deploy
+2. **Better acceptance rate**: the heads are trained specifically for this model, unlike a generic draft model
+3. **Deployment simplicity**: a single weight file, no synchronization between two models
+4. **Adaptability**: you can retrain the heads for a specific domain in a few hours
+
+## Honest limitations
+
+### The heads predict "blind"
+
+This is Medusa's fundamental limitation: each head predicts its token **without seeing what the other heads predicted**. Head 3 (which predicts $t+3$) doesn't know which token Head 1 chose for $t+1$. It's like asking someone to guess the third word of a sentence without knowing the first two. Result: predictions from distant heads are less accurate than with a real autoregressive model.
+
+### Per-model training cost
+
+The heads must be **trained specifically for each model**. It's not a universal plugin you plug in and it works.
+
+<Callout type="warning" title="The heads are coupled to the model">
+If you fine-tune the main model (with LoRA or otherwise), the Medusa heads become invalid: the distribution of hidden layers has changed, the heads can no longer predict correctly. You need to retrain them after each modification to the model.
+</Callout>
+
+## The evolution: EAGLE
+
+**EAGLE** (Extrapolation Algorithm for Greater Language-model Efficiency) fixes Medusa's main limitation:
+
+- It uses a **small autoregressive model** on top of the main model's hidden layers
+- Each prediction **conditions the next**: token $t+2$ is predicted knowing which token was proposed for $t+1$
+- The acceptance rate is significantly better thanks to this dependency
+- **EAGLE-2** dynamically adjusts speculation depth based on model confidence: it speculates more when confident, less when unsure
+
+EAGLE is considered the true evolution of Medusa, combining single-model simplicity with the quality of a real autoregressive model.
+
+## Connection with multi-token prediction
+
+The idea of predicting multiple tokens in parallel isn't limited to inference. Researchers at Meta showed that training an LLM to predict multiple tokens at once (not just the next one) improves model quality while enabling faster inference via speculative generation. In essence, the model learns a better internal representation when asked to "see further ahead," and the additional trained heads can then serve as speculators -- somewhat like Medusa, but integrated from pre-training.
+
+<ArxivLink id="2404.19737" title="Better & Faster LLMs via Multi-token Prediction (Gloeckle et al., 2024)" />
+
+## Practical impact
+
+Medusa and EAGLE represent an important direction in LLM inference: **enriching the model itself** rather than multiplying models. It's simpler to deploy than classic speculative decoding, and the speed gain (2-3x) is substantial for production applications. Even if the gain may be slightly lower than optimal speculative decoding with a perfectly calibrated draft model, the simplicity of implementation often tips the balance.

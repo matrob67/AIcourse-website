@@ -1,0 +1,143 @@
+---
+title: "Cleaning and Deduplicating Data: MinHash"
+description: "Detect and remove duplicates from your training data with MinHash. Improve dataset quality without tripling the cost."
+---
+
+## The problem: your data is riddled with duplicates
+
+Common Crawl, the most widely used web data source for training LLMs, contains between 30 and 50% duplicates or near-duplicates. Mirror pages, syndicated content copied across dozens of sites, near-identical e-commerce templates with just the product name changed... If you train a model on this raw data, you're massively wasting compute on redundant information.
+
+And the consequences go well beyond waste:
+
+- **Memorization**: the model memorizes repeated passages instead of generalizing. It can regurgitate entire paragraphs from its training data verbatim.
+- **Amplified biases**: overrepresented sources dominate the model. If 30% of your data comes from Wikipedia because every page is duplicated 5 times, your model will have an encyclopedic bias.
+- **Wasted compute**: duplicated tokens provide no new information. You're paying the same GPU cost for zero learning.
+- **Corrupted evaluation**: if examples from your test set appear in the training set (via duplicates), your metrics are lying. You think your model generalizes, but it's just reciting.
+
+<Callout type="info" title="Measured impact in practice">
+Studies on large language models consistently show: deduplicating training data improves perplexity by 5-10% at constant token volume, and significantly reduces verbatim memorization. It's one of the most cost-effective interventions on dataset quality.
+</Callout>
+
+## Cleaning first, deduplication second
+
+Before looking for duplicates, you need to clean the raw data. It's like sorting your belongings before looking for duplicates in your library: there's no point comparing two books if one of them is actually a flyer.
+
+1. **HTML to text extraction**: trafilatura or resiliparse extract useful content from a web page by stripping HTML
+2. **Unicode normalization**: standardize to NFKC so that "e" and "e" (composed) are identical
+3. **Boilerplate removal**: navigation menus, footers, ads, sidebars. This isn't useful content.
+4. **Language filtering**: fastText lid detects the language. If you want a French dataset, discard the English.
+5. **Length filtering**: documents that are too short (a few words) or too long (database dumps) are rarely useful
+6. **Non-textual lines**: source code, long URL lists, page counters. Filter based on your needs.
+7. **Quality heuristics**: are words well-formed? Do sentences have structure? Is the vocabulary diverse?
+8. **PII removal**: emails, phone numbers, addresses. Mandatory for GDPR compliance.
+
+### Simple but remarkably effective heuristics
+
+| Rule | What it detects |
+|---|---|
+| `ratio_words_to_chars > X` | Weird text, random characters (remove) |
+| `lines_ending_with_period > Y%` | Real paragraphs of written text (keep) |
+| `lines_duplicate_in_doc > Z%` | Spammy document or template (remove) |
+
+The major reference datasets (C4, FineWeb, RedPajama) use these heuristics. It's not sophisticated science, it's pragmatic engineering that works remarkably well.
+
+<Callout type="tip" title={"Cleaning is as much an art as a science"}>
+The right thresholds for these heuristics are found empirically. Manually inspect hundreds of examples at the boundaries of your filters, adjust the thresholds, iterate. The best datasets in the world are the result of dozens of iterations of this process. It's never 100% automated.
+</Callout>
+
+## Exact deduplication: the simple case
+
+### By cryptographic hash
+
+Compute the SHA-256 (or MD5) of each document. Two documents with the same hash = byte-for-byte identical content. Remove the duplicates.
+
+**Advantages**: fast to compute, zero false positives (it's practically impossible to have the same hash for two different contents)
+
+**Limitations**: a single character difference produces a completely different hash. Near-duplicates (99% identical) slip through the net.
+
+### By normalized URL
+
+Remove documents from the same URL after normalization: stripping tracking parameters (`?utm_source=...`), normalizing protocol (http vs https), etc.
+
+**Limitations**: two different URLs can point to the same content (mirror pages, CDN, repost).
+
+## Fuzzy deduplication with MinHash: the heart of the matter
+
+### The near-duplicate problem
+
+A document that's 95% identical is not 100% identical, but it's still a duplicate for your training purposes. You need an **approximate similarity measure** that scales.
+
+### Jaccard similarity: the founding idea
+
+For two sets A and B:
+
+$$J(A, B) = \frac{|A \cap B|}{|A \cup B|}$$
+
+Represent each document as a set of **n-grams** (subsequences of n consecutive words, typically n=5). The Jaccard similarity between two sets of n-grams measures the textual overlap between documents.
+
+**The problem**: comparing all document pairs = O(N^2). For a billion documents, that's approximately 10^18 comparisons. Completely impractical.
+
+### MinHash: the brilliant probabilistic trick
+
+The idea: instead of storing all n-grams of a document (potentially thousands), create a **compact fixed-size signature**.
+
+Choose k random hash functions. For each document, apply the k functions to all its n-grams and keep only the minimum for each function (hence the name "MinHash"). A document's signature = these k minimum values.
+
+**The fundamental mathematical property**: $\Pr[h_{min}(A) = h_{min}(B)] = J(A, B)$
+
+The probability that two documents share the same minimum for a random hash function is **exactly** equal to their Jaccard similarity. It's elegant and mathematically provable.
+
+<Callout type="paper" title="Controllable precision">
+With k hash functions, you estimate Jaccard similarity with a variance of 1/k. The larger k is, the more precise the estimate. In practice, k=128 or k=256 offers an excellent precision/memory tradeoff.
+</Callout>
+
+### LSH: avoiding comparing all pairs
+
+You now have compact signatures, but comparing all pairs is still O(N^2). This is where **LSH** (Locality-Sensitive Hashing) comes in.
+
+Divide the k signature values into **b bands** of **r rows** (k = b x r). For each band, hash the r values together into a hash table. Two documents are **candidates** (potential duplicates) if they share at least one identical band.
+
+Then, compare in detail only the candidate pairs. The number of candidates is drastically smaller than the total number of pairs.
+
+**Tuning b and r is the main lever**:
+- **Larger b** (many small bands): many candidates, high recall, but more false positives to check
+- **Larger r** (few large bands): few candidates, high precision, but you miss some duplicates
+
+For a similarity threshold of 0.8 (80% similar), a typical configuration is k=128, b=20, r=5 (20 bands of 5 rows).
+
+<Callout type="warning" title="Memory is the real cost of MinHash">
+10 billion documents x 128 hashes x 4 bytes = 5 TB just to store the signatures. LSH tables add even more memory. At this scale, you absolutely need distributed computing (Spark, Dask, Ray). That's why large datasets are always processed on clusters.
+</Callout>
+
+## Sub-document deduplication: repeated passages
+
+### Suffix Array Substring Dedup
+
+The same paragraph (legal disclaimer, standard description, cookie policy) can appear in 1,000 different documents. Even if the documents overall are different, these repeated passages pollute training.
+
+The technique:
+1. Concatenate all documents into a single giant string
+2. Build the suffix array (a data structure that sorts all suffixes)
+3. Identify substrings that appear more than N times
+4. Remove them from the documents
+
+### N-gram frequency
+
+Simpler approach: compute the frequency of each long n-gram (10-20 words) across the entire corpus. Passages containing ultra-frequent n-grams are probably repetitive boilerplate. Remove them.
+
+## Practical tools
+
+- **text-dedup**: Python library for MinHash and SimHash, easy to use
+- **datatrove** (HuggingFace): complete pipeline for LLM data preparation, includes deduplication
+- **datasketch**: Python implementation of MinHash + LSH, very popular
+- **Spark MinHashLSH**: native distributed implementation in Spark for very large volumes
+
+## Best practices for effective deduplication
+
+- **Multi-level**: proceed in stages. First exact (URL, hash), then fuzzy (MinHash), then sub-document. Each level catches what the previous one missed.
+- **Calibrate visually**: at each threshold, manually inspect dozens of examples near the threshold to verify you're not removing useful content
+- **Deduplicate between train and test**: if test set examples are in the training set, your evaluation metrics are invalid. Cross-split deduplication is mandatory.
+- **Document the parameters**: the choices (k, b, r, threshold) enormously affect the final dataset. Document them for reproducibility.
+- **Iterate**: a first pass never catches all duplicates. The best pipelines make multiple passes with different parameters.
+
+Deduplication is not a one-shot you do once and forget. It's an iterative process that requires attention and common sense.

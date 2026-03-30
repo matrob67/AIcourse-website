@@ -1,0 +1,137 @@
+---
+title: "Text-to-Image: Stable Diffusion, SDXL, Flux"
+description: "Text-to-image generation models: Stable Diffusion and its evolutions, SDXL, and the next generation Flux. Architecture, usage, and ecosystem."
+---
+
+## The Revolution: Creating Images from Words
+
+Say "a tropical forest at dawn, sunbeams filtering through the trees, colorful butterflies" and an AI generates a photorealistic image in seconds. Three years ago, this was science fiction. Today, it's commonplace. **Text-to-image models** have democratized visual creation: you don't need to be a photographer, illustrator, or graphic designer to produce professional-quality images.
+
+
+
+<Callout type="info" title={"The Text-to-Image Ecosystem in Two Worlds"}>
+On one side, the **proprietary** world: DALL-E 3 (OpenAI), Midjourney, Imagen (Google) --- turnkey services with premium quality. On the other, the **open-source** world: Stable Diffusion, SDXL, Flux --- free models that have catalyzed a massive community of creators. Thousands of LoRAs (fine-tuned adaptations), extensions, and variations are available for free. The open-source ecosystem has become a cultural phenomenon.
+</Callout>
+
+## Stable Diffusion: The Founder of the Open-Source Era
+
+### How It Works
+
+Stable Diffusion uses a **Latent Diffusion Model** --- instead of working directly on pixels (which would be extremely expensive), it operates in a compressed space. Four components work together:
+
+1. **VAE Encoder**: compresses the 512x512 image into a 64x64 latent space (48x smaller)
+2. **UNet**: the heart of the system, a denoising network that operates in this latent space
+3. **Text Encoder**: converts the text prompt into a numerical vector (uses CLIP, a model trained to align text and images)
+4. **VAE Decoder**: reconstructs the final image from the latent space
+
+
+### The Step-by-Step Generation Process
+
+1. Start with random noise in the latent space (64x64x4)
+2. The UNet predicts "what noise to remove at this step," guided by the text embedding
+3. Remove that noise from the latent image
+4. Repeat for T steps (usually 20-50), each step refining the image
+5. The VAE decoder reconstructs the final image in pixels (512x512 or higher)
+
+The text embedding intervenes at each step via the cross-attention mechanism: at each denoising iteration, the model "consults" the prompt to know which direction to steer the generation.
+
+### Main Versions
+
+- **SD 1.5** (2022): 860M parameters, 512x512. The most popular thanks to thousands of community fine-tunes. A classic.
+- **SD 2.1** (2022): new text encoder (OpenCLIP), results often worse than 1.5 --- a sidestep rather than forward.
+- **SDXL** (2023): 6.6B parameters, 1024x1024. A real quality leap. The current standard.
+- **SD 3** (2024): DiT (Diffusion Transformer) architecture, triple text encoder (CLIP ViT-L, OpenCLIP ViT-bigG, and T5-XXL). More modern but slower adoption.
+
+## SDXL: The Current Standard in Production
+
+SDXL brings significant improvements over SD 1.5:
+
+- **Native 1024x1024 resolution** (vs 512x512): four times more pixels, much more detail
+- **Two-stage architecture**: a base model for global composition, an optional refiner for fine details and textures
+- **Dual text encoders**: CLIP ViT-L + OpenCLIP ViT-bigG work together to better understand complex prompts
+- **Enriched conditioning**: the model also receives the original image size, cropping, and an aesthetic target, which improves visual coherence
+
+<Callout type="tip" title="Why SDXL Dominates in Production">
+SDXL remains the most widely used in real deployment. The reason: an excellent quality/speed/cost compromise, and above all a gigantic community ecosystem. Thousands of LoRAs let you generate in specific styles (manga, pixel art, vintage photo, concept art) without training a full model. Each LoRA is 10-100 MB and applies instantly.
+</Callout>
+
+## Flux: The Next Generation
+
+Flux, developed by Black Forest Labs (founded by the original creators of Stable Diffusion), represents a major architectural shift.
+
+### What Fundamentally Changes
+
+- **Diffusion Transformer (DiT)** replaces the UNet: a more powerful and scalable architecture, inherited from the success of Transformers in NLP
+- **Flow Matching** replaces classic DDPM: more stable and efficient training, better quality with fewer steps
+- **T5-XXL as text encoder**: a much more powerful text encoder than CLIP, capable of understanding long and complex prompts
+- **Multimodal attention**: deep fusion of text and image tokens directly in the Transformer, instead of external cross-attention
+
+### The Three Variants
+
+- **Flux.1 [pro]**: maximum quality, accessible only via API
+- **Flux.1 [dev]**: open-weight, non-commercial license. For research and experimentation.
+- **Flux.1 [schnell]**: generation in just 1-4 steps, near real-time. Apache 2.0 license (fully free). The fastest.
+
+### Why Flux Is a Significant Leap
+
+- **Better instruction following**: when you say "exactly 3 red apples on a blue table," you get exactly that. Stable Diffusion struggled with precise quantities and attributes.
+- **Text in images**: Flux generates readable and correct text in images --- a notorious weakness of Stable Diffusion.
+- **Realistic human anatomy**: 5-fingered hands, correct proportions, natural poses.
+- **Complex compositions**: handles scenes with multiple objects and interacting characters better.
+
+## Key Techniques for Usage
+
+### Classifier-Free Guidance (CFG)
+
+The main technique for controlling whether the image follows the prompt well:
+
+$$\varepsilon_{\text{guided}} = \varepsilon_{\text{uncond}} + w \times (\varepsilon_{\text{cond}} - \varepsilon_{\text{uncond}})$$
+
+The factor w (guidance scale) controls the intensity of guidance. The intuition: the model makes two predictions --- one ignoring the text (epsilon_uncond), one following it (epsilon_cond). We amplify the difference between the two to force the model to better follow the prompt.
+
+Typical values:
+- w=7-12 for Stable Diffusion (it needs more guidance)
+- w=3.5 for Flux (it naturally follows prompts better, so less guidance needed)
+
+### Samplers: The Denoising Algorithm
+
+The choice of sampler affects speed and quality:
+
+- **DDPM**: 1,000 steps, maximum quality but impractically slow
+- **DDIM**: 20-50 steps, deterministic (same seed = same image, perfect for reproducibility)
+- **Euler**: 20-30 steps, good general compromise
+- **DPM++ 2M Karras**: 20-30 steps, the recommended standard for Stable Diffusion
+- **Flow Matching** (Flux): 4-50 steps, very efficient thanks to its optimal formulation
+
+### LoRA: Customizing Without Retraining Everything
+
+LoRA (Low-Rank Adaptation) is a small adaptation module that you "plug" onto a base model to specialize it:
+
+- **Style LoRA**: generate in a specific artistic style (Van Gogh, pixel art, anime, watercolor)
+- **Character LoRA**: generate a character consistently across different scenes
+- **Concept LoRA**: learn an invented visual concept (a fantasy animal, a type of architecture)
+
+LoRAs are small (10-100 MB), fast to train (a few hours on a single GPU), and combinable with each other. This is what makes the Stable Diffusion ecosystem so rich.
+
+<Callout type="warning" title="Ethical and Legal Questions">
+Image generation raises important questions: realistic deepfakes, reproduction of artists' styles without consent or compensation, generation of misleading or manipulative content. Responsible models integrate safety filters and automatic watermarking (like Google's SynthID). Responsible use is a shared responsibility between model creators and users.
+</Callout>
+
+## The Ecosystem: Tools for Generating
+
+- **ComfyUI**: node-based interface for creating complex workflows. The most powerful and flexible.
+- **Automatic1111**: complete and accessible web interface for Stable Diffusion. The most popular for getting started.
+- **Diffusers** (Hugging Face): Python library for programmatic integration into applications.
+- **CivitAI**: giant community platform for sharing models, LoRAs, and embeddings.
+
+The ecosystem is mature, active, and community-driven. Hundreds of extensions and models are available for free.
+
+## Perspective
+
+Image generation is evolving toward:
+- **Transformer architectures** (DiT) replacing CNNs (convolutional neural networks, like the U-Net), following the same trend as in NLP (natural language processing)
+- **More efficient training methods** (Flow Matching rather than DDPM)
+- **Real-time generation** (Flux schnell: 1-4 steps, under one second)
+- **Pixel-level control** (ControlNet for pose, IP-Adapter for character consistency, inpainting for local editing)
+
+The future is fast, controllable, and accessible models, capable of generating in 1-2 seconds with precise control over every element of the image.

@@ -1,0 +1,109 @@
+---
+title: "Mixture-of-Experts Architecture at Mistral"
+description: "Technical deep dive into Mistral AI's MoE architecture: sparse routing, 8 expert groups, top-2 per-token selection, and how it enables massive capacity at low inference cost."
+---
+
+## MoE: How Mistral Gets Giant Power at Mid-Size Cost
+
+Imagine a factory. A classic (dense) model is one huge machine running at full throttle ALL the time. Even to screw in a bolt, every piston in the machine is firing. Massive. Wasteful. Expensive in electricity.
+
+Mixture-of-Experts (MoE)? It's a workshop with 8 specialized machines, but for each part to machine, you only activate 2: the ones best suited for the job at hand. The other 6 stay idle. Result: the production capacity of a full workshop, but an electricity bill divided by 4. That's exactly how Mistral gets giant model power while only paying the compute cost of a mid-size model.
+
+### Dense vs MoE: The Difference That Changes Everything
+
+**Dense model (classic):** 70 billion parameters. Each token activates all 70 billion. Each request mobilizes the entire neural network. It's powerful, but it's like turning on every light in a building to read a book in a single room.
+
+**MoE model (Mistral):** 46.7 billion parameters TOTAL, but each token only activates 12.9 billion. Why? Because the model contains 8 groups of parameters (the "experts"), and a smart router says "this token goes to experts 3 and 7." The other 6 stay dormant.
+
+Concrete result: the representational capacity of a 70B model, the compute cost of a 13B model. It's not magic, it's smart engineering.
+
+<Callout type="info" title={"Why split the feed-forward layers and not attention?"}>
+In a transformer, about 66% of parameters are in the feed-forward layers (FFN): large dense neural networks. The remaining 33% are in the attention layers, which manage relationships between words. We turn the FFNs into experts because they're the most redundant: not all tokens need the same "expertise." Attention, on the other hand, is shared by all tokens, because everyone needs to know which words to look at.
+</Callout>
+
+
+
+### The Router: The MoE Orchestra Conductor
+
+Each layer of a Mistral MoE model contains three components:
+1. **Attention** (shared by all tokens)
+2. **8 experts** (specialized FFNs)
+3. **A router** (that decides which experts to activate for each token)
+
+The router is a small linear network. It takes a token as input, computes a score for each of the 8 experts, and selects the top 2. The outputs of these 2 experts are then combined in a weighted average by their respective scores.
+
+In formulas:
+
+$$\text{score} = \text{token} \times W$$
+
+$$\text{top\_2\_experts} = \text{the 2 with the best scores}$$
+
+$$\text{result} = \text{expert1\_output} \times \text{weight1} + \text{expert2\_output} \times \text{weight2}$$
+
+**Why top-2 (2 experts per token)?**
+- **Top-1 (1 expert only):** too risky. If the router makes a mistake and sends the token to the wrong expert, quality drops sharply. No safety net.
+- **Top-2:** two complementary perspectives. The best trade-off between cost and quality. If one expert is moderately relevant, the other compensates.
+- **Top-3+:** the marginal gain is small, but compute cost increases significantly.
+
+<Callout type="paper" title="Top-k routing: simple but effective">
+Top-k routing is the most direct approach. More sophisticated variants exist (continuous softmax routing, stochastic routing with exploration), but Mistral sticks with deterministic top-2. It's pragmatism: why complicate what works well?
+</Callout>
+
+### The 8 Experts: What Do They Actually Do?
+
+Classic question: "Does one expert handle math, another code, another poetry?"
+
+**Short answer: no, it's much more subtle and interesting than that.**
+
+Analysis of routing patterns shows that specialization doesn't happen by knowledge domain (math vs code vs literature), but by linguistic structure. An expert might specialize in:
+- Conjugated verbs and their tenses
+- Lists and enumerations
+- Conditional structures ("if... then...")
+- References and pronouns (understanding who "he" refers to)
+
+This is finer and more powerful than domain-based specialization. For the word "then" in a conditional sentence, the router activates the 2 experts that best understand conditional structures, regardless of the domain (code, law, cooking). The specialization is linguistic, not thematic.
+
+### The Big Challenge: Expert Balancing
+
+**The "winner-take-all" problem.** Imagine that 3 experts are slightly better than the other 5 at the start of training. The router prefers them. They receive more tokens, therefore more feedback, so they improve even more. The other 5, neglected, stagnate. Quickly, 3 experts do all the work and 5 are useless. It's a vicious cycle that wastes 62% of the model's capacity.
+
+**The solution: auxiliary load balancing loss.** Mistral adds a penalty term during training that says "distribute tokens fairly among all 8 experts." If one expert receives 50% of tokens when it should only receive 12.5%, it's penalized.
+
+**The tuning dilemma.** If the penalty is too strong, you force fairness but tokens end up at poorly suited experts. If it's too weak, you fall back into winner-take-all. Finding the right coefficient is an art that relies as much on experience as on science. And it's one of Mistral's distinctive areas of expertise.
+
+### In Production: The Practical Realities of MoE
+
+**The memory vs compute paradox.** Apparent contradiction: you need to LOAD all 46.7B parameters into GPU RAM (all experts must be ready), but you only use 12.9B per token. The memory required is that of a 47B model, but the compute cost is that of a 13B model. In practice, this works well because modern GPUs have plenty of memory and it's compute (not memory) that limits speed.
+
+**Distribution across multiple GPUs.** If you have 8 experts, you can distribute:
+- GPU 1: experts 0-1
+- GPU 2: experts 2-3
+- GPU 3: experts 4-5
+- GPU 4: experts 6-7
+
+A token arrives, the router says "expert 3 and expert 7." GPU 2 and GPU 4 work, the others wait. This is Expert Parallelism, a form of parallelism naturally suited to MoE.
+
+**Irregular batching.** When 100 tokens are processed in parallel, each activates different experts. Memory accesses become irregular and chaotic. Modern frameworks like vLLM handle this complexity, but it's a non-trivial engineering challenge.
+
+### The Evolution of MoE at Mistral
+
+| Model | Experts | Top-k | Total/active ratio |
+|-------|---------|-------|--------------------|
+| Mixtral 8x7B | 8 | 2 | 3.6:1 |
+| Mixtral 8x22B | 8 | 2 | 4.5:1 |
+| Mistral Large 3 | N/A (likely more) | N/A | ~16:1 |
+
+The spectacular increase in the total/active ratio in Mistral Large 3 (16:1 versus 3.6:1 for Mixtral 8x7B) suggests either a much larger number of experts, or more selective routing, or a more sophisticated sparsity mechanism. Mistral hasn't published the details, but the trend is clear: we're moving toward increasingly "sparse" models.
+
+<Callout type="tip" title={"Why MoE is Mistral's strategic advantage"}>
+Mastering MoE is hard. Expert balancing, training stability, routing optimization: few labs in the world do this well. Mistral is in this exclusive club. That's what allows them to produce competitive models with 3 to 5x fewer compute resources than American giants. It's a durable technical advantage, not a lucky break.
+</Callout>
+
+### The Future of MoE: Even Smarter
+
+MoE is a rapidly evolving architecture. The likely next steps:
+- **Adaptive routing:** depending on token difficulty, activate 1, 2, or 3 experts dynamically. Simple tokens consume less, complex ones consume more.
+- **Shared experts:** some experts are ALWAYS activated (a common knowledge base), while others are specialized and activated on demand.
+- **Hierarchical MoE:** experts of experts, where a first level of routing selects a group, then a second level selects the specific expert within that group.
+
+Mistral is actively pursuing these research directions and will integrate them into future models.

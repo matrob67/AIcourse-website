@@ -1,0 +1,195 @@
+---
+title: "Synthetic Data Generation"
+description: "Using LLMs to generate synthetic training data: techniques, frameworks (distilabel, Bonito), advantages, limitations, and best practices."
+---
+
+## The radical idea: why collect data if you can make it up?
+
+Data annotation is expensive. If you need 100,000 labeled examples, that's months and millions of dollars. But what if you ask a **powerful LLM to generate them**? In one week? For 1% of the cost?
+
+That's the idea behind **synthetic data**.
+
+Instead of:
+- Showing real-world data to humans
+- Humans label it
+- You train your model
+
+You do:
+- A powerful LLM generates the data
+- You train your model on the generated data
+- Boom, it works
+
+It's crazy that it works. But it does.
+
+
+
+## Why it's not cheating
+
+You might think "but it's just the generator model's data. My model is just learning imitation."
+
+Yes and no. The generator model is **much better** than your target model. For example, you use GPT-5.4 to generate the data, and you train a small Mistral 7B model on it. GPT-5.4 produces high-quality data. Your small model learns from this data. It's **knowledge distillation**: you transfer knowledge from a large model into a small one, like pouring concentrated coffee into a smaller cup.
+
+The small models that do incredible things? Many are trained this way. Alpaca (Stanford), Vicuna, Orca all use synthetic data from a powerful model.
+
+<Callout type="info" title="The model distillation revolution">
+Before: to have a good model, you needed the resources to build a large, high-quality dataset (annotators, time, money).
+Now: you ask GPT-5.4 to generate the dataset. You train a small model (Mistral 7B) on it. You have a good specialized model.
+
+This democratizes AI. Small teams with little data and little budget can now create performant models for their use case.
+</Callout>
+
+## Generation techniques: simple to complex
+
+### Technique 1: simple instruction generation
+
+You describe the type of data and the model generates:
+
+**Example**: "Generate 100 restaurant reviews in French, with a variety of sentiments (positive, negative, neutral). Reviews should be between 50 and 200 words."
+
+ChatGPT generates 100 reviews. Boom. Synthetic data.
+
+Simple but effective for many cases.
+
+### Technique 2: Self-Instruct
+
+**Self-Instruct** is cleverer. The idea:
+1. You have 50 good initial instructions (seeds)
+2. You ask the model: "generate 50 new instructions that are similar but diverse"
+3. For each new instruction, request a response
+4. Filter out the bad responses
+5. Repeat
+
+This is the approach used by Alpaca (Stanford): 175 seed instructions -> 52,000 instruction-response pairs in one week.
+
+The beauty of the approach: it creates **diversity**. The model invents new questions instead of just copy-pasting old ones.
+
+### Technique 3: Evol-Instruct (WizardLM)
+
+**Evol-Instruct** is a level above. The idea: progressively complicate the instructions.
+
+- **Start**: "What does a cat eat?" (trivial)
+- **Deepening**: "Compared to other carnivores, what are the unique characteristics of a cat's diet?" (added complexity)
+- **Broadening**: "Describe the evolution of the cat's diet, from wild ancestors to domestication" (expanded scope)
+- **Concretizing**: "With specific examples of breeds and environments, show how..."
+- **Reasoning**: "Provide a critical analysis of common myths about cat diets and explain why they're wrong"
+
+You build a **complexity pyramid**. Trivial data isn't useful. Data that's too hard -- the model can't answer correctly. Evol-Instruct creates a balanced distribution from easy to very difficult.
+
+### Technique 4: generating preference data
+
+For **DPO** (Direct Preference Optimization) / **RLHF** (Reinforcement Learning from Human Feedback), you need pairs of "good response vs bad response." You can generate them:
+
+1. Generate an instruction
+2. Generate the "good" response with a careful prompt ("Respond completely, accurately, helpfully...")
+3. Generate the "bad" response by explicitly asking ("Give a vague and incomplete answer")
+4. The (good, bad) pair is a preference example
+
+This lets you train models with DPO without humans doing comparisons.
+
+## Frameworks: the tools of the trade
+
+### distilabel (HuggingFace)
+
+**distilabel** is HuggingFace's open-source tool for data generation.
+
+Features:
+- **Modular pipelines**: you define steps (generate, filter, evaluate)
+- **Multi-LLM**: use multiple models in the same pipeline (one to generate, one to evaluate)
+- **Argilla integration**: raw data goes into Argilla for human validation
+- **Built-in techniques**: Self-Instruct, Evol-Instruct, UltraFeedback already available
+- **Scalable**: runs on Ray for parallelization
+
+A typical workflow:
+1. **distilabel** generates 10,000 data points
+2. **LLM-as-judge** scores them
+3. The **best 2,000** go to Argilla
+4. **Humans validate** 20% of those 2,000
+5. Everything ends up on **HuggingFace Hub**
+
+### Bonito
+
+**Bonito** is a model specialized in generating instruction-response pairs from raw text.
+
+You give it text: "The photosynthesis process converts light energy into chemical energy..."
+
+Bonito automatically generates relevant questions and answers based on that text.
+
+Useful for turning an unstructured corpus (emails, documents, web pages) into training data.
+
+### Other tools
+
+- **Genstruct** (Nous Research): generates structured instructions
+- **Textbooks Are All You Need**: generates structured data like textbooks
+
+## The risk: model collapse
+
+Training a model **exclusively** on synthetic data can lead to **model collapse**.
+
+Imagine the chain: GPT-4 generates data. You train Mistral 7B on it. Then someone uses Mistral to generate data and train an even smaller model. Then that small model generates data for yet another model. It's like making photocopies of photocopies.
+
+Each generation loses a bit of diversity and richness. After 3-4 successive generations, the model becomes degenerate: it speaks in stereotypical ways, without nuance, without creativity. Errors and biases amplify with each iteration.
+
+**The solution**: mix synthetic and real data. 70% synthetic, 30% real. It works very well.
+
+<Callout type="warning" title="The synthetic mix trap">
+If your dataset is 100% synthetic, you inherit all the biases and limitations of the generator model. No new diversity, no new perspectives. The small model becomes an impoverished echo of the large one.
+
+Use synthetic data to augment your real data, not to completely replace it.
+</Callout>
+
+## Filtering and quality: keep only the good stuff
+
+### Automatic filtering
+
+Raw synthetic data contains garbage. You need to filter:
+
+**LLM-as-judge**: an LLM evaluates each example:
+- "Is this response relevant?" -> score 0-100
+- "Is this response factual?" -> score 0-100
+- Keep scores > 80
+
+**Deduplication**: remove near-identical examples (two responses that say the same thing)
+
+**Heuristics**:
+- Length: not too short, not too long
+- Lexical diversity: not just "good good good"
+- Format: minimal structure
+
+### Human validation
+
+Even with automatic filtering, verify with humans:
+- **Sampling**: take 5% of the data, have humans evaluate
+- **Targeted validation**: data with ambiguous (borderline) scores goes to validation
+- **Iterative feedback**: if humans find lots of errors, modify the generation prompt
+
+## Legal and ethical considerations
+
+### Copyright
+
+It's legally complicated. Are data generated by an LLM derivative works of the training data?
+
+Different labs have different positions:
+- OpenAI prohibits using outputs to compete with OpenAI
+- Meta (Llama): you can use outputs however you want
+- Anthropic: academic use OK, commercial use depends
+
+Check the terms of use of the model you're using.
+
+### Bias
+
+Synthetic data inherits the biases of the generator model. An LLM that underrepresents women in leadership roles will generate biased data in the same way.
+
+Check the **diversity and fairness** of your synthetic data.
+
+### Transparency
+
+Best practice: document in your model "X% of training data is synthetic, generated by [model], using [technique]."
+
+## Best practices
+
+- **Combine synthetic and real**. The best datasets mix 70% synthetic, 30% real.
+- **Use the best model for generation**. GPT-5.4, Claude Opus 4.6, or Gemini 3.1 Pro for the best quality. Quality in = quality out.
+- **Filter aggressively**. 50,000 good data points > 500,000 with garbage mixed in.
+- **Diversify generation prompts**. Not the same prompt 50,000 times.
+- **Validate with humans**. At least 10% sampling.
+- **Document**. Which model, which technique, which filters, how much synthetic vs real.

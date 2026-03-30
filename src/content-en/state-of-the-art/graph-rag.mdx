@@ -1,0 +1,115 @@
+---
+title: "Graph RAG: Knowledge Graphs"
+description: "Graph RAG combines traditional RAG with knowledge graphs to capture relationships between entities and answer complex multi-hop questions."
+---
+
+## The Problem: Some Questions Require Connecting the Dots
+
+Imagine someone asks you: "What are the suppliers of companies that had legal issues in 2024?"
+
+With classic RAG, you search for passages similar to this question in your vector database. But the problem is that the answer doesn't exist in **any single document**. You need to **combine** information scattered across multiple sources:
+- One document talks about company X and its legal issues
+- Another document lists company X's suppliers
+- No document directly says "here are the suppliers of company X that had legal issues"
+
+Vector RAG searches for passages that **resemble** the question. But here, you need to **navigate between connected entities**. That's exactly what **Graph RAG** does: it builds a knowledge graph that captures the **relationships** between entities, then uses this graph to answer.
+
+<Callout type="info" title={"The Simple Idea"}>
+Instead of just searching for passages, create a graph: nodes (companies, people, concepts) connected by edges ("supplies to", "works for", "had an issue"). Retrieval becomes intelligent navigation through this network of relationships.
+</Callout>
+
+## How It Works
+
+### Step 1: Build the Graph from Documents
+
+This is the most expensive phase. For each document:
+1. An LLM extracts the **entities**: people, companies, locations, concepts, dates
+2. The same LLM identifies the **relationships** between these entities: "X supplies Y", "Z works at W"
+3. You create the nodes and edges in a graph (typically Neo4j or NetworkX)
+
+**Company A** &rarr; *supplies to* &rarr; **Company B** &rarr; *legal issue* &rarr; **Incident 2024**
+
+The result: a navigable structure that explicitly encodes the connections that vector RAG would have to guess.
+
+### Step 2: Search Intelligently
+
+When someone asks "suppliers of companies with legal issues":
+1. Identify the entities mentioned in the question
+2. Find the corresponding nodes in the graph
+3. Traverse the relevant edges (supplier → company → legal issue)
+4. Collect information along the path
+5. Return this enriched context to the LLM to generate the answer
+
+This is **multi-hop reasoning**: jumping from entity to entity by following relationships. Something cosine similarity doesn't know how to do.
+
+
+
+## The Microsoft Approach: Hierarchy and Communities
+
+Microsoft published a Graph RAG implementation that adds two clever ideas:
+
+**Community Detection**: real graphs are often massive. The Leiden algorithm detects **communities** — clusters of strongly interconnected nodes. Each community receives an LLM-generated summary. It's like automatically creating "chapters" in your knowledge base.
+
+Two search modes follow from this:
+- **Local Search**: for targeted questions ("What do we know about company X?") — explore the direct neighborhood of the node
+- **Global Search**: for synthesis questions ("What are the major themes of this corpus?") — aggregate community summaries
+
+<Callout type="paper" title="Global Search Excels at Synthesis">
+Classic vector RAG examines the 5-10 passages closest to the question. Graph RAG with Global Search sees the big picture by synthesizing entire themes from community summaries. It's the difference between reading 5 random pages from a book and reading the table of contents with summaries of each chapter.
+</Callout>
+
+## Simple Code with LangChain + Neo4j
+
+```python
+from langchain_community.graphs import Neo4jGraph
+from langchain.chains import GraphCypherQAChain
+
+graph = Neo4jGraph(url="bolt://localhost:7687",
+                   username="neo4j",
+                   password="password")
+
+chain = GraphCypherQAChain.from_llm(
+    llm=ChatOpenAI(model="gpt-4"),
+    graph=graph,
+    verbose=True,
+)
+result = chain.invoke(
+    "Suppliers linked to sanctioned companies?"
+)
+```
+
+What happens under the hood: the LLM translates the question into a Cypher query (the SQL of graphs), Neo4j executes the query, and the LLM formulates the answer from the results.
+
+## The Real Cost: Construction and Maintenance
+
+Entity and relationship extraction requires passing **every document** through the LLM. That's the entry price, and it's not negligible:
+
+| Size | Docs | Cost (GPT-4) | Time |
+|---|---|---|---|
+| Small | 100 | ~$5 | 30 min |
+| Medium | 1,000 | ~$50 | 5h |
+| Large | 10,000 | ~$500 | 50h |
+
+And it's not a one-time cost: when documents change, the graph must be updated. New nodes, new edges, community summaries to recalculate. It's an ongoing investment.
+
+<Callout type="warning" title="Ongoing Maintenance">
+The knowledge graph isn't a "build once, use forever" thing. Documents evolve, relationships change, new entities appear. Plan for an automated update pipeline, or the graph will quickly become obsolete.
+</Callout>
+
+## When to Use It
+
+**Graph RAG is justified if:**
+- Your questions are **multi-hop** (traversing multiple relationships to answer)
+- You need **global synthesis** over a large corpus
+- The domain is relational by nature: compliance, audit, supply chain, org charts
+
+**Classic vector RAG is enough if:**
+- Questions are factual and direct ("What is the refund policy?")
+- The corpus doesn't have complex relationships between entities
+- Budget is tight (vector RAG costs a fraction of Graph RAG)
+
+<Callout type="tip" title="Hybrid Approach Often Better">
+In practice, a smart router decides on a case-by-case basis: direct, factual question → vector RAG (fast and inexpensive). Relational or synthesis question → Graph RAG (slower but more complete). It's the best of both worlds.
+</Callout>
+
+Graph RAG is the natural evolution of RAG for complex use cases. The entry cost is real, but for questions that require navigating between connected entities, no other approach offers the same quality of answers.

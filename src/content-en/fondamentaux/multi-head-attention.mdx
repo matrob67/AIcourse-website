@@ -1,0 +1,185 @@
+---
+title: "Multi-head attention: why and how"
+description: "Multiple simultaneous viewpoints: understanding why a single attention head isn't enough."
+---
+
+## The problem: one pair of glasses isn't enough
+
+Imagine you're wearing **a single pair of glasses** to analyze a text. These glasses show you only one aspect of meaning: maybe grammar, maybe semantics, maybe just the relative positions of words. You see one thing, but you're blind to the rest.
+
+That's exactly the problem with a single attention head. Take the sentence "I'm going to the bank":
+- **Grammatical relationship**: "going" is the verb, "bank" is the prepositional complement
+- **Semantic relationship**: "bank" = financial institution (not the riverbank)
+- **Positional relationship**: "bank" is at the end of the sentence, after the preposition "to"
+
+A single attention head is forced to compress all this information into a single set of attention scores. In practice, it ends up capturing only one type of relationship and ignoring the others. But language is inherently multidimensional. To properly understand a text, you need to simultaneously analyze grammar, meaning, position, coreferences, and many other aspects.
+
+The solution: **multi-head attention**. Instead of a single pair of glasses, imagine 8 specialized pairs working in parallel:
+- Pair 1: sees subject-verb-object relationships
+- Pair 2: sees coreferences (when "he" refers to "cat")
+- Pair 3: sees adjective-noun relationships
+- Pairs 4-8: other linguistic patterns
+
+You look through all 8 pairs **simultaneously**, then merge the 8 perspectives into one rich and complete understanding.
+
+
+
+<Callout type="info" title="Why the glasses metaphor works well">
+Each pair of glasses (attention head) transforms words into its own "vision space" via its own projection matrices. The same word appears differently to each head, exactly like different glasses show you different aspects of the same object. The final fusion combines all these perspectives.
+</Callout>
+
+## How it works: divide and conquer
+
+The idea is simple: instead of one huge attention head working in the full space, you create several small heads, each working in a **reduced subspace**.
+
+Take the original Transformer: the representation size is $d_{model} = 512$.
+
+With 8 attention heads:
+- Each head works in a space of only 512 / 8 = **64 dimensions**
+- But the **8 heads operate in parallel**
+
+For each head $i$ (from 1 to 8), independent projections are applied:
+
+$$
+Q_i = \text{word} \times W_{Q_i} \quad (64 \text{ dimensions})
+$$
+
+$$
+K_i = \text{word} \times W_{K_i} \quad (64 \text{ dimensions})
+$$
+
+$$
+V_i = \text{word} \times W_{V_i} \quad (64 \text{ dimensions})
+$$
+
+$$
+\text{result}_i = \text{Attention}(Q_i, K_i, V_i)
+$$
+
+Each head has its **own** matrices $W_Q$, $W_K$, $W_V$. This is essential: it's these different matrices that allow each head to specialize on a different type of relationship. Head 1 learns to project words in a way that highlights grammatical links, head 2 projects differently to highlight coreferences, etc.
+
+Then, the results from all 8 heads are **concatenated** and projected by an output matrix:
+
+$$
+\text{Result}_{final} = \text{Concat}(\text{result}_1, \text{result}_2, \ldots, \text{result}_8) \times W_{output}
+$$
+
+The matrix $W_{output}$ learns to intelligently combine the 8 perspectives into a coherent final representation.
+
+### The secret: identical cost
+
+Here's what makes multi-head attention particularly elegant: **the computational cost is identical** to a single head.
+
+8 heads x 64 dimensions = exactly the same volume of computation as 1 head x 512 dimensions.
+
+You're simply dividing the work among 8 "specialized workers" instead of entrusting it to a single "generalist". **Zero overhead.** But in exchange, you get 8 different perspectives instead of one. It's a reorganization of computation, not an addition.
+
+<Callout type="tip" title="A remarkably efficient design">
+This is an example of genius in network architecture design. You get a much richer representational capacity without paying the slightest additional cost in computation or memory. Just an intelligent division of labor.
+</Callout>
+
+
+
+## What each head actually learns
+
+This isn't just theoretical intuition. Researchers have visualized the attention matrices of each head in trained models, and the results confirm the specialization.
+
+**"Subject-verb" head**: when it processes a verb, it gives the most attention to the sentence's subject.
+- "The cat eats the mouse": "eats" looks at "cat", "mouse" also looks at "eats"
+
+**"Coreference" head**: it follows the links between pronouns and their antecedents.
+- "The cat sleeps. It purrs.": "it" gives almost all its attention to "cat"
+
+**"Local" head**: attention concentrated on the 2-3 immediate neighboring words.
+- Each word mostly looks at its direct neighbors, capturing the local structure of the sentence
+
+**"Copy" head**: particularly useful in translation, it identifies when a token should be copied as-is.
+- "Paris" in the source sentence looks at "Paris" in the target (proper nouns don't get translated)
+
+**Remaining heads**: mixed patterns, harder to interpret, but capturing regularities that humans don't easily formalize.
+
+### Redundancy: a quality assurance
+
+Fascinating observation: you can **remove** certain heads from a trained model without catastrophic loss of performance. There's redundancy between heads. But this redundancy isn't waste: it's **insurance**. If a head learns poorly or captures an unhelpful pattern, the others compensate. It's like having redundant systems in an airplane: most of the time, it's "useless", but the day a system fails, the others take over.
+
+## Modern optimizations: the KV cache problem
+
+Multi-head attention has an important practical problem during **inference** (generating text token by token). At each newly generated token, the model must recompute attention over all previous tokens. To avoid recomputing everything each time, we keep the already-computed Keys and Values in memory: this is the **KV cache**.
+
+The problem: for a long sequence (128k tokens) with 32 heads, each having its own K and V, the KV cache consumes an enormous amount of GPU RAM. It's often the bottleneck during inference, not the computation itself.
+
+Recent models have found elegant solutions:
+
+### GQA: Grouped Query Attention
+
+Instead of each head having its own K and V, heads are grouped and **share** K and V within each group.
+
+Concrete example: 8 Query heads, but only 2 sets of K/V:
+- Heads 1-4 share the same set of K, V
+- Heads 5-8 share another set of K, V
+
+Each head keeps its own Queries (and therefore its own "perspective"), but shares Keys and Values with its group. Result: the **KV cache is 4 times smaller**, with a nearly imperceptible loss of performance.
+
+**Models using GQA**: LLaMA 2/3, Mistral, Gemma, Qwen -- essentially all modern LLMs (Large Language Models).
+
+### MQA: Multi-Query Attention
+
+The extreme case: **all heads share a single set of K and V**. Each head has its own Queries but uses the same Keys and Values.
+
+Result: **KV cache reduced by a factor of 8** (or more). Ultra-fast inference. The tradeoff is a slight measurable performance drop on certain benchmarks.
+
+**Models using MQA**: PaLM, Falcon
+
+### Comparison
+
+| Variant | K/V per head | KV cache memory | Performance |
+|---|---|---|---|
+| MHA (original) | 1 set per head | Maximum | Excellent |
+| GQA | Shared per group | 4-8x less | Excellent (nearly identical) |
+| MQA | 1 globally shared set | 8-32x less | Good (slight drop) |
+
+GQA is today the **best compromise** and has established itself as the de facto standard: almost no quality loss, but considerable memory savings that allow serving models on less expensive GPUs or processing longer sequences.
+
+## Simplified code (pseudo-Python)
+
+```python
+class MultiHeadAttention:
+    def __init__(self, d_model, num_heads):
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+
+        self.W_Q = Linear(d_model, d_model)
+        self.W_K = Linear(d_model, d_model)
+        self.W_V = Linear(d_model, d_model)
+        self.W_O = Linear(d_model, d_model)
+
+    def forward(self, x):
+        # Projections and reshape
+        Q = self.W_Q(x).reshape(batch, seq, self.num_heads, self.d_k)
+        K = self.W_K(x).reshape(batch, seq, self.num_heads, self.d_k)
+        V = self.W_V(x).reshape(batch, seq, self.num_heads, self.d_k)
+
+        # Per-head attention
+        scores = (Q @ K.transpose(-1, -2)) / sqrt(self.d_k)
+        weights = softmax(scores, dim=-1)
+        output = weights @ V
+
+        # Concatenate and project
+        output = output.reshape(batch, seq, d_model)
+        return self.W_O(output)
+```
+
+## Why this matters
+
+Multi-head attention is the central component that gives the Transformer its ability to understand language in depth. Without it, the model would be limited to capturing a single type of relationship between words. With it, each word simultaneously receives 8, 32, or even 128 different analyses that are then fused into a rich representation.
+
+It's also a model of **elegant AI design**: rather than adding complexity and cost, we reorganize existing computation to obtain much more representational diversity. This principle of "dividing work without increasing cost" appears in many modern architectural innovations.
+
+## Key takeaways
+
+1. **Multiple heads** = multiple perspectives in parallel on the same data
+2. Each head has its **own matrices W_Q, W_K, W_V** (specialization)
+3. Outputs are **concatenated** and reprojected via W_O
+4. **Identical cost** to a single head (reorganization, not addition)
+5. Heads spontaneously learn distinct roles: **grammar, semantics, position, coreference**
+6. **GQA** is the modern standard optimization that massively reduces the KV cache

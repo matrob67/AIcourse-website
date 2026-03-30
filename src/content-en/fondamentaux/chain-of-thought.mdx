@@ -1,0 +1,124 @@
+---
+title: "Chain-of-Thought Prompting"
+description: "Step-by-step reasoning in LLMs: chain-of-thought, zero-shot CoT, self-consistency, and their theoretical foundations."
+---
+
+## Making an LLM Reason
+
+LLMs are trained to predict the next token. This mechanism works remarkably well for generating fluent text, but it has an Achilles' heel: **reasoning**. Without a special technique, the model has to produce its answer directly, in a single mental "jump," with no intermediate thinking step. It's like asking someone to solve $347 \times 28$ in their head, without scratch paper -- even a smart person will get it wrong.
+
+**Chain-of-thought** (CoT) prompting solves this problem elegantly by giving the model "scratch paper": you ask it (or show it by example) to spell out its reasoning step by step before giving its final answer. It's one of the most powerful and best-studied prompt engineering techniques.
+
+<ArxivLink id="2201.11903" title="Chain-of-Thought Prompting Elicits Reasoning in Large Language Models (Wei et al., 2022)" />
+
+
+
+## The Foundational Paper
+
+In January 2022, Wei et al. from Google Brain published a paper whose concept is strikingly simple, but whose implications are profound. Their discovery: by adding a few examples of step-by-step reasoning in the prompt (few-shot CoT), LLM (Large Language Model) performance on reasoning tasks increases dramatically -- sometimes by 2 to 3 times on certain benchmarks.
+
+### The Classic Example
+
+**Without chain-of-thought:**
+
+> **Q**: Roger has 5 tennis balls. He buys 2 cans of 3 balls each. How many balls does he have now?
+> **A**: The answer is 11.
+
+**With chain-of-thought:**
+
+> **Q**: Roger has 5 tennis balls. He buys 2 cans of 3 balls each. How many balls does he have now?
+> **A**: Roger starts with 5 balls. 2 cans of 3 balls make $2 \times 3 = 6$ balls. $5 + 6 = 11$. The answer is 11.
+
+By providing examples with detailed reasoning, the model learns to produce its own chains of reasoning for new questions.
+
+<Callout type="paper" title="Wei et al.'s Results">
+On the GSM8K benchmark (elementary school math problems), CoT increases PaLM-540B's performance from 18% to 57%. On other reasoning tasks (logic, deduction, strategy), improvements are equally significant. The effect is strongest when the task requires multiple reasoning steps.
+</Callout>
+
+
+## Why It Works
+
+CoT's effectiveness is explained by three complementary mechanisms:
+
+### More Compute at Inference
+
+This is the most fundamental explanation. Each generated token requires a full pass through all the Transformer's layers -- that's **compute**. By generating a 50-token reasoning chain before the answer, the model performs 50 times more computation than by directly giving the answer in 1 token. CoT converts **inference time** (more tokens = more time) into **reasoning quality**. It's an explicit trade-off: you pay in latency and token cost, you gain in accuracy.
+
+### Decomposition into Sub-problems
+
+Intermediate steps break a complex problem into simpler sub-problems. To solve "Marie has 3 times as many marbles as Pierre, and Pierre has 5 more than Luc who has 8," the model doesn't need to calculate everything at once. It can proceed step by step: "Luc has 8 marbles, Pierre has 8+5=13, Marie has 13x3=39." Each step requires only elementary reasoning that the model handles perfectly.
+
+### Externalizing Working Memory
+
+Without CoT, the model must perform all calculations "internally" in a single forward pass. Intermediate results are stored in activation vectors, where they can degrade or interfere with each other. With CoT, intermediate results are **externalized in text**: the model writes "Luc has 8 marbles," and when it needs to calculate Pierre's quantity, it can *re-read* this result in its context. It's like using scratch paper instead of keeping everything in your head.
+
+<Callout type="info" title="The Transformer's Working Memory">
+A Transformer has limited "working memory": information must be encoded in activation vectors (typical dimension: 4,096 to 8,192) and propagated through the layers. This is a bottleneck for complex reasoning. CoT circumvents this limit by using the generated text as an **unlimited external memory** (limited only by the context window).
+</Callout>
+
+## Zero-shot Chain-of-Thought
+
+Shortly after Wei et al.'s paper, Kojima et al. (2022) made a surprising discovery: simply adding the phrase **"Let's think step by step"** at the end of the prompt triggers chain reasoning, without any examples.
+
+> **Q**: A store sells apples at $2 each and oranges at $3. Marie buys 4 apples and 3 oranges. How much does she spend?
+> Let's think step by step.
+
+The model then spontaneously generates detailed reasoning. This **zero-shot CoT** approach is remarkable because it requires no examples -- a simple instruction is enough.
+
+<Callout type="tip" title="Variations of the Magic Phrase">
+Several phrasings work: "Let's think step by step," "Let's reason methodically," "Let's detail the reasoning," "Before answering, let's analyze the problem." The key is to signal to the model that it should spell out its thinking. Effectiveness varies across models and languages.
+</Callout>
+
+## Self-consistency: The Wisdom of Crowds
+
+**Self-consistency** (Wang et al., 2022) further improves CoT by exploiting a simple but powerful idea: the diversity of reasoning paths. The principle:
+
+1. Generate **N different reasoning chains** for the same problem (using sampling with temperature > 0, so each attempt explores a different path)
+2. Extract the final answer from each chain
+3. Take the **majority answer** (majority vote)
+
+The intuition is the same as a "jury": if 8 out of 10 reasoning paths arrive at the answer "39," and the other 2 arrive at "42" and "37," the answer "39" is probably correct. Reasoning errors, being random and different from one chain to another, are drowned out by the majority vote.
+
+Self-consistency brings significant improvements over simple CoT (often +5 to 15 points on reasoning benchmarks), but at the cost of inference multiplied by N (typically N = 5 to 40). It's an explicit compute/quality trade-off.
+
+## The Limits of Chain-of-Thought
+
+### Model Size
+
+CoT is only effective with sufficiently large models. Below approximately 10 billion parameters, generated reasoning chains are often incoherent or incorrect, and CoT can even degrade performance compared to direct prompting. This is one of the capabilities considered **emergent** -- they appear suddenly beyond a certain size threshold.
+
+### Reasoning Errors
+
+CoT improves reasoning but doesn't eliminate errors. Models can:
+- Make calculation mistakes in the middle of the chain
+- Follow logically valid reasoning but based on false premises
+- Get "lost" in long reasoning chains
+- Produce reasoning that appears correct but is subtly wrong (**reasoning hallucinations**)
+
+<Callout type="warning" title="Plausible but Wrong Reasoning">
+One of CoT's risks is that it makes errors more convincing. Step-by-step reasoning that leads to a wrong answer can seem very plausible to a human reader. The presence of detailed reasoning does not guarantee the correctness of the conclusion.
+</Callout>
+
+### Non-decomposable Tasks
+
+Some tasks don't naturally lend themselves to sequential reasoning. Intuition, complex pattern recognition, or aesthetic judgments don't necessarily benefit from CoT.
+
+## Recent Developments
+
+### Tree-of-Thought and Graph-of-Thought
+
+**Tree-of-Thought** (Yao et al., 2023) generalizes CoT by exploring multiple reasoning branches simultaneously, with the ability to backtrack when a branch proves unproductive. Graph-of-Thought goes even further by allowing connections between different branches.
+
+### Test-time Compute: CoT Built into the Model
+
+Models like o1 and o3 (OpenAI), and Claude's "thinking" modes (Anthropic), represent the natural evolution of CoT: chain reasoning is integrated directly into the model's inference process, rather than being an external prompting technique. The model has been trained (via RLHF -- Reinforcement Learning from Human Feedback -- or similar techniques) to automatically allocate more "internal reflection" tokens for difficult problems, without explicit instruction from the user. This is the concept of **test-time compute**: investing more computation at generation time to get better answers.
+
+### Process Reward Models: Evaluating Each Step
+
+Instead of judging only the final answer (outcome reward), **process reward models** (PRM) evaluate each reasoning step individually. The idea: if step 3 of a 7-step reasoning contains an error, a PRM can detect it immediately, rather than waiting until the end and finding that the answer is wrong. Combined with search strategies (beam search over reasoning chains), this allows errors to be corrected at the exact point where they occur.
+
+## CoT in Everyday Practice
+
+For a practitioner, chain-of-thought is probably the most universally useful prompt engineering tool. Its applications are vast: solving math problems, logical analysis, code debugging, structured decision-making, writing plans, analyzing complex documents -- any task that requires multi-step reasoning.
+
+The recommendation is simple and pragmatic: **for any task involving reasoning, ask the model to show its steps**. A simple "Think step by step before answering" is often enough. The extra cost in tokens (and therefore money) is largely offset by the improvement in quality and reliability of responses. It's the best prompt engineering investment you can make.

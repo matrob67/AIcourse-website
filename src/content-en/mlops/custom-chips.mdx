@@ -1,0 +1,112 @@
+---
+title: "Alternative Accelerators: Groq, Cerebras, Graphcore"
+description: "Beyond NVIDIA GPUs: radically different chips for ultra-fast inference and simplified training."
+---
+
+## The challengers' dream: beating NVIDIA on its own turf
+
+NVIDIA GPUs dominate AI, but several startups have made **radical architectural bets**. Their strategy isn't to clone NVIDIA (impossible given CUDA's head start), but to dominate specific niches where a fundamentally different architecture can shine: ultra-fast inference or training without the complexity of multi-GPU parallelism.
+
+Think of it this way: NVIDIA built the ultimate Swiss Army knife. The challengers are trying to build specialized tools that beat the Swiss Army knife at one specific task.
+
+<Callout type="info" title="A huge but ultra-concentrated market">
+The AI chip market represents over $50 billion in 2024. NVIDIA captures 80-90% of it. The alternatives share the rest. But even 10-20% of a $50 billion market is a considerable playing field, and enough to justify radical approaches.
+</Callout>
+
+## Groq LPU: deterministic and ultra-fast inference
+
+### The concept: eliminate all non-determinism
+
+Groq's **LPU** (Language Processing Unit) starts from a provocative question: why are GPUs so complex? Dynamic caches, branch prediction, runtime scheduling... all of this creates unpredictability. Groq's answer: **eliminate all of it and plan everything at compile time**.
+
+The Groq compiler analyzes your model, plans every operation, every data movement, every clock cycle. Nothing is decided at runtime. It's like the difference between improvising a car trip (classic GPU, adapting to traffic in real time) and following a precisely planned itinerary where every light is green by design (Groq).
+
+### Actual architecture
+
+The chip's core is called the **Tensor Streaming Processor** (TSP). As the name suggests, data flows through a linear pipeline, never going backward. Imagine a perfectly orchestrated factory conveyor belt: each piece arrives at exactly the right station, at exactly the right time.
+
+On the memory side, Groq makes a radical choice: **only on-chip SRAM**, 230 MB integrated directly on the chip, and no external HBM. Why does this matter? SRAM is much faster than HBM (the high-bandwidth memory used by GPUs), but it's expensive and takes up space. Groq accepts this tradeoff because it also eliminates the entire cache hierarchy: **zero caches**, everything is pre-planned by the compiler. The result: approximately 750 TOPS in INT8, with ultra-low latency and most importantly **predictable** latency. Where a classic GPU can vary from one call to the next depending on cache state, every Groq request takes exactly the same time.
+
+### The result that shook the industry
+
+Groq demonstrated over 500 tokens/second on Llama 2 70B. That's spectacular. Time to first token is 100-500ms instead of several seconds on a classic GPU. Why such speed? The complete model fits in distributed SRAM across the chips. Zero HBM memory bottleneck, which is usually THE limiting factor of LLM inference.
+
+<Callout type="tip" title="The tradeoff to understand">
+To fit a 70B parameter model in SRAM, you need to **distribute it across hundreds of LPUs**. Each chip only has 230 MB. This is an approach that requires a huge number of chips per model. And it's optimized exclusively for inference, not training. The niche is clear: serving LLM responses as fast as possible.
+</Callout>
+
+## Cerebras: the full-wafer bet
+
+Cerebras made probably the **boldest choice** in semiconductor history: using an **entire silicon wafer** as a single gigantic chip.
+
+### The mind-blowing numbers
+
+To understand the scale of this bet, let's compare. An NVIDIA H100 GPU is already an impressive chip: 80 billion transistors on about 800 mm2. Cerebras's **WSE-3** (2024)? 4 trillion transistors on 46,225 mm2, the full surface of a 300mm-diameter silicon wafer. That's literally **57 times larger** than an H100.
+
+This gigantic surface allows integrating 900,000 AI-optimized cores and most importantly **44 GB of on-chip SRAM**. To put that number in perspective, a classic GPU has about 50 MB of SRAM. Cerebras offers nearly 1,000 times more. And all these cores communicate with each other at 214 Pb/s of internal bandwidth. You don't need to go through slow external memory: each core talks directly to its neighbors at insane speeds.
+
+### Architecture: an interconnected grid of cores
+
+Forget the classic CPU/GPU hierarchy. The WSE is a **2D grid of cores**, each with its own local SRAM memory, all connected by an ultra-fast communication fabric. Data flows directly between neighboring cores, without going through a shared central memory.
+
+It's like going from a highway with a single central tollbooth (classic GPU where everything goes through HBM) to a network of local roads where each neighborhood communicates directly with its neighbors (WSE).
+
+<Callout type="paper" title={"The fundamental advantage of wafer-scale"}>
+The WSE eliminates the memory bottleneck that plagues GPUs. 44 GB of SRAM with hundreds of PB/s of bandwidth = a radically superior compute-to-memory ratio. Models that fit in this SRAM are served at speeds that are simply impossible on other architectures.
+</Callout>
+
+### Concrete use cases
+
+The most striking advantage of Cerebras is **training simplicity**. When you train a large model on classic GPUs, you have to slice the model into pieces and spread it across 50, 100, or even thousands of GPUs. That requires configuring **data parallelism**, **tensor parallelism**, **pipeline parallelism** -- in short, complex and fragile distributed engineering. With a CS-3 system, the chip is simply large enough to contain the entire model. You launch your training as on a single machine, without all that plumbing.
+
+For **high-performance inference**, the reasoning is the same: if your model fits in the 44 GB of on-chip SRAM, it's served at speeds no other architecture can match, because you completely eliminate the external memory bottleneck.
+
+## Graphcore IPU: massively parallel computation
+
+The **IPU** (Intelligence Processing Unit) is Graphcore's processor, a British startup. Its architecture is based on the **BSP** (Bulk Synchronous Parallel) model, fundamentally different from GPUs.
+
+### Distinctive architecture
+
+The IPU Mk2 is composed of 1,472 independent **tiles**, each capable of executing 6 threads in parallel. Together, these tiles have approximately 900 MB of distributed on-chip SRAM and communicate via an **all-to-all fabric**: each tile can send data to any other directly.
+
+But the most fundamental difference from GPUs lies in the execution model. GPUs use **SIMT** (Single Instruction, Multiple Threads): all threads execute the same instruction at the same time, just on different data. This is efficient for regular operations like matrix multiplications, but rigid when your computation has conditional branches. The IPU uses the **MIMD** (Multiple Instruction, Multiple Data) model: each tile can execute completely different instructions. This makes it much more flexible for models with irregular structures, such as **graph neural networks** or dynamically structured models.
+
+### The BSP model: computation and communication in alternating phases
+
+BSP works in well-defined cycles. **Phase 1 - Compute**: each tile works independently on its local data. **Phase 2 - Communication**: tiles exchange results via the fabric. **Phase 3 - Synchronization**: an explicit barrier ensures everyone is ready before the next cycle.
+
+This is very different from GPUs, where compute and communication overlap more chaotically. The BSP advantage: predictability. The disadvantage: time lost in synchronization.
+
+<Callout type="warning" title={"Graphcore: innovation vs. market reality"}>
+Technically, the IPU is an innovative and elegant architecture. But the product encountered significant commercial difficulties. Graphcore was acquired by SoftBank in 2024, and the future of the IPU platform remains uncertain. It's a stark illustration of the power of the CUDA ecosystem: even a technology that's superior on paper can fail against the massive software dependency NVIDIA has created.
+</Callout>
+
+## Other notable challengers
+
+### AMD MI300X
+
+AMD is the **main GPU challenger** to NVIDIA, and for good reason: the MI300X uses the same SIMT architecture, which maximizes compatibility with existing code. Its major advantage? **192 GB of HBM3**, the largest GPU memory on the market. In practice, this means you can load much larger models on a single card without having to split them across multiple GPUs. On the software side, AMD offers **ROCm**, an ecosystem that provides a translation layer called HIP to convert CUDA code. It's not as mature as CUDA yet, but PyTorch and major frameworks support it increasingly well. If you're looking for a direct NVIDIA alternative without rewriting your code, this is the most natural choice.
+
+### Intel Gaudi 3
+
+Intel plays the **value-for-money** card. The Gaudi 3 packs **128 GB of HBM2e** and positions itself 30 to 40% below NVIDIA prices at comparable performance. Intel's argument is integration: you can combine Gaudi with Xeon CPUs to build complete solutions, from data preprocessing to inference, all within a unified Intel ecosystem with native PyTorch support. It's not the most exciting chip on paper, but for a company looking to reduce its AI bill without taking major risks, it's a credible option.
+
+### SambaNova SN40L
+
+SambaNova takes a different direction with a **reconfigurable dataflow** architecture: instead of having fixed hardware that executes software, the hardware itself reconfigures to match your model's structure. The most impressive result: up to **1.5 TB of memory** accessible per chip. This allows serving the largest existing models (including models with several hundred billion parameters) without any distribution, on a single system. It's an offering tailored for enterprise inference, when you want to deploy a massive model without the complexity of multi-GPU setups.
+
+## How to choose in practice
+
+The choice of an accelerator depends on your specific situation, and there's no universal answer. Here are the five questions to ask yourself.
+
+First, the **software ecosystem**. NVIDIA remains unbeatable thanks to CUDA and its 20 years of optimized libraries. If your code depends on CUDA (and it probably does), migrating to another platform has a real cost in engineering time and debugging. This is the hardest gap to bridge.
+
+Second, your **use case**. Are you doing pure inference with a minimal latency requirement? Look at Groq. Do you want to train a large model without the complexity of multi-GPU parallelism? Cerebras is built for that. Do you need a general-purpose solution that does everything well? NVIDIA or AMD remain the safe choices.
+
+Third, **budget**. AMD and Intel often position themselves 30 to 40% below NVIDIA at comparable performance. Across a fleet of hundreds of GPUs, that difference represents millions of dollars. The ROI can easily justify the migration effort.
+
+Fourth, **reducing lock-in**. Depending on a single chip vendor gives them enormous pricing power. Diversifying your accelerators, even partially, gives you negotiating leverage.
+
+Finally, **availability**. NVIDIA and AMD are available on all major cloud providers. Alternatives like Groq, Cerebras, or SambaNova have more limited availability, often through their own cloud platforms or specific partnerships.
+
+The market reality in 2024-2025: NVIDIA massively dominates for general use, and that dominance isn't going to disappear tomorrow. But for specific niches, the alternatives offer genuinely superior solutions. And their very existence pushes NVIDIA to innovate faster and moderate its prices, which benefits everyone.

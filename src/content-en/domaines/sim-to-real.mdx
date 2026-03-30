@@ -1,0 +1,96 @@
+---
+title: "Sim-to-Real: Isaac Sim, MuJoCo, and Habitat"
+description: "Transferring policies learned in simulation to the real world is a pillar of modern AI robotics. An overview of simulators and sim-to-real techniques."
+---
+
+## Why Simulation: A Million Trials Per Day vs a Few
+
+Collecting robotic data in the real world is **slow, expensive, and dangerous**. A physical robot can attempt a few hundred trials per day. Each failed attempt can damage the robot or its environment. In simulation: **millions of trajectories in a few hours**, in parallel on GPUs, with zero material risk.
+
+The most striking example: OpenAI's Dactyl robotic hand solved a Rubik's Cube after the equivalent of **13,000 years of experience** accumulated in simulation. Collecting this experience in the real world would have been physically impossible. **Sim-to-real transfer** is the pillar that makes all of this useful: train in simulation, then deploy the learned policy on a physical robot.
+
+
+
+<Callout type="info" title={"The Scale Enabled by Simulation"}>
+13,000 years of equivalent experience for a single robot. That's physically impossible in the real world, even with an army of robots. Simulation provides the data scale needed to train robust policies. Without simulation, most recent advances in AI robotics simply would not have happened.
+</Callout>
+
+## The Main Simulators
+
+### NVIDIA Isaac Sim
+
+NVIDIA's flagship platform, built on the **Omniverse** engine:
+- **Photorealistic rendering**: real-time ray-tracing producing images nearly indistinguishable from reality. This is important for training vision models that will need to work in the real world
+- **GPU-accelerated physics**: thousands of environments run in parallel thanks to PhysX, the GPU-optimized physics engine. You can train 4,096 robots simultaneously on a single GPU
+- **Isaac Lab**: the integrated RL training framework, designed for robotic manipulation and locomotion
+- **ROS integration**: native connection with Robot Operating System, the robotics industry standard
+- **Digital twins**: faithful replication of real environments (factories, warehouses) for testing policies before deployment
+
+<Callout type="tip" title="Isaac Lab for Foundation Models">
+Isaac Lab is specifically designed for training robotic foundation models. It supports massive RL (thousands of parallel agents), imitation learning, and VLA model evaluation. It's the tool of choice for cutting-edge AI robotics research.
+</Callout>
+
+### MuJoCo (Multi-Joint dynamics with Contact)
+
+The reference simulator for academic RL robotics research:
+- Developed by Emo Todorov, acquired by DeepMind in 2022, then made **free and open-source**. A move that democratized research
+- **High-fidelity physics**: precise modeling of contacts, friction, and mechanical constraints. Contact simulation is notoriously difficult, and MuJoCo is recognized as one of the best
+- **Speed**: ultra-fast even on CPU, making it ideal for RL requiring millions of episodes. No expensive GPU needed to get started
+- **Numerical stability**: its integrator is particularly robust in the face of complex contacts and impulsive forces
+- **Academic standard**: the vast majority of RL robotics publications use MuJoCo. If you read a paper on locomotion via RL, chances are the experiments were run on MuJoCo
+
+### Habitat (Meta)
+
+Specialized in **navigation and interaction** in indoor environments:
+- Built from 3D scans of real apartments and houses, not artificial CAD models. The environment genuinely looks like a human interior
+- **Habitat 3.0**: introduces virtual humans that interact with robots, enabling training of socially appropriate behaviors
+- **Social navigation**: the robot learns to navigate in the presence of humans, not to bump into them, to politely go around them
+- **Rearrangement**: object tidying tasks in a house (putting away groceries, clearing the table)
+
+**Other simulators**: **PyBullet** (lightweight and free, good for prototyping), **Gazebo** (integrated with ROS, industrial robotics standard), **SAPIEN** (specialized in articulated objects like drawers and doors), **Genesis** (new, uses generative AI to create simulation environments).
+
+## The Reality Gap: The Great Unsolved Challenge
+
+The **reality gap** is the difference between what happens in simulation and what happens in the real world. Four main sources of divergence:
+
+- **Imperfect physics**: contacts, friction, and deformations are never perfectly modeled. An object that slides in simulation doesn't slide exactly the same way in reality
+- **Different visuals**: even with ray-tracing, simulation images subtly differ from reality (reflections, textures, ambient lighting)
+- **Imprecise robot dynamics**: real motors have delays, mechanical play, wear, and nonlinearities that simulation doesn't capture
+- **Unpredictable objects**: a wet, deformable, or worn object behaves differently from its idealized simulation model
+
+Concrete consequence: a policy that succeeds 95% in simulation can drop to 20% success in the real world if the reality gap isn't handled properly. That's a sobering number.
+
+<Callout type="warning" title={"The Classic Sim-to-Real Failure"}>
+A policy succeeding 95% in simulation can fail 80% of the time in the real world. Simulation is only useful if the transfer works. This is one of the most difficult and most important problems in modern robotics.
+</Callout>
+
+## Sim-to-Real Transfer Techniques
+
+### Domain Randomization: Preparing for Everything
+
+The idea is to **massively randomize** simulation parameters so the agent learns to be robust to all variations:
+- Random textures and colors on objects and backgrounds
+- Variable lighting (direction, intensity, color)
+- Perturbed physical parameters (friction multiplied or divided by 2, mass varied by 20%, modified stiffness)
+- Noise added to sensors and actuators (the position sensor has a random error, the motor doesn't go exactly where told)
+- Varied initial positions (the robot never starts in exactly the same place)
+
+The reasoning: if the agent works across all these extremely varied conditions, the real world is just one instantiation among thousands. The robot is prepared for everything, including reality.
+
+### Domain Adaptation: Adapting Representations
+
+Rather than randomizing blindly, you can **adapt** representations to bridge the gap:
+- **Sim-to-real via GANs**: using a generative network to transform simulation images into images that look like the real world, making visual appearance indistinguishable
+- **Feature alignment**: learning intermediate representations that are domain-invariant (that "see" the same thing in simulation and reality)
+- **Fine-tuning on real data**: refining the policy on a small number of trajectories collected on the real robot
+
+### System Identification: Tuning the Simulator
+
+Rather than making the robot robust to inaccuracies, you can **tune the simulator** to better match the real robot:
+- Measuring the real physical parameters of the robot (exact mass of each link, friction of each joint)
+- Automatic calibration of dynamic models through optimization
+- Creating precise digital twins that faithfully replicate the robot and its environment
+
+## Outlook
+
+The trend is toward combining all these approaches with foundation models. NVIDIA GR00T uses Isaac Sim to pre-train generalist robotic models that are then transferred to real robots. **Genesis** proposes automatically generating diverse simulation environments via generative AI, reducing the cost of synthetic data creation. Sim-to-real remains a fundamental challenge, but the tools to solve it are improving rapidly.

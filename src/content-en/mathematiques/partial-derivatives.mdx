@@ -1,0 +1,122 @@
+---
+title: "Partial derivatives and the Jacobian"
+description: "How to compute derivatives when a function depends on multiple variables, and how Jacobian and Hessian matrices structure optimization in deep learning."
+---
+
+## Functions of several variables
+
+So far, we've differentiated functions of a single variable: $f(x)$. But in ML, functions depend on **thousands** of variables simultaneously. The loss of a neural network depends on every weight, every bias, every parameter of the model. A GPT with 175 billion parameters defines a loss that lives in a 175-billion-dimensional space.
+
+Let's take a simple example: the temperature in a room, $T(x, y, z)$, depends on your position in 3D. If you move to the right, the temperature changes. If you go up, it changes too, but perhaps differently. The **partial derivative** measures how $T$ changes when you move in **one direction only** while staying fixed in all others.
+
+## The partial derivative
+
+The partial derivative of $f$ with respect to $x_i$ measures the rate of change of $f$ when you vary $x_i$ **while holding all other variables fixed**:
+
+$$\frac{\partial f}{\partial x_i} = \lim_{h \to 0} \frac{f(x_1, \ldots, x_i + h, \ldots, x_n) - f(x_1, \ldots, x_i, \ldots, x_n)}{h}$$
+
+The symbol $\partial$ (curly d) replaces the $d$ (straight d) to signal that you're differentiating with respect to one variable among several.
+
+### Concrete example
+
+Let $f(x, y) = x^2 y + 3xy^2$. The partial derivatives are:
+
+$$\frac{\partial f}{\partial x} = 2xy + 3y^2$$
+
+$$\frac{\partial f}{\partial y} = x^2 + 6xy$$
+
+To compute $\frac{\partial f}{\partial x}$, you treat $y$ as a constant and differentiate normally with respect to $x$. That's it. No new technique -- just the usual derivative while temporarily "forgetting" the other variables.
+
+### Analogy: the knobs on a blender
+
+Imagine a blender with two knobs: **speed** and **duration**. The consistency of the smoothie depends on both. The partial derivative with respect to speed tells you: "if I increase the speed without touching the duration, how does the consistency change?" It's the principle of **all else being equal** -- you isolate the effect of a single variable.
+
+## The gradient revisited
+
+The gradient is simply the **vector of all partial derivatives**:
+
+$$\nabla f(x_1, \ldots, x_n) = \begin{pmatrix} \frac{\partial f}{\partial x_1} \\ \frac{\partial f}{\partial x_2} \\ \vdots \\ \frac{\partial f}{\partial x_n} \end{pmatrix}$$
+
+Each component of the gradient indicates the sensitivity of $f$ to a given variable. If $\frac{\partial f}{\partial x_3}$ is very large, it means variable $x_3$ has a strong impact on $f$. If it's close to zero, modifying $x_3$ changes almost nothing.
+
+In ML, the gradient of the loss with respect to parameters gives a complete **sensitivity map**: for each weight in the network, you know how much the loss would change if you modified that weight. This information guides parameter updates during training.
+
+## The Jacobian matrix
+
+The gradient is for a function that returns a **scalar** (a single number). But what happens when the function returns a **vector**? For example, a neural network layer takes an input vector and produces an output vector.
+
+If $\mathbf{f} : \mathbb{R}^n \to \mathbb{R}^m$ is a function that takes $n$ inputs and produces $m$ outputs, the **Jacobian matrix** $J$ is the $m \times n$ matrix containing all partial derivatives:
+
+$$J = \begin{pmatrix} \frac{\partial f_1}{\partial x_1} & \frac{\partial f_1}{\partial x_2} & \cdots & \frac{\partial f_1}{\partial x_n} \\ \frac{\partial f_2}{\partial x_1} & \frac{\partial f_2}{\partial x_2} & \cdots & \frac{\partial f_2}{\partial x_n} \\ \vdots & \vdots & \ddots & \vdots \\ \frac{\partial f_m}{\partial x_1} & \frac{\partial f_m}{\partial x_2} & \cdots & \frac{\partial f_m}{\partial x_n} \end{pmatrix}$$
+
+Each row $i$ corresponds to an output $f_i$. Each column $j$ corresponds to an input $x_j$. The element $J_{ij}$ says: "how much does output $i$ change when you modify input $j$."
+
+### The Jacobian in deep learning
+
+When backpropagation traverses a layer of the network, it multiplies by the **Jacobian** of that layer. It's a generalization of the chain rule to vector functions:
+
+$$\frac{\partial \mathcal{L}}{\partial \mathbf{x}} = J^T \cdot \frac{\partial \mathcal{L}}{\partial \mathbf{y}}$$
+
+Where $\mathbf{y} = \mathbf{f}(\mathbf{x})$ is the layer output. You multiply the gradient "coming from above" ($\frac{\partial \mathcal{L}}{\partial \mathbf{y}}$) by the transpose of the Jacobian to get the gradient "propagated downward."
+
+In practice, you never build the full Jacobian (it would be enormous). Modern frameworks directly compute the **Jacobian-vector product** (JVP) or **vector-Jacobian product** (VJP), which is much more efficient.
+
+## The Hessian matrix
+
+The Jacobian captures **first derivatives**. The **Hessian** captures second derivatives: it measures the **curvature** of the function.
+
+For a scalar function $f : \mathbb{R}^n \to \mathbb{R}$, the Hessian is the $n \times n$ matrix:
+
+$$H = \begin{pmatrix} \frac{\partial^2 f}{\partial x_1^2} & \frac{\partial^2 f}{\partial x_1 \partial x_2} & \cdots & \frac{\partial^2 f}{\partial x_1 \partial x_n} \\ \frac{\partial^2 f}{\partial x_2 \partial x_1} & \frac{\partial^2 f}{\partial x_2^2} & \cdots & \frac{\partial^2 f}{\partial x_2 \partial x_n} \\ \vdots & \vdots & \ddots & \vdots \\ \frac{\partial^2 f}{\partial x_n \partial x_1} & \frac{\partial^2 f}{\partial x_n \partial x_2} & \cdots & \frac{\partial^2 f}{\partial x_n^2} \end{pmatrix}$$
+
+The Hessian is **symmetric** (under regularity conditions that are almost always met in practice). Its diagonal elements $\frac{\partial^2 f}{\partial x_i^2}$ measure curvature in the direction of $x_i$. Its off-diagonal elements $\frac{\partial^2 f}{\partial x_i \partial x_j}$ measure how the slope in the $x_i$ direction changes when you move in the $x_j$ direction.
+
+### Curvature and optimization
+
+Why does curvature matter? Imagine you're descending a hill. The gradient tells you which direction to descend, but not the **shape of the terrain**. Is it a narrow valley or a flat plateau? Curvature tells you that.
+
+- **Strong curvature** in a direction: the loss changes very fast, you need a small learning rate in that direction
+- **Weak curvature** in another: the loss changes slowly, you could use a larger learning rate
+
+This is the problem of **ill-conditioning**: when curvatures are very different across directions, a single learning rate is a poor compromise.
+
+### Eigenvalues of the Hessian
+
+The **eigenvalues** of the Hessian summarize the curvature in each principal direction:
+
+- All positive: you're at a **local minimum** (bowl)
+- All negative: you're at a **local maximum** (peak)
+- Mix of positive and negative: you're at a **saddle point** (mountain pass) -- in high dimensions, this is the most common case
+
+In high dimensions, true local minima are extremely rare. Critical points are almost always **saddle points**. This is a mathematical reality that has changed our understanding of optimization in deep learning.
+
+## Applications in ML
+
+### Adaptive learning rate
+
+Optimizers like **Adam**, **AdaGrad**, and **RMSProp** implicitly use curvature information. They maintain an estimate of the **gradient variance** for each parameter, which is related to the diagonal elements of the Hessian. A parameter whose gradient varies a lot (strong curvature) receives a smaller learning rate. A parameter whose gradient is stable (weak curvature) receives a larger learning rate.
+
+### Newton's method
+
+Newton's method directly uses the Hessian for optimization:
+
+$$\theta_{t+1} = \theta_t - H^{-1} \nabla \mathcal{L}(\theta_t)$$
+
+Instead of following the gradient with a fixed step, you use curvature to compute an **optimal** step. In theory, this is much faster than gradient descent. In practice, it's unusable in deep learning: for a model with $n$ parameters, the Hessian has $n^2$ elements. With a billion parameters, storing the Hessian would require $10^{18}$ numbers -- that's impossible.
+
+### Practical approximations
+
+Several compromises exist between pure gradient descent (first order) and Newton's method (second order):
+
+- **L-BFGS**: approximates the inverse Hessian from the history of gradients. Used for small models.
+- **Natural gradient**: uses the Fisher matrix (related to the Hessian) to account for the geometry of parameter space.
+- **K-FAC**: approximates the Hessian by blocks to make computation tractable on neural networks.
+
+## Key takeaways
+
+- The **partial derivative** measures the sensitivity of a function to one variable while holding all others fixed
+- The **gradient** is the vector of all partial derivatives -- it gives the direction of steepest ascent
+- The **Jacobian** generalizes the gradient to vector functions -- it's the matrix of all input/output partial derivatives
+- The **Hessian** captures curvature (second derivatives) -- it tells how the gradient itself varies
+- In deep learning, you never compute the full Hessian (too large), but adaptive optimizers like Adam approximate its diagonal elements
+- Critical points in high dimensions are almost always **saddle points**, not local minima

@@ -1,0 +1,97 @@
+---
+title: "Serving frameworks: vLLM, TGI, Triton, SGLang"
+description: "Comparison of the main LLM serving frameworks in production: vLLM, Text Generation Inference (TGI), NVIDIA Triton, and SGLang. Architecture, strengths, and use cases."
+---
+
+
+
+## The challenge: serving an LLM fast
+
+Running a model locally is easy: `model.generate()` and off you go. But in **production**, it's a different story. 100 users send requests at the same time, each wants a response in under 2 seconds, and your GPU has limited memory.
+
+Serving frameworks solve this problem by intelligently managing **GPU memory**, the request **queue**, **dynamic batching** (grouping multiple requests to process them in parallel), and **acceleration** via optimized kernels. Four solutions dominate the market.
+
+<Callout type="info" title="The choice depends on your context">
+vLLM for flexibility and community. TGI if you're in the Hugging Face ecosystem. Triton if you serve multiple heterogeneous models. SGLang if you're building complex agents.
+</Callout>
+
+## vLLM: the de facto standard
+
+vLLM, born at UC Berkeley, has become the most popular serving framework thanks to a key innovation: **PagedAttention**.
+
+The problem it solves: during inference, each request maintains a **KV cache** (the attention keys and values computed for previous tokens). Normally, this cache is a contiguous memory block. If a user comes in with a longer-than-expected context, you have to reallocate everything -- that's massive waste, like reserving a 100-seat room for every meeting, even if most only have 10 people.
+
+PagedAttention splits the KV cache into **small memory pages** (like an operating system manages RAM). Each request takes exactly the memory it needs, no more. Result: **2 to 4x more efficient** memory management, which allows serving more simultaneous requests.
+
+**Bonus**: prefix caching -- if 10 users ask questions about the same system document, the KV cache for that common prefix is computed once and shared.
+
+```bash
+vllm serve mistralai/Mistral-7B-v0.1 \
+    --tensor-parallel-size 2 \
+    --max-model-len 32768 \
+    --enable-prefix-caching
+```
+
+## TGI: Hugging Face simplicity
+
+TGI (Text Generation Inference) is Hugging Face's official server, written in Rust for performance and reliability.
+
+Its main asset: **deployment simplicity**. You have a Hugging Face model? A single Docker command and you have a production API. Zero configuration, zero headaches.
+
+```bash
+docker run --gpus all -p 8080:80 \
+    ghcr.io/huggingface/text-generation-inference:latest \
+    --model-id mistralai/Mistral-7B-v0.1 \
+    --num-shard 2
+```
+
+TGI automatically handles quantization, multi-GPU sharding, continuous batching, and exposes an OpenAI-compatible API. It's the shortest path between a model on the Hub and a production API.
+
+<Callout type="tip" title="For a first deployment">
+TGI = the fastest path from a Jupyter notebook to a production API. It doesn't cover 100% of advanced cases, but for 80% of deployments, TGI is more than enough. Start there.
+</Callout>
+
+## NVIDIA Triton: the enterprise platform
+
+Triton isn't specifically designed for LLMs -- it's NVIDIA's **general-purpose** serving platform. You can serve on the same server: an LLM (via TensorRT-LLM), embedding models, rerankers, image classifiers, detection models. Everything coexists.
+
+**Strengths**: native A/B testing, canary deployments, Prometheus metrics, model versioning, multi-backend support (TensorFlow, PyTorch, ONNX, TensorRT).
+**Weakness**: complex configuration (XML/protobuf), steep learning curve, not specifically optimized for the LLM developer experience.
+
+Use Triton if you have a **complete ecosystem** of ML models to serve and a dedicated MLOps team. Otherwise, it's overkill.
+
+## SGLang: the challenger for agents
+
+SGLang is the newcomer, also created at Berkeley, optimized for **structured and agentic workflows**.
+
+Its innovation: **RadixAttention**, a KV cache management system based on a Radix tree. Concretely, when an agent makes 10 successive LLM calls with overlapping prefixes, RadixAttention intelligently reuses already-done computations. For multi-turn workflows, this is often more efficient than vLLM's PagedAttention.
+
+Another asset: **native structured generation**. If you want the LLM to produce valid JSON or follow a regex, SGLang does it without significant overhead -- guided decoding is built into the engine's core.
+
+```python
+import sglang as sgl
+
+@sgl.function
+def multi_turn(s, question):
+    s += sgl.user(question)
+    s += sgl.assistant(sgl.gen("answer", max_tokens=256))
+```
+
+SGLang is the natural choice if you're building **multi-call agents** with structured responses (JSON, forms, lists).
+
+## The comparison table
+
+| Aspect | vLLM | TGI | Triton | SGLang |
+|---|---|---|---|---|
+| Ease of install | pip install | docker run | Complex | pip install |
+| Raw performance | Very good | Good | Excellent | Very good |
+| Prefix caching | Good | Partial | Yes | Best |
+| Structured generation | Yes | Yes | No | Native |
+| Multi-model | No | No | Yes | No |
+| OpenAI API | Yes | Almost | Wrapper | Yes |
+
+<Callout type="warning" title={"This is a fast-moving market"}>
+Benchmarks from 6 months ago are already outdated. These frameworks evolve every month with significant performance gains. Always test on **your real data** with the most recent versions before locking in a choice.
+</Callout>
+
+**Practical advice**: start with TGI (one Docker command = zero setup) or vLLM (`pip install` = 30 seconds). Only switch if you identify a specific need that your first choice doesn't cover. The worst trap is spending weeks comparing frameworks instead of deploying.

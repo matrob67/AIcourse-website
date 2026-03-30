@@ -1,0 +1,163 @@
+---
+title: "Maximum likelihood estimation (MLE) and MAP"
+description: "Maximum likelihood, log-likelihood, connection to cross-entropy, MAP estimation, and the link to regularization in deep learning."
+---
+
+## The fundamental question
+
+You have a model with parameters $\theta$ and data $\mathcal{D}$. The central question of learning is: what are the "best" parameters? Maximum likelihood and MAP are two answers to this question, and they are intimately linked to what neural networks do during training.
+
+## The likelihood
+
+### Definition
+
+The likelihood is the probability of observing the data given the model parameters:
+
+$$\mathcal{L}(\theta) = P(\mathcal{D} | \theta)$$
+
+Pay attention to the subtlety: it's the same mathematical expression as conditional probability, but we look at it from a different angle. Instead of fixing $\theta$ and asking what data might be generated, we fix the data (already observed) and ask which parameters best explain it.
+
+### Analogy
+
+Imagine you find footprints in the snow. The likelihood asks: "If an animal of type X had walked here, what would be the probability of seeing exactly these footprints?" You test different animals (different $\theta$) and look for the one that makes the observed footprints most probable.
+
+### For i.i.d. data
+
+If the data are independent and identically distributed (i.i.d.), the likelihood is the product of individual probabilities:
+
+$$\mathcal{L}(\theta) = \prod_{i=1}^n P(x_i | \theta)$$
+
+This is a product of terms between 0 and 1, so it becomes very small very fast as $n$ grows. This is a major practical problem.
+
+## Maximum likelihood estimation (MLE)
+
+### Principle
+
+MLE looks for the parameters that maximize the likelihood:
+
+$$\theta^*_{\text{MLE}} = \arg\max_\theta \mathcal{L}(\theta) = \arg\max_\theta \prod_{i=1}^n P(x_i | \theta)$$
+
+It's simple and intuitive: you choose the parameters that make the observed data most probable.
+
+### Example: estimating a coin flip probability
+
+You flip a coin 100 times and observe 60 heads. The parameter $p$ (probability of heads) that maximizes the likelihood is simply $p^* = 60/100 = 0.6$. Here, intuition perfectly matches the formal calculation: the observed frequency is the MLE (Maximum Likelihood Estimator) of the Bernoulli parameter.
+
+## The log-likelihood: why the logarithm
+
+### The problem with products
+
+A product of thousands of numbers between 0 and 1 gives an astronomically small number, beyond the precision of floats. Moreover, optimizing a product is more complicated than optimizing a sum.
+
+### The solution
+
+The logarithm transforms products into sums:
+
+$$\log \mathcal{L}(\theta) = \sum_{i=1}^n \log P(x_i | \theta)$$
+
+Since the log is a strictly increasing function, maximizing $\log \mathcal{L}$ and maximizing $\mathcal{L}$ give the same $\theta^*$. You lose nothing, and you gain:
+
+- **Numerical stability**: you add numbers instead of multiplying numbers close to zero
+- **Simplicity**: derivatives of sums are simpler than derivatives of products
+- **Clean gradient**: the gradient of the log-likelihood has better properties
+
+## Connection to the cross-entropy loss
+
+### The fundamental connection
+
+In classification, the cross-entropy loss everyone uses is exactly the negative log-likelihood. Minimizing cross-entropy is the same as maximizing log-likelihood.
+
+For multi-class classification with one-hot labels $y$ and softmax predictions $\hat{y}$:
+
+$$\text{Cross-Entropy} = -\sum_{k=1}^K y_k \log \hat{y}_k$$
+
+Since $y$ is one-hot (a single $y_c = 1$, the others are 0), this reduces to:
+
+$$\text{Cross-Entropy} = -\log \hat{y}_c$$
+
+That's exactly $-\log P(\text{correct class} | x, \theta)$, which is the negative log-likelihood.
+
+### For binary classification
+
+The binary cross-entropy:
+
+$$\text{BCE} = -[y \log \hat{y} + (1 - y) \log (1 - \hat{y})]$$
+
+This is the negative log-likelihood of a Bernoulli with parameter $\hat{y}$.
+
+### For regression
+
+The MSE (Mean Squared Error) corresponds to the negative log-likelihood of a Gaussian with constant variance:
+
+$$\text{MSE} = \frac{1}{n}\sum_{i=1}^n (y_i - \hat{y}_i)^2 \propto -\log \mathcal{L}(\theta)$$
+
+if we assume $y_i \sim \mathcal{N}(\hat{y}_i, \sigma^2)$.
+
+In other words: minimizing MSE means assuming the noise is Gaussian and maximizing the likelihood.
+
+## MAP estimation
+
+### Beyond MLE
+
+MLE has a flaw: it only considers the data and ignores any prior knowledge about the parameters. If you have little data, MLE can give absurd estimates. You flip the coin 3 times, get 3 heads, and MLE says $p = 1$. But you know a fair coin is more likely.
+
+### Maximum A Posteriori
+
+MAP adds a prior $P(\theta)$ on the parameters and maximizes the posterior:
+
+$$\theta^*_{\text{MAP}} = \arg\max_\theta P(\theta | \mathcal{D}) = \arg\max_\theta P(\mathcal{D} | \theta) \cdot P(\theta)$$
+
+In log form:
+
+$$\theta^*_{\text{MAP}} = \arg\max_\theta \left[\sum_{i=1}^n \log P(x_i | \theta) + \log P(\theta)\right]$$
+
+MAP is MLE with a bonus term that penalizes "unlikely" parameters according to the prior.
+
+## MAP and regularization: the connection
+
+### Gaussian prior = L2 regularization
+
+If you choose a Gaussian prior centered at zero: $P(\theta) = \mathcal{N}(0, \sigma^2 I)$, then:
+
+$$\log P(\theta) = -\frac{1}{2\sigma^2} \|\theta\|^2 + \text{constant}$$
+
+MAP becomes:
+
+$$\theta^*_{\text{MAP}} = \arg\max_\theta \left[\sum_{i=1}^n \log P(x_i | \theta) - \frac{\lambda}{2} \|\theta\|^2\right]$$
+
+with $\lambda = 1/\sigma^2$. You get exactly the loss + L2 regularization (weight decay)!
+
+L2 regularization, used in nearly every neural network training, is nothing other than a Gaussian Bayesian prior on the weights. It says: "I believe a priori that the weights are small."
+
+### Laplacian prior = L1 regularization
+
+If you choose a Laplacian prior: $P(\theta) \propto \exp(-\lambda |\theta|)$, you get L1 regularization, which pushes weights toward exactly zero (sparsity).
+
+### Summary table
+
+| Prior | Regularization | Effect |
+|---|---|---|
+| Gaussian $\mathcal{N}(0, \sigma^2)$ | L2 (weight decay) | Small weights |
+| Laplacian | L1 (lasso) | Sparse weights |
+| Uniform (no prior) | No regularization | Pure MLE |
+
+## MLE vs MAP in practice
+
+In modern deep learning:
+
+- **Standard training** with cross-entropy loss and weight decay is MAP with a Gaussian prior
+- **Without weight decay**, it's pure MLE
+- **Dropout** can be interpreted as a form of approximate Bayesian inference
+- **Data augmentation** acts as an implicit prior on model invariance
+
+MLE and MAP are not abstract concepts disconnected from practice. They are exactly what frameworks do when you call `loss.backward()` and `optimizer.step()`.
+
+## Key takeaways
+
+- Likelihood measures the compatibility between parameters and observed data
+- MLE chooses the parameters that maximize this likelihood
+- We use log-likelihood for numerical and algebraic reasons
+- Cross-entropy loss = negative log-likelihood (the connection is direct)
+- MAP adds a prior: it's regularized MLE
+- L2 regularization = Gaussian prior, L1 regularization = Laplacian prior
+- In practice, training a network with weight decay is doing MAP

@@ -1,0 +1,132 @@
+---
+title: "Ollama and Local Inference"
+description: "Ollama simplifies running LLMs locally with a Docker-like interface. One-command installation, model library, and integration with development tools."
+---
+
+
+
+## The Dream: An AI Model on Your Laptop
+
+For a long time, running an LLM on your own machine was an obstacle course. You had to compile C++ libraries, manage obscure CUDA dependencies, manually convert weight formats, and pray nothing would crash. In 2023, only the most motivated devs could pull it off.
+
+Today, it's a single command.
+
+Local inference is the idea of downloading a model to your hard drive and running it **offline**, directly on your GPU or CPU. No paid API, no data leaving your machine, no network dependency. The model lives on your machine, period.
+
+<Callout type="info" title={"Why local inference is a game changer"}>
+**Privacy**: zero data transmitted to an external server --- crucial for companies with sensitive data. **Cost**: free after the hardware investment, no per-token billing. **Latency**: no network round trip, the response is near-instantaneous for small models. **Availability**: works without internet, on a plane, in a bunker. Perfect for devs, researchers, and security-conscious companies.
+</Callout>
+
+## Ollama: Docker for LLMs
+
+**Ollama** is the tool that democratized local inference. Its principle is simple: it does for LLMs what Docker does for applications --- it packages everything (model, configuration, dependencies) into a standard format and makes it runnable in a single command.
+
+```bash
+# Installation (one command)
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Download and run a model
+ollama run mistral
+
+# The automatic REST API
+curl http://localhost:11434/api/generate -d '{
+  "model": "mistral",
+  "prompt": "Explain Transformers"
+}'
+```
+
+There you go. Mistral 7B is running on your machine. Zero configuration, zero manually installed dependencies. Ollama handles downloading, quantization, and memory allocation automatically.
+
+## Available Models: Something for Every GPU
+
+Ollama offers a library of **pre-quantized** models in GGUF format --- a format optimized for inference on CPU and consumer GPUs. Concretely, models are compressed (often to 4 bits) to fit in reasonable amounts of RAM:
+
+| Model | RAM needed | Approximate speed | Use case |
+|---|---|---|---|
+| Phi-3 Mini (3.8B) | 3 GB | Very fast | Prototyping, simple tasks |
+| Mistral (7B) | 5 GB | Fast | Good generalist |
+| LLaMA 3 (8B) | 5 GB | Fast | Versatile, rich ecosystem |
+| Gemma 2 (9B) | 6 GB | Fast | Strong at reasoning |
+| LLaMA 3 (70B) | 40 GB | Slow but doable | Near-cloud quality |
+
+A MacBook M1 with 16 GB RAM runs LLaMA 3 8B comfortably. Not as fast as a cloud API (expect 10-15 tokens/second), but enough for development, local RAG, or testing.
+
+<Callout type="tip" title="Import your own models">
+You've fine-tuned a model on Hugging Face? Convert it to GGUF with `llama.cpp`, create a Modelfile that references it, and run `ollama create my-model`. The model is now accessible exactly like the official models.
+</Callout>
+
+## Customizing a Model with a Modelfile
+
+One of Ollama's strengths is the ability to create custom variants of a model --- a bit like a Dockerfile creates a custom image from a base image:
+
+```dockerfile
+FROM mistral
+
+PARAMETER temperature 0.7
+PARAMETER num_ctx 8192
+
+SYSTEM """
+You are a senior Python expert.
+Always respond with commented code.
+Prioritize clarity over brevity.
+"""
+```
+
+```bash
+ollama create python-expert -f Modelfile
+ollama run python-expert "how to do a list comprehension with a filter?"
+```
+
+You can adjust the temperature, context size, system prompt, and even combine multiple models. It's a powerful customization system that requires no fine-tuning.
+
+## The Ecosystem: Ollama Talks to Everyone
+
+A brilliant design choice: Ollama exposes a REST API **compatible with OpenAI** (endpoint `/v1/chat/completions`). Concretely, any code that calls the OpenAI API can point to Ollama by just changing the base URL. Your code can switch between OpenAI, local Ollama, or Anthropic without modification.
+
+Key integrations:
+- **LangChain** (`ChatOllama`): for building RAG chains and agents
+- **Continue.dev**: AI autocomplete in VS Code, powered by your local model
+- **Open WebUI**: a ChatGPT-like web interface that connects to Ollama
+- **LibreChat**: multi-model interface with conversation history
+
+## The Competitors: Each Has Its Style
+
+### LM Studio
+Complete graphical interface with a built-in model browser, real-time GPU monitoring, and visual parameter management. If you prefer visual interfaces over the command line, it's the obvious choice.
+
+### Jan
+Open-source and privacy-first, with an extensible plugin system. Positions itself as a privacy-respecting alternative to ChatGPT.
+
+### GPT4All
+Designed for non-developers. Runs on CPU only, one-click installation on Windows and Mac. The speed/accessibility tradeoff.
+
+## How Much RAM Do You Need? The Realistic Guide
+
+The question everyone asks. Here are the concrete numbers:
+
+**CPU only** (no dedicated GPU):
+- 3B in Q4: 4 GB RAM → 5-10 tokens/sec (usable for simple chat)
+- 7B in Q4: 6 GB RAM → 3-7 tokens/sec (slow but functional)
+
+**NVIDIA RTX 4090 GPU** (24 GB VRAM):
+- 13B in Q4: 30-50 tokens/sec (excellent)
+- 30B in Q4: 40-80 tokens/sec with partial offloading
+
+**Apple Silicon M1/M2** (shared GPU/CPU RAM):
+- 7B in Q4: 10-15 tokens/sec on M1 16 GB
+- 13B in Q4: 8-12 tokens/sec on M2 Pro 32 GB
+
+<Callout type="warning" title="Apple unified RAM ≠ dedicated VRAM">
+Your M2 Pro has 16 GB of RAM. But be careful: the operating system uses 4-6 GB, your browser another 2-3 GB. In reality, you have 8-10 GB left for the model. A 7B model in Q4 (~5 GB) fits comfortably. A 13B is tight. Watch your swap --- if the system starts writing to disk, performance collapses.
+</Callout>
+
+## Performance Optimization Checklist
+
+1. **Quantization**: Q4_K_M is the recommended default (good balance of size/quality). Q5_K_M if your RAM allows it, for a slight quality gain
+2. **Context size**: reduce `num_ctx` if RAM is limited --- each context token consumes memory proportional to model size
+3. **GPU offloading**: use `--gpu-layers` to send as many layers as possible to the GPU --- each offloaded layer significantly speeds up inference
+4. **Monitoring**: watch memory usage in real time --- as soon as the system swaps to disk, performance drops 10x or more
+
+## The Complete Local Stack: Free RAG on Your Machine
+
+Local inference is **now accessible to anyone with a recent laptop**. A 7-13B model runs on most 2023+ machines. And the most exciting part is what you can build on top: **Ollama + LangChain + ChromaDB** (in-memory vector database) = a complete RAG system, entirely free, running offline on your documents. No data going to the cloud, no bill at the end of the month. It's the future of personal AI development.

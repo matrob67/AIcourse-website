@@ -1,0 +1,132 @@
+---
+title: "Multi-Query Attention (MQA)"
+description: "Analysis of the Multi-Query Attention mechanism that shares keys and values across all attention heads to drastically reduce the KV cache and accelerate inference."
+---
+
+
+
+## The bottleneck nobody sees
+
+You're waiting for a response from ChatGPT. The model generates word by word -- each token takes about 50 to 100 ms. Why so slow? You might think it's a compute power problem, that the GPU is grinding away at full capacity to produce each word.
+
+In reality, it's the opposite. During token-by-token generation, the GPU is often **half idle**. It's waiting. The real bottleneck is **memory**: for each new token generated, the model must re-read from GPU RAM the key (K) and value (V) vectors of all previous tokens -- that's the famous **KV cache**. And reading this memory is slow compared to the GPU's compute speed.
+
+Imagine a brilliant student (the GPU) who can solve equations very fast, but who at each step has to go fetch a book from a huge library. It's not the computation that slows them down, it's the trip to the book.
+
+For a 70-billion parameter model with 80 layers, 64 heads, and a context of 8,000 tokens, the KV cache can exceed **40 gigabytes**. Re-reading 40 GB of RAM for each generated token -- that's the real bottleneck.
+
+**Multi-Query Attention (MQA)**, proposed by Noam Shazeer in 2019, is an elegant and radical solution to this problem.
+
+<ArxivLink id="1911.02150" title="Fast Transformer Decoding: One Write-Head is All You Need" />
+
+## Refresher: standard Multi-Head Attention
+
+In standard **MHA**, each attention head i has its own projections for queries, keys, and values:
+
+$$
+Q_i = X \cdot W_i^Q, \quad K_i = X \cdot W_i^K, \quad V_i = X \cdot W_i^V
+$$
+
+For H heads with per-head dimension $d_k = d / H$, the KV cache stores $2 \times H \times L \times d_k$ elements per layer (the factor of 2 because we store K and V). With H = 64 heads, L = 8,000 tokens, $d_k$ = 128: that gives 2 x 64 x 8,000 x 128 = **131 million elements** per layer. Multiply by 80 layers = **10.5 billion elements**, or about 21 GB in float16.
+
+<Callout type="info" title="The KV cache: why it exists">
+During autoregressive generation, each new token must "look at" all previous tokens via the attention mechanism. Without a cache, you'd have to recompute the K and V projections of the entire context at each new token -- a colossal waste. The KV cache stores these projections once and for all. It's essential for speed, but it keeps growing with context length. For a 70B model with 128K tokens of context, we're talking hundreds of GB.
+</Callout>
+
+## The MQA mechanism: a single K/V pair for all heads
+
+Shazeer's idea is disarmingly simple: instead of giving each head its own K and V projections, **share a single K/V pair across all heads**.
+
+$$
+Q_i = X \cdot W_i^Q \quad \text{(DISTINCT per head, H projections)}
+$$
+$$
+K = X \cdot W^K \quad \text{(SHARED across all heads, 1 single projection)}
+$$
+$$
+V = X \cdot W^V \quad \text{(SHARED across all heads, 1 single projection)}
+$$
+
+Each head still computes its own attention, with its own query:
+
+$$
+\text{head}_i = \text{softmax}\!\left(\frac{Q_i \cdot K^\top}{\sqrt{d_k}}\right) \cdot V
+$$
+
+But all heads query the same keys and values. The diversity between heads comes solely from the queries -- they determine "what each head is looking for" in the context.
+
+### KV cache reduction: a factor of H
+
+The KV cache goes from $2 \times H \times L \times d_k$ to $2 \times 1 \times L \times d_k$. That's a reduction by a **factor of H** (the number of heads).
+
+| Configuration | KV cache per layer | Reduction |
+|--------------|---------------------|-----------|
+| MHA (H = 64 heads) | 2 x 64 x L x $d_k$ | Reference |
+| MQA (1 K/V pair) | 2 x 1 x L x $d_k$ | 64 times less |
+
+For our 70B parameter example with 8K tokens: the KV cache goes from ~21 GB to ~330 MB. That's a radical change -- we go from a major memory problem to something negligible.
+
+<Callout type="tip" title={"Why this directly speeds up inference"}>
+Autoregressive LLM inference is typically **memory-bandwidth bound**: the GPU waits for data to arrive from HBM memory, not for it to finish computations. The KV cache must be read in its entirety for each generated token. Reducing its size by a factor of 64 means 64 times fewer memory reads per token, which translates directly into much higher generation throughput.
+</Callout>
+
+## Impact on quality: surprisingly small
+
+The natural question: by sharing K and V across all heads, you inevitably lose expressiveness. What's the quality cost?
+
+Research shows a **modest degradation**: typically 0.1 to 0.5% on standard benchmarks. Why so little?
+
+The intuition: the diversity of attention patterns comes mainly from the **queries**, not from keys and values. Think of attention heads as investigators querying a database. Each investigator (head) asks different questions (distinct queries), but they all consult the same files (shared K/V). Each investigator's specialization lies in *what they're looking for*, not in the files themselves.
+
+Keys and values capture the same semantic information from the context regardless of the head. Sharing this context representation therefore doesn't lose much expressiveness.
+
+## Who uses MQA in production?
+
+MQA has been adopted by several major models:
+
+- **PaLM** (Google): one of the first large models to adopt it at scale
+- **Falcon** (TII): the entire Falcon family uses MQA
+- **StarCoder**: code generation model with MQA
+- **Phi-1 and Phi-2** (Microsoft): small, highly efficient models thanks in part to MQA
+
+### Converting MHA to MQA after training
+
+You have an already-trained MHA model and want MQA's benefits without starting from scratch? It's possible:
+
+1. Take the H K and V projections from the H heads
+2. Average them into a single shared projection
+3. Fine-tune the model on only 5 to 10% of the original training tokens
+
+<Callout type="paper" title={"The uptrained conversion"}>
+Google demonstrated that this MHA-to-MQA conversion by weight averaging, followed by a short fine-tuning (5% of original tokens), recovers nearly all of the original MHA model's performance. You get MQA's inference gains without paying the full training cost again -- an excellent investment/benefit ratio.
+</Callout>
+
+## Advantages and limitations
+
+**What MQA brings:**
+- KV cache reduction by a factor of H (32x to 128x depending on the model)
+- Significant acceleration of token-by-token generation
+- Minimal architectural modification, easy to implement
+- Compatible with Flash Attention and other inference optimizations
+
+**What MQA sacrifices:**
+- Heads can no longer specialize their K/V representations independently
+- Slight measurable quality degradation, especially on tasks requiring very fine attention
+- Doesn't reduce training cost (queries remain distinct, computation is the same)
+
+<Callout type="warning" title="When MQA goes too far">
+For frontier models where every tenth of a benchmark point matters, MQA's quality loss can be unacceptable. The middle-ground solution: **Grouped Query Attention (GQA)**, which shares K/V among groups of heads (for example 8 groups of 8 heads) rather than across all heads. GQA offers a tunable trade-off between MHA's maximum quality and MQA's maximum efficiency. It has become the de facto standard in recent models (LLaMA 2/3, Mistral, etc.).
+</Callout>
+
+
+## Final comparison: MHA vs MQA
+
+| Aspect | MHA | MQA |
+|--------|-----|-----|
+| K, V projections | H distinct (H = 32 to 128) | 1 single shared |
+| KV cache per layer | 2 * H * L * $d_k$ | 2 * L * $d_k$ |
+| Quality | Reference | ~99.5% |
+| Inference throughput | Reference | 5x to 10x higher |
+| Latency per token | Reference | Significantly reduced |
+
+MQA is an elegant architectural optimization that directly tackles the real bottleneck of LLM inference: memory bandwidth. Its idea -- sharing K/V across all heads -- paved the way for GQA, which refines this quality/efficiency trade-off to make it acceptable even for the most demanding models.

@@ -1,0 +1,166 @@
+---
+title: "Word2Vec: Words Explained by Their Neighbors"
+description: "How to give words a numerical representation by training them to predict their neighbors. Word2Vec demystified with CBOW, Skip-gram, and negative sampling."
+---
+
+## A Word Is Its Friends -- or How to Guess Meaning Without a Dictionary
+
+Imagine your friend shows you an unknown word: "zythophile". You don't have a definition. But you see it used like this: "This zythophile loves breweries", "Zythophiles debate hops", "A true zythophile, he collects rare beers". After three sentences, you guess it's someone who loves beer -- no dictionary needed, just context.
+
+**That's exactly Word2Vec's trick.**
+
+In 1957, linguist John Firth formulated this idea: **you understand a word by its neighbors**. Word2Vec (created by Tomas Mikolov at Google in 2013) translated this linguistic intuition into an algorithm: if you show a model 10 billion sentences, it can learn the "meaning" of words solely by looking at which words appear next to which others.
+
+Concrete example: "cat" and "dog" systematically appear in similar contexts -- after "The", before "sleeps", next to "pet", "feed", "veterinarian". They are so contextually similar that the algorithm concludes: "These two words must have similar meanings." And it's right.
+
+## From Abstraction to Algebra: Word Embeddings
+
+Before Word2Vec, the classic way to represent a word for a computer was **one-hot encoding**: "cat" = a vector of 100,000 dimensions with a single 1 and 99,999 zeros. The problem? Any two words are always the same distance from each other. "Cat" and "dog" are just as far apart as "cat" and "philosophy". No notion of similarity.
+
+Word2Vec does something radically different: it **transforms each word into a list of numbers** (a dense vector, also called an "embedding") of small dimension. "Cat" is no longer an index, it's: [0.2, -0.5, 0.8, 0.1, -0.3, ...] across 300 dimensions.
+
+Each dimension captures a "trait" of the word. We don't know exactly what each number means individually (it's learned automatically, not defined manually), but collectively, these 300 numbers encode the word's meaning in a way that's exploitable by math. Similar words end up close in this 300-dimensional space, and different words are far apart.
+
+**The magic**: with these vectors, you can do **algebra on meaning**. "Cat + ferocity" gives a vector close to "Tiger". Math captures semantic relationships.
+
+<ArxivLink id="1301.3781" title="Efficient Estimation of Word Representations in Vector Space" />
+
+## Two Opposite Strategies: CBOW vs Skip-gram
+
+Word2Vec offers two variants that approach the problem from opposite angles.
+
+### CBOW: Guessing the Middle Word
+
+Imagine a game where you see a sentence with a hole: "The [???] black sleeps". You have to guess the missing word. It's easy: "cat", obviously.
+
+**CBOW** (Continuous Bag of Words) plays exactly this game. It takes the context words ["The", "black", "sleeps"], computes the **average** of their vectors, and uses this mean vector to predict the central word "cat". It's fast and natural.
+
+But CBOW has a flaw: for a rare word, there are few training examples (few contexts where this word appears in the center), and the model learns its representation poorly. Frequent words are well represented, rare words poorly.
+
+### The Reverse Game: Skip-gram
+
+Now, flip the game. You see the word "cat" and you have to guess each of its neighbors: "The", "black", "sleeps".
+
+**Skip-gram** does exactly that. For each neighbor, it's a separate prediction. This means a single word "cat" in the center generates **multiple training examples** (one per neighbor in the context window). And a rare word? Even if it appears infrequently, each appearance generates proportionally more examples.
+
+Result: **Skip-gram produces better embeddings for rare words**. It's the most commonly used variant in practice.
+
+In summary:
+- **CBOW**: Context ["The", "black"] -> Average -> Predict "cat" (fast, good for frequent words)
+- **Skip-gram**: Word "cat" -> Predict "The" (example 1), Predict "black" (example 2), Predict "sleeps" (example 3) (slower, better for rare words)
+
+<Callout type="tip" title="The dual benefit of Skip-gram">
+Not only does Skip-gram produce more training examples, but it forces the model to discriminate each contextual relationship individually. "The" has a subject-article relationship with "cat", while "black" is a descriptive adjective. Skip-gram captures these relational nuances that CBOW crushes by averaging.
+</Callout>
+
+## Technical Corner: The Computational Problem -- and the Trick That Saves Everything
+
+To understand why Word2Vec was a breakthrough, you need to grasp the technical challenge it solved.
+
+For each prediction, the model would ideally calculate a probability for **every word in the vocabulary** -- say 100,000 words. The exact formula (a softmax) is:
+
+$$
+P(\text{word}_x \mid \text{context}) = \frac{\exp(\vec{v}_{\text{word}_x} \cdot \vec{v}_{\text{context}})}{\sum_{w=1}^{100\,000} \exp(\vec{v}_w \cdot \vec{v}_{\text{context}})}
+$$
+
+The denominator requires computing a dot product and an exponential for **each of the 100,000 words**. And that, for every word in every sentence of a 10-billion-word corpus. The computation would take months, even on GPU. It's a computational wall.
+
+### Negative Sampling: The Trick of the Century
+
+**Negative sampling** bypasses this wall by completely reformulating the problem. Instead of computing "which word is most probable among 100,000?", you ask a much simpler question:
+
+"Do these two words actually appear together, or is it random noise?"
+
+Concretely, for the real pair ("cat", "black"):
+- **Positive example**: ("cat", "black", label=1) -- yes, they appear together
+- **Negative examples**: ("cat", "apple", label=0), ("cat", "philosophy", label=0), ("cat", "staircase", label=0) -- randomly drawn, these are fake contexts
+
+You generate 5 to 15 negative examples for each positive example. The model just learns a **binary classification**: real context or noise? It's a simple logistic regression instead of a softmax over 100,000 classes.
+
+**Result**: 50-100x faster. This trick is what made it possible to train Word2Vec on billion-word corpora in a few hours instead of months.
+
+### The Refinement: Don't Draw Negatives Uniformly
+
+If you draw negative words completely at random (uniformly), you'll mostly draw "the", "of", "and", "a" -- ultra-frequent words. The model then learns a trivial distinction: "If it's a common word, it's probably noise." That's not useful.
+
+Mikolov's solution: draw negatives according to a **modified distribution**:
+
+$$
+P(\text{word}) \propto \text{freq}(\text{word})^{3/4}
+$$
+
+The 3/4 exponent is an empirical choice (tested and validated experimentally) that achieves a subtle balance: very frequent words remain over-represented (since they're useful as negatives), but not overwhelmingly so. Medium-frequency and rare words have a better chance of being drawn, which forces the model to learn finer distinctions.
+
+<Callout type="info" title="Why 3/4 and not 1?">
+With exponent 1 (the true frequency), "the" would be drawn 10,000 times more often than "astronaut". With exponent 0.5, the compression would be too strong and common words would lose their importance. The 3/4 exponent is the "Goldilocks": enough rebalancing for the model to learn true semantic relationships, without drowning rare words in the noise of common words.
+</Callout>
+
+## The Miracle of Vectors: The Algebra of Meaning
+
+This is the most astonishing moment in the Word2Vec story. Once the vectors are trained, you discover that you can do **geometric algebra on the meaning of words**:
+
+$$
+\vec{\text{king}} - \vec{\text{man}} + \vec{\text{woman}} \approx \vec{\text{queen}}
+$$
+
+$$
+\vec{\text{Paris}} - \vec{\text{France}} + \vec{\text{Italy}} \approx \vec{\text{Rome}}
+$$
+
+$$
+\vec{\text{scientist}} - \vec{\text{man}} + \vec{\text{woman}} \approx \vec{\text{researcher}}
+$$
+
+Nobody asked the model to learn analogies. No labels, no specific training examples. The model just observed contexts for hours, and suddenly: semantic relationships become **geometric shapes** in the vector space.
+
+Why does it work? Because in the corpora, "king" and "queen" appear in very similar contexts (royalty, power, crown), and the difference between their vectors reflects exactly what distinguishes them: gender. This difference "king - queen" is approximately the same vector as "man - woman". Semantic relationships are encoded as **directions** in the vector space.
+
+<Callout type="tip" title="The linear properties of meaning">
+Certain semantic relationships are remarkably **linear** in the embedding space. Gender (man/woman), capital cities (country/capital), verb tense (present/past) manifest as coherent directions. Not all aspects of meaning are linear (some relationships are very non-linear), but enough to create these vector "magic tricks".
+</Callout>
+
+### The Flip Side: Invisible Biases
+
+These magnificent analogies also reveal the **prejudices** hidden in the training corpus. Classic and problematic examples:
+
+$$
+\vec{\text{doctor}} - \vec{\text{man}} + \vec{\text{woman}} \approx \vec{\text{nurse}}
+$$
+
+$$
+\vec{\text{programmer}} - \vec{\text{man}} + \vec{\text{woman}} \approx \vec{\text{secretary}}
+$$
+
+The corpus (the internet, newspapers, books) contains gender stereotypes: "nurses are women, doctors are men". Word2Vec faithfully learned and encoded this sexism. It's useful for **detecting** corpus biases (embeddings are a merciless mirror of societal prejudices), but dangerous if you deploy the model without cleaning these biases.
+
+This discovery launched an entire field of research: "debiasing" embeddings, with techniques to identify and mitigate gender, race, or other biases in vector representations.
+
+<Callout type="warning" title="Data is not neutral">
+Word2Vec doesn't invent anything. It looks at the corpus and faithfully reflects what it sees. If the corpus contains sexism, discrimination, misinformation, Word2Vec will learn and reproduce it. It's not the technology that's biased, it's the data. Hence the crucial importance of documenting training sources, measuring embedding biases, and implementing correction techniques.
+</Callout>
+
+## Important Settings
+
+Word2Vec's hyperparameters have a significant impact on embedding quality:
+
+- **Dimension** (100-300): larger = more nuanced vectors but needs more data to fill them correctly. 300 is the standard.
+- **Context window** (5-10): large window (10+) = the model captures thematic relationships (words about the same topic). Small window (2-3) = the model captures syntactic relationships (words that play the same grammatical role).
+- **Negative words** (5-15): more negatives = better discrimination but slower training. 5 for large corpora, 15 for small ones.
+- **Subsampling of frequent words**: "the", "of", "and" appear everywhere and provide no contextual information. Randomly ignoring them (with a probability proportional to their frequency) speeds up training and improves the quality of rare word embeddings.
+
+## The Limits of Word2Vec
+
+Despite its brilliance, Word2Vec has four fundamental limitations:
+
+- **One vector per word (no context)**: "bank" (the financial institution) and "bank" (the riverbank) have the same embedding. The model makes a kind of "average" of both meanings. Contextual models (BERT, GPT) solve this by giving a different vector for each occurrence.
+- **Closed vocabulary**: a word not seen during training simply has no embedding. No fallback. FastText solves this with subwords (character n-grams).
+- **Local window only**: Word2Vec only looks at the 5-10 words around. GloVe exploits global co-occurrence statistics across the entire corpus.
+- **No composition**: Word2Vec gives vectors for words, not for sentences or documents. Combining word vectors into a sentence vector (by averaging, for example) loses a lot of information.
+
+## Why This Matters
+
+Word2Vec fundamentally changed the way NLP (Natural Language Processing) thinks about words. Before 2013: words were isolated categories, indexes in a dictionary. After: words are **vectors in a continuous space**, and you can do math on them. This paradigm shift unlocked everything.
+
+The fundamental principles of Word2Vec -- learning representations through context, negative sampling, dense embeddings -- are present in **almost all modern NLP models**. BERT, GPT, T5, Claude, Gemini: they all use dense embeddings learned through context. The architectures have become more sophisticated (attention, Transformers, billions of parameters), but the basic idea (a word = a vector = a learned representation from context) remains the same.
+
+And yes, BERT "surpassed" it by adding bidirectionality and dynamic context. But without Word2Vec to show that it would work, nobody would have had the idea to try.

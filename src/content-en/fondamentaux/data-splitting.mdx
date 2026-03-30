@@ -1,0 +1,196 @@
+---
+title: "Train/Validation/Test: Splitting Your Data Correctly"
+description: "Why split? How to split? And the invisible danger of data leakage that destroys your results."
+---
+
+## Introduction: Honest Evaluation
+
+The fundamental goal of machine learning isn't to get a good score on the training data. It's **generalization**: your model must perform well on data **it has never seen**, real-world data it will encounter in production.
+
+If you evaluate your model on the data it used to learn, you're lying to yourself. It's like giving a student the answers to an exam so they can memorize them, then giving them the same exam: they'll score 100%, but they haven't understood anything. In machine learning, a model can memorize its training data (that's overfitting) and appear perfect, but collapse when faced with new data.
+
+The solution is simple in principle: **set aside data that the model will never see during training**, and use it for an honest evaluation.
+
+
+
+<Callout type="warning" title={"This is the Foundation"}>
+A rigorous split without data leakage is what separates a research model from a deployable model. No metric is reliable without it.
+</Callout>
+
+## The Three Sacred Sets
+
+### Training Set (70-80%)
+
+This is the bulk of the dataset, the data on which the model **actually learns**. At each training step, the network's weights are adjusted to minimize the error on this data. The model sees this data over and over for dozens or hundreds of epochs.
+
+### Validation Set (10-15%)
+
+The validation data is your **dashboard during development**. You never train directly on it, but you use it to make decisions:
+- **Choosing hyperparameters**: which learning rate, which regularization gives the best results on validation?
+- **Selecting the best architecture**: a 3-layer vs 5-layer model, which generalizes better?
+- **Deciding when to stop training** (early stopping): when performance on validation starts degrading, that's a sign of overfitting
+
+The model never sees this data during weight learning. But be careful: by making decisions based on validation, you're indirectly "consuming" information from this set.
+
+### Test Set (10-15%)
+
+The test set is **sacred**. You touch it **only once, at the very end**, when all your decisions are made. It's your honest, unbiased estimate of the model's real performance. If you use the test set to compare architectures or tune hyperparameters, it loses its value: it's no longer a reliable estimate, it becomes a second validation set.
+
+## Why Three Sets and Not Two?
+
+If you use the same set to **choose hyperparameters AND estimate final performance**, you introduce an insidious optimistic bias.
+
+Here's why: imagine you test 100 different hyperparameter combinations and keep the one that gives the best score on your evaluation set. Among these 100 combinations, some will "score well" by pure chance (statistical fluctuations). You'll naturally select one of them, and your performance estimate will be inflated. It's a well-known statistical phenomenon: when you select the best result among N trials, you also select the most favorable random fluctuation.
+
+The test set, preserved intact and never used for any decision, gives an unbiased estimate of true performance. The gap between validation performance and test performance reveals exactly the magnitude of this optimistic bias.
+
+
+
+## Typical Ratios
+
+### Large Datasets (> 100k examples)
+
+90/5/5 or 98/1/1. Even 1% is thousands of examples. Enough for evaluation.
+
+### Medium Datasets (1k-100k)
+
+70/15/15 or 80/10/10. The balanced classic.
+
+### Small Datasets (< 1k)
+
+Forget fixed ratios. Use **cross-validation** (see below) to use all your data.
+
+<Callout type="tip" title="Always Use a Fixed Random Seed">
+Use `random_state=42` or similar. Without it, each run creates a different split and you can't reproduce your results. Reproducibility = baseline requirement.
+</Callout>
+
+## Cross-Validation: Using 100% of the Data
+
+When you have little data (a few hundred examples), a fixed 70/15/15 split wastes precious data: 30% of your data never serves for training. **K-fold cross-validation** solves this problem by using 100% of the data for both training and evaluation.
+
+**Algorithm**:
+
+1. Divide the data into k equal parts (the "folds")
+2. For each fold i: train the model on the other k-1 folds, evaluate on fold i
+3. Final performance = mean (and standard deviation) of the k results
+
+**Common values**: k=5 or k=10. With k=5, each fold contains 20% of the data, and the model is trained on 80% at each iteration. It's a good trade-off between estimation reliability and computational cost.
+
+**Advantage**: each data point is used exactly k-1 times for training and exactly 1 time for evaluation. Nothing is wasted, and the performance estimate is more reliable because it's averaged over k independent evaluations.
+
+**Disadvantage**: you train k models instead of one, so it's k times slower. For lightweight models, it's negligible; for large neural networks, it can become prohibitive.
+
+Example with k=5 and 1,000 data points:
+
+| Fold | Training | Evaluation |
+|------|-------------|------------|
+| 1 | 800 examples | 200 examples |
+| 2 | 800 examples (different) | 200 examples |
+| 3 | 800 examples (different) | 200 examples |
+| 4 | 800 examples (different) | 200 examples |
+| 5 | 800 examples (different) | 200 examples |
+
+Performance = average of the 5 results
+
+## Stratified Splits: Preserving Proportions
+
+In classification with imbalanced classes, a naive random split can create catastrophic situations. Imagine a dataset with 95% negative cases and 5% positive cases: an unlucky split could create a validation fold with 0% positive cases. Your evaluation would be completely skewed.
+
+A **stratified split** guarantees that each fold (or each train/val/test set) maintains exactly the same class proportions as the overall dataset.
+
+For example, if 5% of your data is the rare class "fraud," each fold will also contain approximately 5% fraud. This makes evaluations comparable across folds and avoids statistical surprises.
+
+<Callout type="info" title="Always Stratify in Classification">
+Use `StratifiedKFold` (each fold preserves the same proportion of each class as the full dataset) or `stratified_train_test_split`. It's zero overhead and makes evaluations much more stable.
+</Callout>
+
+## Time Series Splits: Respecting Temporal Order
+
+For **temporal** data (stock prices, weather, server logs, monthly sales), a random split isn't just suboptimal, it's a **major bug** that can go completely unnoticed.
+
+The problem: by randomly mixing dates, the model trains on March 2025 data to predict January 2025. It's literally using the future to predict the past. In production, it will never have access to the future, so its performance will collapse. But in dev, the metrics will be excellent, making the bug invisible and dangerous.
+
+The **Time Series Split** respects chronology: the model **always** trains on the past and is evaluated on the future, exactly like in production.
+
+| Fold | Training | Validation |
+|------|-------------|------------|
+| 1 | Months 1-3 | Month 4 |
+| 2 | Months 1-4 | Month 5 |
+| 3 | Months 1-5 | Month 6 |
+| ... | ... | ... |
+
+This is the only fair way.
+
+## Data Leakage: The Silent Bug
+
+**Data leakage** occurs when information from the test set or validation set "leaks" into the training process, in one way or another. The model gets an unfair advantage: it has access, directly or indirectly, to information it shouldn't know.
+
+The classic symptom: excellent performance in development that collapses in production. The worst part is that it's **invisible** to the naked eye. All your metrics are beautiful, your learning curves are perfect, and nothing tips you off. Leakage can survive months in production before anyone realizes that the model doesn't generalize at all.
+
+<Callout type="warning" title="The Problem is Insidious">
+Your test metrics are excellent. Everything works perfectly... until you deploy. Then, collapse. The leakage has sabotaged all your work.
+</Callout>
+
+## Common Types of Leakage
+
+### Direct Leakage
+
+A feature **directly contains the target information**. Example: predicting whether someone will be hospitalized using a feature "hospital room number" (which only exists for hospitalized patients).
+
+### Temporal Leakage
+
+Using the future to predict the past. Random splits on temporal data. Features based on the "event date" you're trying to predict.
+
+### Preprocessing Leakage
+
+Computing normalization (mean/variance) on **train + test**, then normalizing. The test set indirectly influences training through the statistics.
+
+Correct: compute stats on train ONLY, then use them to normalize both train AND test.
+
+### Duplication Leakage
+
+The same data (or near-identical data) present in both train and test. This is common in medical imaging (multiple slices from the same patient) or in NLP (Natural Language Processing) with paraphrases of the same text.
+
+### Group Leakage
+
+Related data (from the same patient, the same user) split between train and test. The model recognizes the group instead of the pattern you're looking for.
+
+Solution: use `GroupKFold` to keep groups together (ensure that all data from the same group --- e.g., same patient, same user --- stays in the same fold, to avoid information leaks between train and test).
+
+## Prevention: The Checklist
+
+**1. Split First, Then Preprocess**
+
+The split must be the **very first step**. Normalization, imputation, feature engineering: everything on the training set ONLY, then apply to the others.
+
+**2. Use Pipelines**
+
+scikit-learn Pipelines guarantee that transformations are applied correctly and don't leak.
+
+**3. Look for Suspicious Features**
+
+A near-perfect correlation with the target? Likely leakage. Examine its origin.
+
+**4. Respect Groups**
+
+If examples are related (from the same client, the same medical image), keep them together. `GroupKFold`.
+
+**5. Validate Under Real Conditions**
+
+Simulate production: the model only has access to data available at the time of prediction.
+
+## Anti-Leakage Checklist
+
+Before claiming victory:
+
+1. Split before any preprocessing
+2. No feature uses future data or test data
+3. Related examples are in the same split
+4. Normalization statistics come ONLY from train
+5. Consistent performance between validation and test (suspicious gap = red alert)
+6. Important features are plausible in production
+7. Production performance matches test metrics
+
+## Why This Matters
+
+A rigorous split isn't a technical detail you can neglect. It's the **foundation** on which your entire evaluation rests. Without a clean split and without data leakage, no metric is reliable, no model comparison is valid, and no business decision based on these results is justifiable. Data leakage is particularly insidious because it's invisible: nothing in the numbers tells you something is wrong. You build blindly, convinced you have an excellent model, until you deploy in production and reality catches up. Taking these precautions from the start of a project is the difference between serious data science work and an illusion.

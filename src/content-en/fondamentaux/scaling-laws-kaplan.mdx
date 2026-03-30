@@ -1,0 +1,256 @@
+---
+title: "Scaling Laws: Kaplan's Laws"
+description: "The mathematical relationships governing LLM performance as a function of size, data, and compute. How to predict the future of AI."
+---
+
+## January 2020: the paper that changed the game
+
+Jared Kaplan and his team at OpenAI published a result that was both simple and monumental. LLM (Large Language Model) performance **is not chaotic**. It follows **precise mathematical laws** called power laws.
+
+Their central discovery: increasing parameters, data, or compute produces a **predictable and regular** improvement in performance. No surprises, no random plateaus -- just a smooth, extrapolable curve.
+
+<ArxivLink id="2001.08361" title="Scaling Laws for Neural Language Models (Kaplan et al., 2020)" />
+
+The impact was major: before this paper, the dominant strategy boiled down to increasing size and hoping it works. After, researchers could say with confidence "according to the formula, we need this much compute budget to reach this performance level," and the predictions held up.
+
+Kaplan's laws launched the GPU (Graphics Processing Units, the processors used to train models) race that we're still living through today. If performance follows a predictable curve, investing billions in compute becomes rational -- it's engineering, not a lottery.
+
+
+
+
+## The formula: understanding power laws
+
+A **power law** describes a simple but fundamental relationship:
+
+$$
+L = a \times x^{-b}
+$$
+
+Where:
+- $L$ = model error (the loss -- the lower, the better)
+- $x$ = variable of interest (parameters, tokens, compute)
+- $a$ = constant (depends on the domain)
+- $b$ = exponent (typically between 0.05 and 0.1 for LLMs, $b > 0$, so $L$ decreases as $x$ increases)
+
+### Visualization: log-log scale
+
+The trick to recognizing a power law: if you plot Loss vs $x$ on a **log-log scale** (both axes in logarithm), you get a straight line. This is the telltale sign of a power law, and it's what makes predictions possible.
+
+### Implication: predictability
+
+If you multiply $x$ by 10:
+
+$$
+L_{\text{new}} = a \times (10x)^{-b} = a \times 10^{-b} \times x^{-b} = 10^{-b} \times L_{\text{old}}
+$$
+
+The loss decreases by a factor of $10^{-b}$. If $b = 0.07$, the loss decreases by about 55%.
+
+The fundamental aspect of this relationship is that it's **proportional**: each multiplication by 10 always produces the same reduction factor in the loss, which allows you to predict with precision the performance of a larger model before even training it.
+
+Real-world example (Kaplan data):
+
+| Model | Parameters | Actual Loss | Extrapolated Loss |
+|---|---|---|---|
+| GPT-1 | 117M | 3.5 | — |
+| GPT-2 | 1.5B | 2.3 | 2.1 |
+| GPT-3 | 175B | 1.8 | 1.7 |
+
+The predictions work. Kaplan could say: "With X GPUs for Y days, you'll get a loss of Z." And it checks out.
+
+<Callout type="tip" title={"Why this is monumental for the industry"}>
+Before Kaplan, the approach was to increase size and see what happens. After Kaplan, teams know exactly what model to build to reach their target performance.
+
+It's like going from exploration to engineering calculations. Labs can now plan with confidence.
+</Callout>
+
+## The three axes of scaling: where to invest?
+
+Kaplan et al. test three variables **independently**. For each one, they measure the **cross-entropy loss** (a standard measure of prediction error on a test set).
+
+### Axis 1: Parameters (N) -- network size
+
+$$
+L \propto N^{-0.076}
+$$
+
+Multiplying parameters by 10 decreases the loss by about 16%.
+
+Example:
+
+| Parameters | Loss | Gain |
+|---|---|---|
+| 100M | 2.5 | — |
+| 1B | 2.1 | 10x params = 16% better |
+| 10B | 1.8 | 100x params = 28% better |
+
+**Insight**: adding parameters helps, but with diminishing returns. Each doubling helps less than the previous one. This is the very nature of power laws.
+
+### Axis 2: Data (D) -- training volume
+
+$$
+L \propto D^{-0.095}
+$$
+
+Multiplying data by 10 decreases the loss by about 19%.
+
+| Tokens | Loss | Gain |
+|---|---|---|
+| 1B | 2.5 | — |
+| 10B | 2.1 | 10x data = 19% better |
+| 100B | 1.8 | 100x data = 36% better |
+
+**Insight**: data helps **more than parameters** (exponent 0.095 > 0.076). But same pattern: diminishing returns.
+
+### Axis 3: Compute (C) -- combined GPU power
+
+When you increase **both** parameters AND data (keeping their optimal ratio):
+
+$$
+L \propto C^{-0.050}
+$$
+
+Compute $C$ is approximately proportional to the product of parameters $\times$ data (simplifying).
+
+Multiplying compute by 10 decreases the loss by about 13%.
+
+**Insight**: compute follows a power law too, but the exponent is smaller (0.050 < 0.076). That's because increasing compute means splitting the gains between parameters and data, each with its own diminishing returns.
+
+<Callout type="info" title="Smooth and predictable">
+The beauty of these results: the laws hold over **several orders of magnitude**. From 1M to 1B parameters. From 1B to 500B tokens. No sudden tipping points, no magical "plateaus." Just a smooth, predictable curve.
+
+This is rare in machine learning. Usually, at large scale, things become chaotic and unpredictable.
+</Callout>
+
+## The practical recommendation: how to allocate the GPU budget
+
+You have X hours of GPU time. How do you split them between more parameters and more data?
+
+Kaplan derives an **optimal** allocation recommendation. If you multiply compute by 10:
+- Increase parameters by about **5.5x**
+- Increase data by about **1.8x**
+
+Concrete example:
+
+GPT-3 budget: $3{,}6 \times 10^{23}$ operations
+
+| | Option A (bad) | Option B (good, per Kaplan) |
+|---|---|---|
+| Parameters | 1T (wow!) | ~200B (big, but not crazy) |
+| Data | Insufficient | Ultra massive |
+| Result | Undertrained, mediocre | Better trained, better performance |
+
+**Conclusion**: 200B params with lots of data > 1T params with little data
+
+### The key insight: parameters vs data
+
+Kaplan shows that **increasing parameters matters more than increasing data** (exponents 0.076 vs 0.095). His recommendation: a "slightly larger model, less well-trained" rather than a "small model, trained to death."
+
+This changed practice. Before: "train the model until convergence." After: "train a bigger model for less time." This conclusion would later be challenged by Chinchilla in 2022.
+
+<Callout type="warning" title="Caveat: limits of Kaplan's laws">
+These laws assume:
+1. **Fixed architecture**: all tests use a decoder-only Transformer with the same design
+2. **Constant quality**: the text has the same quality regardless of source
+
+In reality:
+- A better architecture can change the exponents
+- Better data filtering can change the exponents
+- High-quality data can be more efficient than raw web data
+
+Kaplan provides a solid baseline, not universal truth.
+</Callout>
+
+## Subtle observations that change practice
+
+### 1. Architecture is nearly invisible
+
+The scaling laws hold regardless of the Transformer's **topology**:
+- 12 layers x 768 dim
+- 24 layers x 1024 dim
+- 6 layers x 2048 dim
+- ...
+
+As long as **the total number of parameters** stays the same, performance is nearly identical.
+
+**Implication**: architectural details don't matter much. **Scale** dominates. Some architectural refinements help, but the effect is small compared to scaling.
+
+### 2. Undertraining is optimal
+
+Counterintuitive result: the **best-performing models per GPU** are often **undertrained** (not converged, meaning not trained until the loss stops decreasing).
+
+| | Model A | Model B |
+|---|---|---|
+| Parameters | 100B | 1B |
+| Training tokens | 10B | 1000B (converged) |
+| Result | **Wins in performance per token** | Less efficient |
+
+Why? Model A uses its parameters more efficiently -- each FLOP (floating-point operation) contributes more to performance.
+
+**Implication**: stop pushing small models to convergence. It's inefficient. Build a bigger model and train it for less time. DeepMind (Chinchilla, 2022) would refine this conclusion with a more exact formula.
+
+### 3. Scaling laws transfer
+
+The power laws on **pre-training loss** transfer to **downstream tasks**:
+
+Good pre-training (low loss) leads to good fine-tuning (high scores). Better overall statistical performance translates to better results in classification, extraction, etc. It's not always perfect, but the correlation is strong.
+
+## Impact: transforming the field
+
+Kaplan's laws **radically changed** the AI landscape from 2020 to 2024.
+
+### 1. The GPU race (and the billions)
+
+Before Kaplan's laws, labs built a model hoping it would be good. After, the formula told them precisely how many GPU-years they needed to invest to reach a given objective, which justified massive fundraising rounds.
+
+Labs became infrastructure engineering teams. OpenAI, DeepMind, Meta, Anthropic: all are building massive GPU farms to exploit these laws.
+
+### 2. The "compute-optimal" era
+
+A **compute-optimal** model is trained optimally for a given GPU budget -- neither too large nor too small relative to its data.
+
+DeepMind (Chinchilla, 2022) refines Kaplan's laws:
+
+| | Kaplan (2020) | Chinchilla (2022) |
+|---|---|---|
+| Parameters | x 5.5 | x 4 |
+| Data | x 1.8 | x 4 |
+| Params:data ratio | 3:1 | 1:1 |
+
+(for compute x 10)
+
+The difference is subtle, but it significantly changes allocation recommendations -- Chinchilla suggests investing much more in data than Kaplan recommended.
+
+### 3. The centralization of power
+
+The most performant models are the largest, which require lots of compute, and therefore lots of money.
+
+**Consequence**: only a few organizations (OpenAI, DeepMind, Meta, Anthropic, etc.) can play at the frontier. Cutting-edge AI is concentrated in few hands. This is good for performance, but raises questions about diversity and accessibility.
+
+<Callout type="warning" title={"Will the laws always apply?"}>
+Kaplan described the 2013-2019 period. In 2026, are we still training on these curves?
+
+It's possible that there are plateaus (no improvement beyond a certain size). It's also possible that better architectures or better-filtered data change the exponents. The debate remains open.
+</Callout>
+
+## Why this matters
+
+Kaplan's laws reveal a fundamental truth: **performance is not chaotic; it follows predictable mathematical curves**. It's not a one-time surprise; it's a reproducible law.
+
+This has major consequences:
+
+### For science
+Before Kaplan, LLM research was largely empirical and exploratory. Since then, it has become a form of predictable engineering where experiments can be planned with confidence.
+
+### For industry
+Scaling works reliably, which means investing massively in GPUs amounts to investing directly in artificial intelligence. The formula offers a return-on-investment guarantee that few research fields can promise.
+
+### For society
+These laws launched a colossal GPU race that led to a concentration of AI power among a few major players, raising a deep ethical debate about who controls this technology.
+
+### Open questions
+- Do the laws continue to hold at 10 trillion parameters?
+- Are there fundamental plateaus imposed by the nature of data or intelligence?
+- Can we improve the exponents with better architectures or data?
+
+This debate is active and no one has the definitive answer. But one thing is certain: Kaplan's laws are the theoretical backbone of modern AI. Without them, scaling would have been a blind bet. With them, it became a calculated engineering strategy.

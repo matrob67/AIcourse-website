@@ -1,0 +1,122 @@
+---
+title: "RoPE: the rotation that changed LLMs"
+description: "RoPE (Rotary Position Embedding) explained simply: how to encode position with just rotations. The positional encoding of modern LLMs."
+---
+
+## The positional encoding that won the war
+
+RoPE is used by LLaMA, Mistral, Qwen, DeepSeek, Gemma, Phi... in fact, virtually **all** modern LLMs. Why this absolute dominance? Because it's both mathematically elegant and devastatingly effective in practice.
+
+<ArxivLink id="2104.09864" title="RoFormer: Enhanced Transformer with Rotary Position Embedding" />
+
+
+
+## The fundamental idea: encoding position through rotation
+
+Classical positional encodings (sinusoidal from the original Transformer, or learned like in GPT-2) **add** a position vector to the token embedding. It's like sticking a label "position 42" on the token.
+
+RoPE does things differently: instead of adding information, it **rotates** the query/key vector in space. The token's position is encoded in the **geometry of the vector itself**, not in an external addition.
+
+Concretely, for two consecutive dimensions of the vector, we apply a rotation of angle $m \times \theta$, where $\theta$ controls the rotation frequency -- the first dimensions rotate slowly (capturing long-range relationships), the last rotate fast (capturing local relationships):
+
+$$
+\begin{bmatrix} q_1' \\ q_2' \end{bmatrix} = \begin{bmatrix} \cos(m\theta) & -\sin(m\theta) \\ \sin(m\theta) & \cos(m\theta) \end{bmatrix} \begin{bmatrix} q_1 \\ q_2 \end{bmatrix}
+$$
+
+Where $m$ is the token's position in the sequence, and $\theta$ is a frequency specific to this pair of dimensions.
+
+<Callout type="info" title={"The multidimensional clock analogy"}>
+Imagine that each pair of dimensions of the vector is a clock hand. The token's position in the sequence determines how much each hand has turned. The hands turn at different speeds: some complete a full rotation in a few tokens (high frequency, fine local position), others take thousands of tokens for one rotation (low frequency, global position). Together, they encode the position uniquely.
+</Callout>
+
+## Extension to all dimensions
+
+For a vector of dimension $d$, we treat dimensions in **pairs**. Each pair $(2i, 2i+1)$ has its own rotation frequency:
+
+$$
+\theta_i = \text{base}^{-2i/d}
+$$
+
+where $\text{base} = 10000$ by default. Why this specific formula? It's a **logarithmic spacing of frequencies**. The first dimensions ($i$ small) have large $\theta$, giving slow rotation -- they capture long-range dependencies. The last dimensions ($i$ large) have small $\theta$, giving fast rotation -- they capture local dependencies. The factor $-2i/d$ uniformly distributes frequencies on a logarithmic scale, like octaves in music: each "octave" covers a doubling of frequency, and dimensions are evenly spread between these octaves. This creates a frequency spectrum covering all distance scales:
+
+| Dimension pair | Frequency | Behavior |
+|---|---|---|
+| D1-D2 | $\approx 1.0$ | Fast rotation, encodes fine local position |
+| D3-D4 | $\approx 0.1$ | Medium rotation |
+| D5-D6 | $\approx 0.01$ | Slow rotation |
+| ... | ... | ... |
+| D127-D128 | Very small | Ultra-slow rotation, encodes global position |
+
+It's like a multi-scale coordinate system: the first dimension pairs distinguish neighboring tokens, the last distinguish tokens separated by thousands of positions.
+
+## The true genius of RoPE: relative positions emerge naturally
+
+Here's the mathematical property that makes all the magic. When you compute the dot product between a query at position $m$ and a key at position $n$, **after** the rotations:
+
+$$
+\langle \text{rotate}(Q_m),\; \text{rotate}(K_n) \rangle \text{ depends only on } (m - n) \text{ !}
+$$
+
+Not on $m$ alone, not on $n$ alone. Only the **difference** $m - n$. This is a pure mathematical property of rotations: when you rotate two vectors by two different angles, the dot product depends only on the difference of the angles.
+
+In practice, this means attention automatically encodes **relative positions**: "this token is 3 positions before that one" rather than "this token is at position 2012." That's much more useful for understanding text structure.
+
+<Callout type="paper" title="Why relative positions are superior">
+Attention with relative positions generalizes much better to context lengths different from those seen during training. "Am I 3 tokens before this one?" is stable, reusable information. "Am I at position 2012?" is an artifact of the specific sequence length.
+</Callout>
+
+## Efficient implementation with complex numbers
+
+In practice, rotations are implemented with **complex numbers**, which is both elegant and fast.
+
+Each pair $(q_{2i}, q_{2i+1})$ is interpreted as a complex number:
+$$
+\begin{aligned}
+q_{\text{complex}} &= q_{2i} + i \cdot q_{2i+1} \\
+\text{RoPE}(q, m) &= q_{\text{complex}} \times e^{i \cdot m \cdot \theta}
+\end{aligned}
+$$
+
+Multiplying by $e^{i \cdot m \cdot \theta}$ = rotating by angle $m \cdot \theta$. A complex multiplication translates to 4 real multiplications + 2 additions. This is very fast on GPUs, and most frameworks have optimized implementations.
+
+<Callout type="tip" title={"Important implementation detail"}>
+RoPE is applied to queries and keys **before** they're stored in the KV cache. The K/V in the cache are therefore already "rotated." Result: zero inference overhead. The rotation is computed once per token, at the time of processing.
+</Callout>
+
+## The concrete advantages of RoPE
+
+1. **Works for any length**: rotations are defined for any integer position, no theoretical limit
+2. **Compatible with KV cache**: the rotation is applied once, then the cache is reused without recomputation
+3. **Negligible cost**: a few multiplications per dimension, lost in the noise of the attention computation
+4. **Natural continuity**: neighboring positions have neighboring angles, therefore close representations. No artificial discontinuity.
+
+## The limits (and the solutions)
+
+### Extrapolation doesn't work directly
+
+A model trained with RoPE on 4K token contexts doesn't generalize well to 16K tokens. Why? High-frequency dimension pairs produce rotation angles never seen during training. The model encounters geometric configurations it has never experienced.
+
+**The solutions**: YaRN and NTK-aware scaling modify rotation frequencies to "stretch" positions in a coherent way. This is covered in detail in the context extension section.
+
+### The choice of base
+
+By default, $\text{base} = 10000$. But recent work shows that massively increasing the base (500K for LLaMA 3, for example) allows better handling of long sequences. A larger base = lower frequencies = slower rotations = the model "distinguishes" more distant positions.
+
+<Callout type="warning" title="A structural limitation">
+RoPE imposes a fixed structure: a logarithmic frequency spectrum dictated by the base. You can't arbitrarily redefine how positions work. It's a deliberate trade-off: you exchange flexibility for elegance and efficiency.
+</Callout>
+
+## Who uses RoPE?
+
+- LLaMA (1, 2, 3)
+- Mistral / Mixtral
+- Qwen
+- DeepSeek
+- Gemma
+- Phi
+
+Virtually 100% of modern open-source LLMs. It's the undisputed de facto standard.
+
+<Callout type="info" title={"The positional encoding of the future (and the present)"}>
+RoPE has replaced the absolute sinusoidal encodings from the original Transformer (2017) and the learned relative positions from T5. It's the standard that will likely remain for a good while. Simple to implement, mathematically elegant, effective in practice, compatible with the KV cache. Hard to do better.
+</Callout>

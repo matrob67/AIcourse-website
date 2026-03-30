@@ -1,0 +1,133 @@
+---
+title: "CLIP: Contrastive Vision-Language Learning"
+description: "OpenAI's CLIP learns visual representations from text supervision, revolutionizing zero-shot transfer in computer vision."
+---
+
+## The Groundbreaking Idea: Learning Vision with Text
+
+Before CLIP, training a computer vision model required painstakingly building labeled datasets. Want to recognize 1,000 object categories? You need thousands of manually annotated images for each one. ImageNet, the benchmark dataset, contained 1.2 million images spread across 1,000 classes. A colossal effort, and yet limited: your model can only recognize those 1,000 classes, nothing else.
+
+**CLIP completely flips this logic.** Instead of rigid labels, CLIP uses free-form text as supervision. The idea: collect 400 million image-text pairs found naturally on the web (a photo and its caption, for example), then teach the model to associate each image with the text that describes it. No need for an army of human annotators --- supervision comes directly from the web as it already exists.
+
+<ArxivLink id="2103.00020" title="Learning Transferable Visual Models From Natural Language Supervision (Radford et al., 2021)" />
+
+<Callout type="info" title={"CLIP's Fundamental Insight"}>
+Instead of training on fixed categories (1,000 ImageNet classes, no more, no less), CLIP learns to directly associate images and text in a shared space. This unlocks **zero-shot** classification: to classify an unknown image, you simply compare it with text descriptions of each possible class. No additional training needed. It's as if the model could read the label instead of having to memorize each object one by one.
+</Callout>
+
+## The Architecture: Two Encoders Speaking the Same Language
+
+### Dual Encoder
+
+CLIP relies on two neural networks trained simultaneously:
+
+- **Image encoder**: a Vision Transformer (ViT) or a ResNet that converts each image into a numerical vector
+- **Text encoder**: a standard Transformer that converts each sentence into a numerical vector
+
+The crucial point: these two vectors live in the **same vector space**, with the same dimensionality. Imagine a huge conceptual map: a photo of a cat and the sentence "a photo of a cat" end up at the same spot on this map. A mountain photo and "a snowy mountain landscape" do too. Images and texts that refer to the same thing have similar vectors.
+
+### Contrastive Training: Learning by Comparison
+
+The principle is elegant. Take a batch of $N$ image-text pairs. The goal is simple: bring each image closer to its correct text, and push it away from all other texts in the batch.
+
+For a batch of $N$ pairs:
+- $(image_1, text_1)$: high similarity (correct pair)
+- $(image_1, text_2)$: low similarity (incorrect pair)
+- $(image_2, text_1)$: low similarity (incorrect pair)
+- $(image_2, text_2)$: high similarity (correct pair)
+
+It's like a matching game: you show the model 1,000 images and 1,000 shuffled texts, and it has to figure out which text goes with which image. After playing this game millions of times, it learns incredibly rich visual and textual representations.
+
+**Technical corner**: The loss is a symmetric cross-entropy over cosine similarities. For each image, we maximize the similarity with its correct text and minimize it with the $N-1$ other texts in the batch. The formula:
+
+$$\mathcal{L} = -\log \frac{\exp(\text{sim}(image_i, text_i) / T)}{\sum_j \exp(\text{sim}(image_i, text_j) / T)}$$
+
+The parameter $T$ (temperature) controls the "sharpness" of learning: a low temperature forces the model to be more decisive in its associations.
+
+## Zero-Shot Classification: The Superpower
+
+### How It Works in Practice
+
+To classify an image into K classes **without ever having seen those classes during training**:
+
+1. Create text prompts for each class: "a photo of a [class]"
+2. Encode each prompt with the text encoder to get K text embeddings
+3. Encode the image with the image encoder to get 1 image embedding
+4. Compute the cosine similarity between the image and each text embedding
+5. The class with the highest similarity wins
+
+No fine-tuning required. The model generalizes directly thanks to the shared vision-language space.
+
+### Tip: Visual Prompt Engineering
+
+How you phrase the text prompts significantly affects performance:
+
+- "a photo of a cat" > "cat" (adding context helps the model)
+- "a photo of a cat, a type of pet animal" > "a photo of a cat" (even more context)
+- **Ensembling**: averaging the embeddings of multiple phrasings of the same concept further boosts performance
+
+<Callout type="paper" title="The zero-shot results are impressive">
+CLIP ViT-L/14 achieves **76.2% top-1 accuracy on ImageNet in zero-shot** --- comparable to a supervised ResNet-50 trained on ImageNet's 1.28 million images. And CLIP has never seen a single one of those training images. That's the power of learning general representations rather than specific categories.
+</Callout>
+
+## CLIP's Massive Impact
+
+### Foundation for All Modern VLMs
+
+CLIP has become the **standard vision encoder** for virtually all open-source vision-language models. LLaVA uses CLIP ViT-L/14. InternVL reimplemented it (InternViT). The visual representations learned by CLIP are the foundation on which practically all VLMs are built.
+
+### Text-Based Image Search
+
+Thanks to the shared space, CLIP naturally enables text-based image search (and vice versa). Type "a sunset over the ocean," and CLIP finds the closest images in its database. No specific training required: you just compare the embeddings.
+
+### Guiding Image Generation
+
+CLIP plays a central role in AI image generation:
+
+- **DALL-E 2** uses CLIP to encode the user's text
+- **Stable Diffusion** uses CLIP's text encoder (via OpenCLIP)
+- The **CLIP score** has become the standard metric for measuring the coherence between a text and a generated image
+
+### Spectacular Transfer Learning
+
+The representations learned by CLIP transfer exceptionally well to new tasks with very few examples (few-shot learning). A few dozen images are often enough to adapt CLIP to a specialized domain.
+
+## CLIP's Successors
+
+### SigLIP (Google)
+
+A major improvement that replaces the softmax loss function with a **sigmoid** per-pair loss. Concrete advantages: more stable to train, doesn't require very large batches (CLIP needed batches of 32K+ to work well), and scales better.
+
+### OpenCLIP
+
+An open-source reproduction of CLIP by LAION (Large-scale Artificial Intelligence Open Network), with models trained on much larger datasets (LAION-2B, DataComp). It democratized access to high-quality vision-language representations.
+
+### EVA-CLIP
+
+Improves CLIP training efficiency using masking techniques and optimized architectures. Result: comparable or superior performance, but with significantly faster training.
+
+### DINOv2 (Meta)
+
+An alternative approach to self-supervised visual learning, but **without any text at all**. DINOv2 learns purely from images, using self-supervision. It produces visual features complementary to CLIP, with a different focus: fine-grained spatial understanding rather than high-level semantics.
+
+<Callout type="tip" title="CLIP vs DINOv2: When to Use What">
+**CLIP excels** for tasks requiring high-level semantic understanding ("what is it?", classification, text-based search). **DINOv2 excels** for fine-grained spatial understanding tasks ("where is it?", "what texture?", segmentation). For building a VLM, CLIP is the standard. For fine segmentation, DINOv2 is often preferred.
+</Callout>
+
+## Limitations to Be Aware Of
+
+### Biases Inherited from the Web
+
+CLIP absorbs the biases present in the 400 million image-text pairs from the web. This includes visual stereotypes, underrepresentation of certain cultures, and spurious correlations. If the web massively associates "doctor" with images of white men, CLIP will learn that biased association.
+
+### Limited Spatial Understanding
+
+CLIP encodes an entire image into a single global vector, which erases spatial details. It understands "there's a cat and a dog" but struggles with "the cat is to the left of the dog."
+
+<Callout type="warning" title={"CLIP Is Not an Object Detector"}>
+CLIP can tell you "there's a cat in this image," but not "the cat is in the bottom left, next to the vase." For object detection or segmentation, you need specialized models (YOLO, SAM) or CLIP extensions (OWL-ViT for zero-shot detection, CLIP-Seg for segmentation).
+</Callout>
+
+## Perspective
+
+CLIP remains one of the most influential contributions in modern AI. Its footprint can be found in virtually all current vision-language models, in image search engines, and in image generation systems. It's the vision equivalent of what the Transformer was for NLP: a paradigm shift that redefined the entire field.

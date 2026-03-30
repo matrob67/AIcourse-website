@@ -1,0 +1,132 @@
+---
+title: "Function Calling"
+description: "Function calling with the Mistral API: tool definitions in JSON Schema, automatic routing, parallel calls, and integration patterns."
+---
+
+
+
+## Function Calling: Giving Your AI Hands
+
+A standalone LLM (Large Language Model) can only generate text. It doesn't know the current weather. It can't query your database. It can't send an email or create a Jira ticket.
+
+**Function Calling** changes that: you define tools (functions), and the model can **call** them when relevant. Suddenly, the AI has hands. It can interact with the real world, fetch fresh information, and trigger concrete actions.
+
+### The Full Flow, Step by Step
+
+Understanding the flow is essential, because there's an important subtlety:
+
+1. **You define tools**: you describe functions with their name, description, and parameters (in JSON Schema)
+2. **The user asks a question** that requires a tool ("What's the weather like in Paris?")
+3. **The model identifies the right tool** and generates the arguments as JSON
+4. **Your application executes the function** (call to a weather API, SQL query, etc.)
+5. **You send the result back** to the model
+6. **The model formulates the final answer** by incorporating the function result
+
+<Callout type="info" title="Key Point: Who Executes What?">
+The model never executes the function itself. It generates descriptive JSON: "call function X with arguments Y." It's **your application** that executes. The model is the brain that decides what to do. Your application is the hands that act. This separation is fundamental for security.
+</Callout>
+
+### Defining Tools with JSON Schema
+
+Tools are defined in the API request, in JSON Schema format:
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "get_weather",
+    "description": "Gets the current weather for a given city",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string",
+          "description": "The name of the city"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["celsius", "fahrenheit"],
+          "description": "Temperature unit"
+        }
+      },
+      "required": ["city"]
+    }
+  }
+}
+```
+
+**Best practices for tool definitions**:
+- **Clear and detailed descriptions**: this is the main quality lever. The model chooses the tool based on the description. A vague description = bad routing.
+- **Well-documented parameters**: describe the expected format, constraints, default values
+- **Enum for fixed values**: use `enum` when the possible values are known in advance
+- **Limit the number of tools**: beyond 20 tools, the model starts making more mistakes in its selection. If you have more, group them logically.
+
+### Parallel Calls: Multiple Tools in a Single Turn
+
+Mistral supports calling **multiple tools simultaneously** in a single response.
+
+Concrete example: the user asks "Compare the weather in Paris and London."
+1. The model generates **two** `get_weather` calls at once (one for Paris, one for London)
+2. Your application executes both in parallel
+3. You send back both results
+4. The model compares and formulates its answer
+
+**The advantage**: instead of two sequential round trips (question, tool 1, response, tool 2, final response), everything happens in a single round trip. Latency is cut in half or more.
+
+<Callout type="tip" title="Parallelization = Massive Latency Savings">
+Without parallel calls, each tool requires a full round trip with the model. With parallel calls, multiple tools are invoked in a single exchange. For cases where the model needs 3 or 4 tools simultaneously, the latency savings are considerable.
+</Callout>
+
+### The Four Integration Patterns
+
+**Single tool**: one tool defined, the model uses it when relevant.
+Example: a customer support chatbot that queries a knowledge base. Simple, effective, easy to debug.
+
+**Multi-tool**: multiple tools available, the model picks the right one based on the question.
+Example: an assistant that manages the calendar (view, create, modify), emails (read, send), tasks (create, complete), and document search.
+
+**Chained tools**: the result of one tool serves as input for another.
+Example: search for a customer by name, retrieve their orders, generate a summary report. The model orchestrates the sequence.
+
+**Agentic**: the model plans a strategy, executes a sequence of tools, and adapts its plan based on intermediate results. This is the most advanced level, where the model has real decision-making autonomy (see Agents API).
+
+### Error Handling: The Three Problem Cases
+
+**Wrong tool selected**: the model picks an inappropriate tool for the question.
+Solution: improve tool descriptions, add examples in the system prompt, and make sure tools have clearly distinct names and descriptions.
+
+**Invalid parameters**: the model generates incorrect or malformed arguments.
+Solution: systematically validate parameters server-side before executing. If the arguments are invalid, return an explanatory error message to the model so it can correct itself.
+
+**External function failure**: the API you're calling is unavailable, the data doesn't exist, the service is under maintenance.
+Solution: return the formatted error to the model. It can then inform the user of the problem or suggest an alternative approach.
+
+<Callout type="warning" title="Security: ALWAYS Validate Arguments">
+A malicious user can try to manipulate the model via prompt injection to call an unauthorized function or with dangerous arguments. Basic rules: validate arguments server-side, implement authorization checks, and never allow destructive actions (deletion, sending) without explicit human confirmation.
+</Callout>
+
+### Comparison with Competitors
+
+| Feature | Mistral | OpenAI | Anthropic | Google |
+|---|---|---|---|---|
+| Function calling | Yes | Yes | Yes | Yes |
+| Parallel calls | Yes | Yes | Yes | Yes |
+| JSON Schema | Yes | Yes | Yes | Yes |
+| Force tool usage | Yes | Yes | Yes | Yes |
+| Streaming calls | Yes | Yes | Yes | Yes |
+
+Function calling has become an industry standard. Mistral is fully compatible, making migration from other providers trivial.
+
+### Real-World Use Cases
+
+**E-commerce**: the user asks for a recommendation, the model searches the catalog, checks stock, calculates shipping costs, then proposes the order.
+
+**HR**: an employee asks about their remaining vacation days, the model queries the HRIS (Human Resources Information System), checks company policies, suggests possible dates, and creates the request.
+
+**Data analytics**: a manager asks a business question, the model queries the database, performs calculations, generates a chart, and exports a PDF report.
+
+**Finance**: an analyst wants a market summary, the model fetches stock prices, calculates technical indicators, and generates analysis with trends.
+
+---
+
+**Function Calling** transforms the model from a passive text generator into an agent capable of interacting with the real world. It's the foundational building block of any useful AI application in business.

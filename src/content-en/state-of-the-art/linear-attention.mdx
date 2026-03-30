@@ -1,0 +1,153 @@
+---
+title: "Linear attention: abolishing softmax for O(L)"
+description: "Linear attention: replace softmax with a simple kernel, refactorize the multiplications, and boom: O(L) complexity instead of O(L^2)."
+---
+
+## The fundamental problem with softmax
+
+Standard Transformer attention:
+
+$$
+\text{Attention} = \text{softmax}(QK^\top) \times V
+$$
+
+Softmax is the culprit. It ties together **all** token pairs $(q_i, k_j)$ in a global dependency. To compute the attention weight of a single token, you need to know the scores of ALL other tokens (because of the softmax normalization). Result: impossible to factorize the computation. We're stuck at $O(L^2)$.
+
+For a sequence of 100K tokens, that's $10^{10}$ operations just for attention. Linear attention proposes an elegant solution: replace softmax with something factorizable.
+
+## The trick: replace softmax with a kernel
+
+Instead of softmax, we use a kernel function $\varphi$ -- here, "kernel" refers to a function that transforms Q and K vectors before multiplying them, not to be confused with the "kernel trick" from SVMs mentioned below -- that transforms queries and keys independently:
+
+$$
+\text{LinAttn} = \frac{\varphi(Q) \times \varphi(K)^\top \times V}{\text{normalizer}}
+$$
+
+So far, nothing has changed in terms of complexity. The real trick is to **reorder the matrix multiplications**.
+
+**BEFORE (softmax)**: we compute $QK^\top$ (an $L \times L$ matrix, gigantic), then apply softmax, then multiply by $V$. Complexity: $O(L^2 \times d)$.
+
+**AFTER (kernel)**: we compute $\varphi(K)^\top V$ first (a small $d_\varphi \times d_v$ matrix), then multiply by $\varphi(Q)$. Complexity: $O(L \times d^2)$.
+
+The summary $\varphi(K)^\top V$ is a small tensor of dimension $d_\varphi \times d_v$, independent of the sequence length $L$. It encodes a kind of "compressed summary" of all the key-value information. Each query only needs to consult this summary instead of looking at each token individually.
+
+<Callout type="info" title={"The kernel trick applied to attention"}>
+This is literally the kernel trick from kernel theory, applied to the attention mechanism. Instead of computing an explicit $L \times L$ matrix, we go through an intermediate space of fixed dimension. The same idea that allows SVMs to work in infinite dimensions without exploding in computation.
+</Callout>
+
+## Main approaches
+
+### Linear Transformer (ELU + 1)
+
+The simplest version: use $\varphi(x) = \text{elu}(x) + 1$ as the kernel.
+
+Why elu + 1? Two reasons: ELU is smooth and differentiable everywhere (good for training), and adding 1 guarantees that values are strictly positive (necessary because attention weights must be non-negative).
+
+Simple, elegant, easy to implement. The starting point for the entire family.
+
+### Performer (Random Fourier Features)
+
+The Performer takes a more mathematically rigorous approach. It uses random Fourier features to **approximate** the softmax:
+
+$$
+\text{softmax}(QK^\top) \approx \varphi(Q) \times \varphi(K)^\top
+$$
+
+where $\varphi$ uses random sinusoids drawn from a specific distribution.
+
+The FAVOR+ algorithm improves this approximation with orthogonal features to reduce variance. Complexity: $O(Lmd)$ where $m$ is the number of features (typically $m \ll L$).
+
+<Callout type="paper" title="Performer: a rigorous approximation">
+The Performer shows that you can approximate the softmax kernel via random features with theoretical guarantees on approximation error. It's the most "mathematically clean" version of linear attention.
+</Callout>
+
+### cosFormer
+
+An approach that combines linear attention with a local positional bias:
+
+$$
+A_{i,j} = \text{ReLU}(Q_i) \times \text{ReLU}(K_j) \times \cos\!\left(\frac{\pi}{2} \cdot \frac{i-j}{L}\right)
+$$
+
+The cosine term favors nearby tokens (small distance $i-j$) and penalizes distant tokens. It's an elegant way to incorporate locality bias without going back to $O(L^2)$.
+
+### Gated Linear Attention (GLA)
+
+The most promising evolution. A gate is added, inspired by RNNs:
+
+$$
+\begin{aligned}
+\text{state}[t] &= \text{gate}[t] \odot \text{state}[t-1] + K[t]^\top V[t] \\
+\text{output}[t] &= Q[t] \times \text{state}[t]
+\end{aligned}
+$$
+
+A few details on this formulation:
+
+- **$\odot$** denotes the Hadamard product, i.e., element-wise multiplication between two matrices of the same dimension.
+- **gate$[t]$** is a learned vector (dependent on the input at step $t$) whose each component is between 0 and 1. It controls how much of the previous state is retained at each position -- this is exactly the role of the "forget gate" in an LSTM. A gate close to 1 preserves memory, a gate close to 0 erases it.
+- **$K[t]^\top V[t]$** injects the new key-value association into the state.
+
+The intuition: this recurrence **mimics attention** by progressively accumulating key-value associations in a compressed state. Instead of recomputing attention over all past tokens (cost $O(L^2)$), each new token updates a fixed-size summary. The query $Q[t]$ then queries this summary, just as it would query the full attention matrix in standard attention.
+
+<Callout type="tip" title="SSM and linear attention convergence">
+Recent work reveals that SSMs (like Mamba) and linear attention are fundamentally the same mathematical object, just formulated differently. Mamba-2 has indeed unified both in a single framework. GLA is linear attention that looks like an SSM. Mamba is an SSM that looks like linear attention.
+</Callout>
+
+
+
+## The recurrent formulation
+
+Linear attention can also be written as a recurrence, which is crucial for inference:
+
+$$
+\begin{aligned}
+S_n &= S_{n-1} + \varphi(K_n)^\top V_n \\
+z_n &= z_{n-1} + \varphi(K_n) \\
+\text{output}_n &= \frac{\varphi(Q_n) \times S_n}{\varphi(Q_n) \times z_n}
+\end{aligned}
+$$
+
+Let's detail each component:
+
+- **$S_n$** is the **state matrix** of dimension $d_\varphi \times d_v$. It accumulates transformed key-value associations: at each step, the term $\varphi(K_n)^\top V_n$ (an outer product of dimensions $d_\varphi \times d_v$) is added to it. $S$ encodes a compressed summary of all past context.
+- **$z_n$** is the **normalization vector** of dimension $d_\varphi$. It accumulates transformed keys $\varphi(K_n)$ across the sequence.
+- **The division $\frac{\varphi(Q_n) \times S_n}{\varphi(Q_n) \times z_n}$** plays the role of softmax in standard attention. The numerator computes the weighted sum of values, and the denominator normalizes so the effective weights sum to 1. This is exactly what softmax does -- except here the normalization is done via the product $\varphi(Q) \times z$ instead of a global exponential.
+
+At each new token, you update $S$ and $z$ in $O(d^2)$, then compute the output. No need for a KV cache that grows with the sequence: the state has a constant size.
+
+This is exactly the structure of an RNN/SSM: a hidden state updated recursively. Linear attention and SSMs are two sides of the same coin.
+
+## The major problem: quality
+
+Despite its complexity advantages, linear attention is systematically **less performant** than softmax on language tasks. Why?
+
+Softmax creates a **peaked** distribution: it puts a lot of weight on a few key tokens and near-zero on the rest. This is extremely effective for "selecting" precisely the relevant information in a long sequence.
+
+Linear kernels produce more **diffuse** and uniform distributions. The model struggles to ignore irrelevant tokens. It's like trying to follow a conversation in a noisy room without being able to "filter out" the background voices.
+
+<Callout type="warning" title={"Selectivity: the Achilles' heel"}>
+With softmax, a token can say "I'm listening ONLY to that specific token, zero weight on all others." With a linear kernel, this perfect selectivity is mathematically impossible. The model must learn to ignore distractions indirectly, which costs expressiveness and performance.
+</Callout>
+
+## Comparative benchmarks
+
+| Approach | Complexity | Quality vs softmax | Inference state |
+|----------|-----------|---|---|
+| Standard softmax | O(L^2) | 100% (reference) | O(L) cache (KV cache) |
+| Linear Transformer | O(L) | ~95% | Fixed state |
+| Performer | O(Lm) | ~93% | Fixed state |
+| GLA | O(L) | ~97% | Fixed state |
+
+## Current relevance
+
+Pure linear attention? It lost the battle against softmax for LLMs. It's been superseded by selective SSMs (Mamba) that restore selectivity while remaining at linear complexity.
+
+But linear attention concepts are alive and omnipresent:
+- **GLA** appears in modern hybrid architectures
+- **RetNet** combines linear attention with a temporal decay factor
+- **Mamba-2** formally unifies SSMs and linear attention
+
+<Callout type="info" title={"The legacy of linear attention"}>
+Linear attention revealed a deep truth: the bottleneck of attention isn't really the $O(L^2)$ complexity, it's the **selectivity** that softmax provides. Successors (selective SSMs, hybrid architectures) learned this lesson and solve the problem differently, restoring selectivity without going through softmax.
+</Callout>

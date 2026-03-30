@@ -1,0 +1,153 @@
+---
+title: "Data Quality: Deduplication and Filtering"
+description: "Training data curation techniques for LLMs: deduplication, quality filtering, detoxification, and source mixing strategies to optimize model quality."
+---
+
+## The Mantra: "Garbage In, Garbage Out"
+
+Training data is the single most determining factor of LLM (Large Language Model) quality. More than model size. More than the number of tokens. More than the architecture.
+
+The analogy is simple: you can have the best chef in the world, but if you give them rotten ingredients, the dish will be bad. A 7B parameter model trained on carefully filtered data can outperform a 70B model trained on spam, duplicated, and low-quality content. This is one of the most counter-intuitive lessons in the field.
+
+## The Data Processing Pipeline
+
+Here's the typical journey from raw data to the final dataset:
+
+1. **Raw data** (100 TB) --- everything scraped from the web
+2. **Extraction** (HTML cleanup, format conversion, normalization)
+3. **Language filtering** (language detection, removal of non-textual content)
+4. **Deduplication** (30-50% eliminated --- yes, that's enormous)
+5. **Quality filtering** (classifier-based, elimination of low-quality content)
+6. **Safety filtering** (toxicity, PII, illegal content)
+7. **Mixing and proportioning** (source balancing)
+8. **Final data** (5-15 TB, i.e., 5-15T tokens)
+
+The reduction ratio is **5-20x**. You start with 100 TB and end up with 5-15 TB. That gives you an idea of the scale of cleanup needed: the majority of the internet simply isn't good enough to train a quality LLM.
+
+<Callout type="info" title={"The Scale of Curation Work"}>
+For a 5T token dataset, you need to process about 100 TB of raw data through this pipeline. That takes weeks of computation on massive clusters. This is why well-documented public datasets (FineWeb, DCLM) are so valuable: they save months of work and millions in infrastructure.
+</Callout>
+
+
+
+## Deduplication: 30-50% of Web Data Is Duplicated
+
+### Why It's Critical
+
+The web is an ocean of duplicated content: articles picked up by dozens of aggregation sites, recurring website templates (legal notices, terms of service), copy-pasted HTML boilerplate, syndicated news articles.
+
+Not deduplicating has three serious consequences:
+- **Memorization instead of generalization**: the model memorizes duplicated content word for word instead of learning the underlying patterns. It's like a student who memorizes flash cards without understanding the concepts.
+- **Overrepresentation bias**: the most duplicated content disproportionately pollutes the gradients, biasing the model toward certain types of text.
+- **Benchmark contamination**: if test data ends up in the training data (via articles that cite benchmarks), evaluation scores are artificially inflated and no longer reflect the model's true capabilities.
+
+### Technique 1: Exact Deduplication (Hashing)
+
+You compute a cryptographic fingerprint (MD5, SHA-256) of each document. Two identical documents produce the same fingerprint and are detected as duplicates.
+
+**Fast** and simple to implement, but only captures **exact** duplications --- if a single character changes, the documents are considered different.
+
+### Technique 2: Fuzzy Deduplication
+
+Detects similar but non-identical documents: same article slightly rephrased, same content with a different introduction, etc.
+
+**MinHash + LSH** (Locality Sensitive Hashing): you represent each document by its n-grams (groups of consecutive words), compute a compact signature (MinHash), then use LSH to efficiently group documents whose Jaccard similarity exceeds a threshold (typically 80%).
+
+This is much more powerful than exact hashing, but also more computationally expensive. In practice, both techniques are used in sequence: exact hashing first (fast, eliminates perfect copies), then fuzzy dedup (slower, eliminates near-copies).
+
+<Callout type="paper" title="Measured Impact of Deduplication">
+Studies show that deduplication improves performance by about 10% in perplexity and delivers measurable gains on benchmarks. Remarkably, this effect is more important than adding the same volume of new unfiltered data. In other words, it's better to clean your data than to add more of it.
+</Callout>
+
+## Quality Filtering: Classifier-Based
+
+### Heuristic Approach (The First Filter)
+
+Simple rules eliminate the most flagrant cases:
+- **Minimum length**: fewer than 50 words = rejected (near-empty pages, navigation menus)
+- **Alphabetic ratio**: too many symbols or numbers = suspicious (raw data pages, logs)
+- **Repetition**: too many repeated n-grams = automatically generated content or boilerplate
+- **Stop word distribution**: too many stop words without substantive content = filler text
+
+It's fast and eliminates the worst cases, but lets through a lot of mediocre content that slips past these simple rules.
+
+### Modern Approach: The Neural Classifier
+
+You train a binary model (often a small BERT or fastText) to distinguish high-quality content from low-quality content:
+
+- **Positive examples**: Wikipedia, published books, peer-reviewed articles, quality technical documentation
+- **Negative examples**: random web, spam, auto-generated content, SEO reference pages
+
+The classifier scores each document from 0 to 1. You then filter based on a threshold (for example, keep only documents scored above 0.7).
+
+**Used by**: GPT-3, LLaMA, Qwen, and the majority of modern LLMs. It has become an industry standard.
+
+<Callout type="tip" title="Ranking Rather Than Hard Filtering">
+Instead of binary filtering (keep/reject), a more sophisticated approach assigns a quality score to each document and oversamples high scores during training. This avoids losing potentially useful documents that fall just below the cutoff threshold. Data isn't black or white --- it exists on a quality spectrum.
+</Callout>
+
+## Safety Filtering
+
+### Detoxification
+
+The goal is to reduce (not completely eliminate) toxic content in training data:
+
+- **Toxicity classifiers**: models trained on labeled toxicity datasets (Perspective API, Detoxify)
+- **Word lists**: quick keyword filtering (brutal but effective as a first filter)
+- **Threshold strategy**: aim for a reasonable target toxicity rate (e.g., < 0.5%) rather than zero
+
+Why not zero? Because overly aggressive filtering eliminates legitimate content: nuanced discussions on sensitive topics, medical documentation (which contains anatomical terms), legal literature (which describes crimes), historical articles, etc. A model trained without any potentially sensitive content becomes ignorant of these subjects.
+
+### Personal Information (PII)
+
+Systematic removal or anonymization of:
+- Phone numbers, emails, postal addresses
+- Names of private individuals (not public figures)
+- Identification numbers (SSN, ID cards, social security numbers)
+
+<Callout type="warning" title="The Filtering vs Quality Trade-Off">
+Overly aggressive filtering degrades model quality. For example, filtering all content mentioning potentially sensitive medical or legal terms eliminates legitimate and valuable knowledge in these domains. Safety filtering must be carefully calibrated: strict enough to reduce risks, permissive enough to preserve knowledge. It's a delicate balance.
+</Callout>
+
+## Data Mixing: Source Proportioning
+
+### Typical Sources and Proportions
+
+| Source | Proportion | Quality | Notes |
+|--------|-----------|---------|--------|
+| Web (Common Crawl) | 60-80% | Variable | Massive volume, dataset backbone |
+| Code (GitHub) | 5-15% | High | Improves logical reasoning |
+| Books | 3-8% | Very high | Limited access (copyright) |
+| Scientific articles | 2-5% | Very high | PubMed, arXiv |
+| Wikipedia | 2-5% | High | Diverse factual coverage |
+| Conversations | 1-3% | Variable | Reddit, Discord --- brings conversational style |
+| Multilingual data | Variable | Variable | Depends on language coverage objective |
+
+### Mix Optimization
+
+The choice of proportions is critical and non-trivial. Three approaches:
+
+1. **Heuristic**: based on experience and intuition ("more code = better for reasoning"). Fast but subjective.
+2. **Scaling law-guided**: run experiments on small models (1-3B) with different mixes and extrapolate results to large models. More rigorous.
+3. **DoReMi**: algorithm that automatically optimizes proportions based on loss on a diverse validation set. The most sophisticated.
+
+<Callout type="info" title="Growing Community Transparency">
+The open-source community is pushing toward greater transparency in data curation. Public datasets like FineWeb (HuggingFace, 15T tokens), DCLM (AI2) document exactly their filtering pipelines, proportions, and sources. This allows other teams to reproduce, improve, and audit the process. It's a major improvement over the opacity of proprietary datasets.
+</Callout>
+
+## Reference Public Datasets
+
+- **The Pile**: 800 GB, 22 diverse sources --- the pioneer of open and documented datasets
+- **RedPajama**: reproduces the LLaMA data pipeline in open source
+- **FineWeb** (HuggingFace): 15T tokens of filtered web data with a detailed documented pipeline
+- **DCLM** (AI2): curated dataset with complete documentation and quality benchmarks
+
+## Summary
+
+Data quality is the primary performance multiplier for LLMs. The three pillars:
+
+1. **Deduplication**: eliminates 30-50% of duplicated data. The gain is significant and immediate.
+2. **Quality filtering**: a neural classifier separates the wheat from the chaff. Industry standard.
+3. **Optimized mixing**: the right proportions between sources maximize the model's capabilities.
+
+Investing in a robust data pipeline delivers more return on investment than increasing model size or raw data volume. It's the invisible, unglamorous, and absolutely crucial work behind every state-of-the-art LLM.

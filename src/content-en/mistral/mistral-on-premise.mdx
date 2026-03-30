@@ -1,0 +1,164 @@
+---
+title: "On-premise Deployment"
+description: "Self-hosting Mistral models: GGUF options, vLLM, TGI, enterprise considerations, and deployment in air-gapped environments."
+---
+
+
+
+## Mistral at Your Place: On-Premise Deployment
+
+OpenAI says "give me your data, I'll process it on my servers." The other option: "Take Mistral, put it on your servers, your data stays at your place."
+
+It's more complicated. But it's yours.
+
+### Why Do This?
+
+**Total privacy.** Data stays in your datacenter. Zero risk of anyone else reading it.
+
+**Total data sovereignty.** Data never leaves the organization's network. No third party has access to prompts, responses, or context data.
+
+**Regulatory compliance.** Some regulations explicitly prohibit transmitting data to third parties or outside national territory.
+
+**Minimal latency.** Local inference eliminates network latency (typically 50-200ms), which is critical for real-time applications.
+
+**Predictable cost.** After the initial hardware investment, the marginal cost per request is virtually zero. For very high volumes, on-premise is often more economical than the API.
+
+**Availability.** No dependency on an external service. The model stays available even in case of internet outage or provider downtime.
+
+<Callout type="info" title="On-premise does not equal free">
+On-premise deployment eliminates API costs but introduces others: GPU hardware purchase or rental, electricity, cooling, maintenance, ops personnel, and the opportunity cost of time spent managing infrastructure. The TCO (Total Cost of Ownership) analysis must take all of these factors into account.
+</Callout>
+
+### Inference Tools
+
+Several open-source frameworks let you serve Mistral models in production.
+
+#### vLLM
+
+vLLM is the most popular inference framework for high-performance server deployments.
+
+**Strengths:**
+- PagedAttention for optimal GPU memory management
+- Continuous batching for maximum throughput
+- Native support for MoE models (Mixtral)
+- Compatible with the OpenAI API format
+- Built-in quantization (AWQ, GPTQ, BitsAndBytes)
+
+**Typical deployment:**
+```bash
+python -m vllm.entrypoints.openai.api_server \
+  --model mistralai/Mistral-7B-Instruct-v0.3 \
+  --tensor-parallel-size 1
+```
+
+vLLM exposes an OpenAI-compatible API, meaning existing applications can migrate to a self-hosted deployment without code changes.
+
+#### Text Generation Inference (TGI)
+
+TGI is Hugging Face's inference framework, optimized for production.
+
+**Strengths:**
+- Ready-to-use Docker image
+- Support for Mistral and Mixtral models
+- Built-in FlashAttention and Paged Attention
+- Built-in Prometheus monitoring
+- GPTQ and BitsAndBytes quantization
+
+TGI is particularly suited for Kubernetes deployments thanks to its optimized Docker images.
+
+#### llama.cpp / Ollama
+
+For lighter deployments or on consumer hardware, llama.cpp (and its user-friendly wrapper Ollama) offer a simple solution.
+
+**Strengths:**
+- CPU and GPU support (CUDA, Metal, Vulkan)
+- GGUF format with built-in quantization
+- Extremely simple to deploy (Ollama: a single command)
+- Works on Mac, Linux, Windows
+- Ideal for development and small deployments
+
+<Callout type="tip" title="Ollama for Prototyping">
+Ollama is the ideal tool to get started with self-hosted deployment. A simple command `ollama run mistral` downloads and launches Mistral 7B. It's perfect for local development, prototyping, and small deployments. For large-scale production, migrate to vLLM or TGI.
+</Callout>
+
+### Hardware Sizing Guide
+
+The hardware choice depends on the model and performance requirements.
+
+#### Mistral 7B
+
+| Configuration | GPU | Quantization | Estimated Throughput |
+|--------------|-----|----------------|-------------------|
+| Budget | RTX 3060 12GB | Q4_K_M (GGUF) | ~30 tokens/s |
+| Standard | RTX 4090 24GB | FP16 | ~80 tokens/s |
+| Production | A100 40GB | FP16 | ~120 tokens/s |
+
+#### Mixtral 8x7B
+
+| Configuration | GPU | Quantization | Estimated Throughput |
+|--------------|-----|----------------|-------------------|
+| Minimum | 2x RTX 4090 | Q4 | ~20 tokens/s |
+| Standard | 2x A100 80GB | FP16 | ~50 tokens/s |
+| Production | 4x A100 80GB | FP16 | ~100 tokens/s |
+
+#### Mistral Large 3
+
+| Configuration | GPU | Notes |
+|--------------|-----|-------|
+| Minimum | 8x A100 80GB | Quantized |
+| Recommended | 8x H100 80GB | FP16 |
+| High perf | 16x H100 80GB | High batch |
+
+### Air-Gapped Environments
+
+Air-gapped environments (disconnected from the internet) pose specific challenges for LLM deployment.
+
+**Weight transfer.** Model weights (several GB to several hundred GB) must be physically transferred (external drive, isolated network) to the target environment.
+
+**Software dependencies.** All dependencies (inference framework, CUDA libraries, GPU drivers) must be pre-packaged and transferred.
+
+**Updates.** Model or software updates require a new physical transfer.
+
+**Containerization.** Using pre-built Docker containers is strongly recommended to simplify deployment and ensure reproducibility.
+
+<Callout type="warning" title="Validation in Air-Gapped Environments">
+Systematically test your deployment in an environment simulating air-gapped conditions before transferring to the target environment. Missing dependencies, version incompatibilities, and driver issues are the most frequent sources of failure.
+</Callout>
+
+### Enterprise Considerations
+
+#### High Availability
+
+For production deployments, it's essential to plan for redundancy.
+
+**Multi-instance.** Deploy multiple model instances behind a load balancer for high availability and load distribution.
+
+**Instance health.** Implement health checks to automatically detect and replace failing instances.
+
+**Failover.** Plan a failover mechanism to a backup model (smaller or cloud-hosted) in case of complete outage.
+
+#### Monitoring
+
+**Essential metrics:** GPU utilization (should be > 80%), time to first token (TTFT), tokens per second, queue size, error rate.
+
+**Tools:** Prometheus + Grafana is the most common monitoring stack, with specific exporters for vLLM and TGI.
+
+#### Security
+
+**Network:** isolate the inference service in a private network, accessible only via an authenticated reverse proxy.
+
+**Authentication:** implement API key or certificate-based authentication for service access.
+
+**Audit:** log requests and responses for audit and compliance (watch out for volume).
+
+### Model Formats and Quantization
+
+| Format | Framework | GPU Required | Usage |
+|--------|-----------|-----------|-------|
+| safetensors (FP16) | vLLM, TGI | NVIDIA | High-performance production |
+| GPTQ (4-bit) | vLLM, TGI, ExLlama | NVIDIA | Cost-reduced production |
+| AWQ (4-bit) | vLLM | NVIDIA | Cost-reduced production |
+| GGUF (variable) | llama.cpp, Ollama | CPU/GPU | Development, edge |
+| ONNX | ONNX Runtime | Multi-platform | Portability |
+
+On-premise deployment of Mistral models offers ultimate control but requires expertise in GPU infrastructure and ML operations. For organizations that have this expertise, it's often the most suitable solution for sovereignty and performance requirements.

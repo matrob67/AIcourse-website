@@ -1,0 +1,155 @@
+---
+title: "Self-Verification: LLM Self-Correction"
+description: "Self-verification techniques allow LLMs to detect and correct their own errors, improving reliability without an external model."
+---
+
+
+## The Model That Judges Itself
+
+The starting intuition is simple: if a model can generate an incorrect answer, can it also **recognize** it as incorrect when asked to verify? The answer is often yes, and it's less paradoxical than it seems.
+
+Generating a good answer and verifying an answer are two tasks of **different difficulty**. Coming up with a mathematical proof is hard. Checking that a proof is correct is generally easier. Writing a bug-free program is hard. Reading a program and spotting the bug is often more accessible.
+
+**Self-verification** exploits this asymmetry: the model becomes its own quality controller.
+
+<Callout type="info" title={"The fundamental asymmetry"}>
+Generating a good answer = hard. Verifying if an answer is good = easier.
+A model that fails to generate correctly on the first try can still detect the error when shown its own answer. It's like proofreading your exam paper: you see mistakes that you wouldn't have avoided while writing.
+</Callout>
+
+## Self-Verification Techniques
+
+### 1. Self-Refine: Iterative Improvement
+
+The principle is a dialogue of the model with itself:
+
+1. Generate an initial answer
+2. Ask: "Critique this answer. What are the potential errors?"
+3. Ask: "Improve the answer taking this critique into account"
+4. Repeat steps 2-3 until the critique finds no more issues
+
+It's like an author who rereads and revises their manuscript in multiple passes. Each pass catches errors that the previous one missed.
+
+### 2. Self-Debugging: The Special Case of Code
+
+For code, self-verification has a huge advantage: you can **execute** the code and get objective feedback.
+
+1. The model generates the code
+2. You execute it against tests
+3. If error: you show the error message to the model
+4. The model analyzes the error and proposes a fix
+5. You re-test
+
+The feedback isn't subjective here: the test passes or it doesn't. That's what makes self-debugging so effective compared to other forms of self-verification.
+
+### 3. Verification by Inversion
+
+An elegant technique: instead of directly verifying whether the answer is correct, you solve the problem **in reverse**:
+
+> **Problem:** $2x + 3 = 11$, find $x$
+> **Proposed answer:** $x = 4$
+> **Verification:** $2(4) + 3 = 8 + 3 = 11$ &check;
+
+Instead of re-deriving the solution, you substitute and verify that it checks out. This pattern is generalizable well beyond math.
+
+### 4. Constitutional AI (Self-Critique)
+
+The model evaluates its own answer against **explicit principles**:
+
+- "Is this answer helpful?"
+- "Is this answer honest and factual?"
+- "Is this answer safe and harmless?"
+
+The model judges itself according to a "constitution" of principles. This is the foundation of alignment at Anthropic.
+
+<Callout type="tip" title={"The inversion pattern: remember this"}>
+For math: substitute the answer into the original equation.
+For translations: translate back into the source language and compare.
+For summaries: verify that each key point in the summary can be found in the original text.
+
+This inversion pattern is generalizable and remarkably effective. The cost is minimal (one additional call) and reliability increases significantly.
+</Callout>
+
+## Reflexion: Learning from Mistakes with Memory
+
+The Reflexion framework (Shinn et al., 2023) pushes self-verification further by adding a **failure memory**:
+
+1. The model attempts to solve the task
+2. On failure: it generates a reflection ("I failed because I confused X and Y")
+3. This reflection is stored in memory
+4. On the next attempt: previous reflections are included in the prompt
+5. The model avoids previously made errors
+
+The results are spectacular:
+- HumanEval (code): 67% --> 91%
+- AlfWorld (agent): 63% --> 97%
+
+Error memory transforms each failure into learning. Instead of making the same mistakes, the model accumulates experience, like a developer who keeps a bug journal.
+
+## The Real Limitations: Don't Overestimate
+
+### Can the Model Really Self-Correct?
+
+The honest answer: **sometimes yes, often no**.
+
+Rigorous studies show that self-correction without external feedback is **limited**:
+
+| Error Type | Detection by Self-Verification |
+|---|---|
+| Obvious factual errors | Often detected |
+| Subtle logic errors | Frequently missed |
+| Hallucinations on unknown topics | Not detected |
+| Systematic biases | Reinforced instead of corrected |
+
+<Callout type="paper" title={"Without external feedback, improvement is limited"}>
+Huang et al. (2023) showed that without objective external feedback (code execution, symbolic computation, factual verification), LLMs **do not significantly improve** through self-correction. The model tends to maintain its initial answer, or worse, degrade it on second thought. Self-verification works mostly when there's an objective anchor.
+</Callout>
+
+### Confirmation Bias
+
+Like a human who defends their opinion rather than looking for their own errors, the LLM has a **confirmation bias**. "My answer is correct" is more probable in token space than "I was wrong." The model tends to justify its initial answer rather than genuinely questioning it.
+
+### Cumulative Cost
+
+Three iterations of critique-improvement consume **4 to 5 times more tokens** than the initial answer. It's a significant investment that is only justified if the quality gain is real.
+
+## Best Practices for Effective Self-Verification
+
+### 1. Combine with External Feedback
+
+Self-verification works **much better** with an objective anchor:
+
+- **Code**: unit test execution
+- **Math**: verification by substitution or symbolic computation
+- **Facts**: web search verification
+- **Format**: automatic JSON/XML validation
+
+```python
+response = model.generate(prompt)
+critique = model.generate(f"Critique: {response}")
+if execution_test(response) == PASS:
+    return response  # No need to improve
+else:
+    improved = model.generate(f"Fix based on: {critique}")
+    return improved
+```
+
+### 2. Limit Iterations
+
+2 to 3 iterations maximum. Beyond that, the model goes in circles, "fixes" things that didn't need fixing, or degrades the original answer. More is not always better.
+
+### 3. Use a Different "Judge"
+
+For critique, use a radically different prompt, or better yet, a different model. This reduces confirmation bias: the "judge" doesn't have the same blind spots as the "generator."
+
+<Callout type="warning" title="A multiplier, not a silver bullet">
+Self-verification corrects errors that the model is capable of "recognizing": obvious calculation errors, glaring logical inconsistencies. But it doesn't correct deep hallucinations or biases the model isn't aware of.
+
+It's a reliability multiplier on "dumb" errors, not a universal correctness guarantee.
+</Callout>
+
+## The Evolution: Internalized Self-Verification
+
+Modern reasoning models (o1, R1) have internalized self-verification into their chain of thought. Instead of explicitly asking the model to "verify your answer," the model verifies itself **spontaneously** while thinking. It goes back over its steps, tests alternatives, detects its own inconsistencies — all during the generation process.
+
+Self-correction is no longer just a prompting trick. It's a capability that can be trained and integrated directly into the model, a sign of the field's maturation.

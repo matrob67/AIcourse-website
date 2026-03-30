@@ -1,0 +1,154 @@
+---
+title: "Backpropagation: How a Network Learns"
+description: "Understanding the fundamental learning mechanism of neural networks without the headache."
+---
+
+## Backpropagation: How a Network Learns
+
+Imagine you've just baked a chocolate cake for the first time. The result is... a bit dry. You taste it, you think, and you mentally trace back through your recipe: "Maybe I put too much flour? Or not enough eggs? Or maybe the oven was too hot?" You identify the problem, you adjust, and next time, the cake is better.
+
+This is exactly what a neural network does during **training**. It tastes its result (the loss, or "error"), then traces back through all its steps to understand which decision caused the problem. Backpropagation is this tracing-back process: distributing the final error to each parameter of the network to know how to correct it. Without this algorithm, neural networks simply couldn't learn.
+
+<Callout type="info" title={"What is backpropagation?"}>
+It's the algorithm that computes each weight's contribution to the final error. Conceptually invented in the 1960s-70s, then popularized by Rumelhart, Hinton, and Williams in 1986, it's the beating heart of all today's AI models: from small classification networks to GPTs with hundreds of billions of parameters.
+</Callout>
+
+### The Movie in Two Acts: Forward and Backward
+
+A learning cycle always unfolds in two steps, like a round trip.
+
+**Act 1: The forward pass.** Data enters through the first layer and traverses the network layer by layer, neuron by neuron. At each neuron, two simple operations occur:
+1. It multiplies each of its inputs by a **weight** (a number representing the importance of that input), sums everything up, and adds a **bias** (a constant offset)
+2. It applies an **activation function** (ReLU, sigmoid, tanh...) to introduce non-linearity --- without this, stacking 100 layers would be equivalent to having just one
+
+At the end of the forward pass, you get a prediction. You compare it to the expected answer via a **loss function**. This loss measures the error as a number: if the network predicts 7 and the correct answer is 10, the loss quantifies this gap. The larger the loss, the more wrong the network was.
+
+**Act 2: The backward pass.** Now, we go the reverse way. Backpropagation asks each neuron the question: "How much did you contribute to this error?" Then to the layer before: "And you, how much did you contribute to that one's contribution?" And so on, tracing back to the very first layer. At the end, each weight in the network knows its **gradient**: a number that says "increase me a little" or "decrease me a little" to reduce the error next time.
+
+<Callout type="tip" title="Gradients Are Directions">
+A gradient is an arrow pointing toward "the right direction to modify this weight." If a weight's gradient is -0.5, it means: "reduce the loss by increasing this weight by 0.5." The sign gives the direction, the magnitude gives the amplitude. It's a mathematical compass.
+</Callout>
+
+<ImageWithSource
+  src="/images/admin/img-1774005876079.png"
+  alt="Diagram of the backpropagation process in a neural network"
+  sourceUrl="https://medium.com/@xsankalp13/a-beginners-guide-to-neural-networks-forward-and-backward-propagation-explained-a814666c73ab"
+  size="medium"
+/>
+
+### The Secret: The Chain Rule
+
+Everything rests on a mathematical formula that's several centuries old: the **chain rule**. It's the only mathematical tool backpropagation needs.
+
+The intuition is simple. Imagine a chain of causation: the oven temperature affects how the cake bakes, and how the cake bakes affects the final taste. If you want to know how the oven temperature influences the final taste, you multiply two effects:
+- The effect of temperature on baking
+- The effect of baking on taste
+
+In math, it's written:
+
+$$
+\frac{dL}{dw} = \frac{dL}{dz} \cdot \frac{dz}{dw}
+$$
+
+where $L$ is the loss (the final error), $z$ is an intermediate result (a layer's output), and $w$ is the weight you want to adjust.
+
+Why is this so powerful? In a deep network with 100 layers, directly computing how a weight in the first layer affects the final loss would be horrendously complex. But thanks to the chain rule, we decompose this gigantic computation into a series of small local multiplications, layer by layer. Each layer only computes its own small effect, then passes it to the previous layer. This is what makes the computation tractable even for networks with billions of parameters.
+
+### The 4 Steps of the Backward Pass
+
+At each layer, the chain rule is applied systematically:
+
+1. **Compute the error at the output**: $\frac{\partial L}{\partial \hat{y}}$ (the derivative of the loss with respect to the prediction). This is the starting point: "by how much is our prediction off?"
+
+2. **Traverse the activation**: compute how the activation function amplified or reduced the signal. If it's ReLU and the value was positive, the gradient passes through intact. If the value was negative, the gradient is blocked (ReLU "kills" negative values).
+
+3. **Get the weight's gradient**: $\frac{\partial L}{\partial w}$. This is the multiplication of the received gradient by the neuron's input. If the received gradient is $\frac{\partial L}{\partial z} = -6$ and the input is $x = 2$, then $\frac{\partial L}{\partial w} = -6 \times 2 = -12$. This -12 tells the weight: "you need to change by 12 units in the positive direction to reduce the error."
+
+4. **Prepare the signal for the previous layer**: $\frac{\partial L}{\partial x}$, which becomes the new "error gradient" for the preceding layer. And the cycle starts again.
+
+These 4 steps are repeated going backward layer after layer until the beginning of the network. It's mechanical, systematic, and works for any architecture.
+
+### A Concrete Example with Numbers
+
+Let's take the simplest possible network to see the mechanics in action:
+- Input: $x = 2$
+- Weight: $w = 3$
+- Bias: $b = 1$
+- Expected target: $y = 10$
+
+**Forward pass**: we compute the prediction
+$$
+z = w \cdot x + b = 3 \times 2 + 1 = 7
+$$
+
+$$
+a = \text{ReLU}(7) = 7 \quad \text{(no change since } 7 > 0\text{)}
+$$
+
+$$
+\text{Loss} = (7 - 10)^2 = 9
+$$
+
+The network predicted 7 instead of 10. The error is 9 (squared loss).
+
+**Backward pass**: we trace back to find the gradient of $w$
+$$
+\frac{dL}{da} = 2 \times (7 - 10) = -6
+$$
+
+$$
+\frac{da}{dz} = 1 \quad \text{(ReLU doesn't change anything when } z > 0\text{)}
+$$
+
+$$
+\frac{dL}{dz} = -6 \times 1 = -6
+$$
+
+$$
+\frac{dL}{dw} = -6 \times 2 = -12
+$$
+
+The gradient is -12. What does this concretely mean? The negative sign indicates that if we **increase** $w$, the loss **decreases**. The network has discovered that its weight was too small: by increasing it (for example $w = 3 \rightarrow w = 3.12$ with a learning rate of 0.01), the next prediction will be closer to 10.
+
+<Callout type="info" title="Autograd: The Magic of Frameworks">
+PyTorch, TensorFlow, and JAX do all of this automatically. You just write the forward pass (the math operations), and the framework mentally records each operation in a "computation graph." When you call `.backward()`, it traces back through the graph and computes all gradients on its own. No more hand-deriving. This is called **automatic differentiation** (autograd).
+</Callout>
+
+### The Two Monsters: Vanishing and Exploding Gradients
+
+In deep networks (tens or hundreds of layers), two formidable problems appear.
+
+**Vanishing gradients.** Imagine a chain of 100 people passing a message by whispering. Each person, when transmitting it, slightly reduces the volume (multiplies by 0.9). After 100 passes: $0.9^{100} \approx 0.00003$. The message has become inaudible. This is exactly what happens in a deep network: gradients get multiplied by many small numbers (often < 1) at each layer, and become microscopic. The first layers of the network receive almost no learning signal. They stagnate.
+
+This was the historical problem that prevented training deep networks before 2010. The sigmoid activation function, very popular at the time, produces derivatives between 0 and 0.25, making the problem worse.
+
+**Exploding gradients.** The exact opposite: if each layer multiplies the gradient by a factor > 1, the signal grows exponentially. $1.1^{100} \approx 13{,}780$. Gradients become astronomical numbers, weights make uncontrollable jumps, and training diverges (the loss goes toward infinity instead of decreasing).
+
+**Modern solutions**:
+- **ReLU**: its derivative is 0 or 1 (never a small number in between), which greatly mitigates vanishing
+- **Residual connections** (skip connections): the gradient can "short-circuit" layers by taking a direct path. Invented by ResNet in 2015, they're now in all Transformers
+- **Gradient clipping**: cap gradients at a maximum value to prevent explosion
+- **Normalization** (BatchNorm, LayerNorm): stabilizes the network's internal distributions
+
+<ImageWithSource
+  src="/images/admin/img-1774005966515.png"
+  alt="Comparison of vanishing and exploding gradients"
+  sourceUrl="https://aiml.com/what-do-you-mean-by-vanishing-and-exploding-gradient-problem-and-how-are-they-typically-addressed/"
+  size="medium"
+/>
+
+### In Summary
+
+Backpropagation is three ideas working together:
+
+1. **Forward pass**: compute the prediction and measure the error
+2. **Chain rule**: decompose the global gradient into a cascade of small local derivatives
+3. **Backward pass**: trace the error back layer by layer, multiplying local derivatives
+
+At the end, each weight in the network knows its direction of improvement. The optimizer (Adam, SGD, etc.) adjusts them in that direction, and on the next iteration, the network is a tiny bit better. Multiplied by millions of iterations, this process transforms a random network into a model capable of recognizing images, translating languages, or writing text.
+
+It's mundane in its mechanics, but profound in its consequences: this algorithm, popularized in the 1980s, literally powers all of modern AI. Every time a model learns something, it's backpropagation doing the work.
+
+<Callout type="paper" title="Going Further">
+The foundational paper "Learning representations by back-propagating errors" (Rumelhart, Hinton, Williams, 1986) published in Nature laid the groundwork for training deep networks. More than 35 years later, the algorithm hasn't fundamentally changed. Improvements focus on optimizers (Adam vs SGD), activation functions (ReLU vs sigmoid), and architectures (skip connections), but the core remains the same.
+</Callout>

@@ -1,0 +1,121 @@
+---
+title: "Networking for Distributed Training: InfiniBand, NVLink, NVSwitch"
+description: "Critical networking technologies for distributed AI model training: InfiniBand, NVLink, NVSwitch, RoCE, and their impact on performance."
+---
+
+## The bottleneck: when the road matters more than the cars
+
+Imagine a factory where 1,000 workers (the GPUs) work in parallel. Each one computes a piece of the problem, then must send their results to the others to make progress. If the factory door only lets 10 people through at a time, the other 990 wait outside. Even if each worker is ultra-fast, the entire factory slows down because **communication becomes the bottleneck**.
+
+This is exactly what happens when you train an LLM on 1,000 GPUs. If the network can't transfer the **gradients** (the corrections computed by each GPU at each training step) fast enough, your $30,000-a-piece processors spend their time **waiting instead of computing**. Reducing this communication overhead by 10% on a multi-month training run? That saves **millions of dollars**.
+
+We'll look at three layers of technology that solve this problem, from most local to most global: **NVLink** connects GPUs inside a server, **NVSwitch** organizes those connections intelligently, and **InfiniBand** links servers together.
+
+<Callout type="info" title={"The scale gets crazy fast"}>
+On a 70-billion-parameter model trained with 1,000 GPUs: each GPU must send and receive 140 GB of gradients at every iteration. Multiply by 1,000 GPUs, by 10 iterations per second. That's **1,400 petabytes per hour** flowing through your network.
+</Callout>
+
+## NVLink: the intra-server highway
+
+### The simple idea: skip the main road
+
+If you have 8 GPUs in the same server, you could have them communicate via the CPU and the **PCIe bus** (the standard channel connecting all PC components). Problem: PCIe tops out at 64 GB/s. For GPUs that churn through hundreds of GB of gradients, that's like pushing a river through a garden hose.
+
+**NVLink** is NVIDIA's solution: a **direct highway between GPUs**, bypassing the CPU. GPUs talk point-to-point, and data goes directly from one GPU's memory to another's. A GPU can even read from a neighbor's memory as if it were its own.
+
+### The generations: faster and faster
+
+Each NVIDIA GPU generation ships with a faster version of NVLink. For scale, remember that PCIe offers 64 GB/s:
+
+| Version | Year | Speed | GPU | vs. PCIe |
+|---|---|---|---|---|
+| NVLink 1.0 | 2016 | 80 GB/s | P100 | 1.3x |
+| NVLink 2.0 | 2017 | 150 GB/s | V100 | 2.3x |
+| NVLink 3.0 | 2020 | 600 GB/s | A100 | 9x |
+| NVLink 4.0 | 2022 | 900 GB/s | H100 | **14x** |
+| NVLink 5.0 | 2024 | 1,800 GB/s | B200 | **28x** |
+
+In 8 years, NVLink went from "slightly better than PCIe" to "28 times faster." This acceleration is what made training models with hundreds of billions of parameters possible.
+
+<Callout type="tip" title={"Why this is crucial for tensor parallelism"}>
+When you split a layer across 8 GPUs (tensor parallelism), each GPU must constantly ask the others for their intermediate results. With NVLink at 900 GB/s, that goes smoothly. With PCIe at 64 GB/s, it's a traffic jam. The difference between a team passing the ball fluidly and a team waiting 10 seconds between each pass.
+</Callout>
+
+
+
+## NVSwitch: the traffic controller for GPUs
+
+### The problem: too many GPUs, not enough cables
+
+OK, NVLink connects GPUs together. But how do you organize those connections? If you have 8 GPUs and each wants to talk to all the others, you'd need 28 cables (each pair needs a link). Unmanageable. **NVSwitch** solves this: it's a **central traffic controller** through which all communications pass. Instead of 28 point-to-point cables, each GPU plugs into the switch, and the switch routes messages to the right destination.
+
+On a DGX H100 server (8 H100 GPUs), you have **4 NVSwitches** working in parallel. Each GPU is connected to all 4, providing **900 GB/s** of bandwidth per GPU, and all 8 GPUs can communicate simultaneously without blocking each other.
+
+### The next-gen NVSwitch: compute inside the network (2024)
+
+With the Blackwell GPUs (B200), NVIDIA did something radical: the switch no longer just routes. It **computes**.
+
+Why is this clever? When 72 GPUs need to combine their results (an operation called **AllReduce** that's everywhere in distributed training), normally each GPU sends its result, then a central GPU adds them up. That's slow. With the new NVSwitch, the addition happens **inside the network**, while data is in transit. GPUs no longer waste time on this.
+
+<Callout type="paper" title="SHARP: computing without burdening the GPUs">
+This technique is called **SHARP** (Scalable Hierarchical Aggregation and Reduction Protocol). The idea: offload reduction operations (sums, averages) to the network hardware itself. Concrete result: GPUs do real computation **10-20% more often** instead of wasting time combining gradients.
+</Callout>
+
+## InfiniBand: the highways linking servers
+
+### The challenge: connecting servers together
+
+NVLink and NVSwitch handle the inside of a server (8 GPUs max). But when you have 1,000 GPUs spread across 100+ servers, those machines need to communicate with each other. Standard Ethernet? Too slow, too much latency. **InfiniBand** is a specialized networking technology for massive, ultra-fast data exchanges between servers. It's the private highway of AI datacenters.
+
+### The superpower: RDMA
+
+The key concept of InfiniBand is called **RDMA** (Remote Direct Memory Access). Normally, when a GPU on server A wants data from server B, it has to go through the CPU, system memory, the network driver... lots of intermediaries. With RDMA, a GPU reads **directly** from a remote GPU's memory, without bothering the CPU. It's the difference between a package delivered door-to-door and a package that goes through 5 post offices.
+
+Result: **latency under one microsecond** (for comparison, an eye blink lasts 100,000 microseconds) and bandwidth that climbs with each generation:
+
+| Version | Speed | Year |
+|---|---|---|
+| HDR | 200 Gb/s | 2019 |
+| NDR | 400 Gb/s | 2022 |
+| XDR | 800 Gb/s | 2024 |
+
+### GPUDirect RDMA: the magic shortcut
+
+RDMA alone is already good, but **GPUDirect RDMA** goes further. Without this technology, the data path between two GPUs on different servers looks like this:
+
+GPU -> PCIe -> CPU -> Memory -> Network card -> Network -> Network card -> Memory -> CPU -> PCIe -> GPU
+
+With GPUDirect RDMA, you short-circuit all of that:
+
+GPU -> NVLink -> InfiniBand card -> Network -> InfiniBand card -> NVLink -> GPU
+
+The CPU is no longer involved at all. Gain: **10-100x faster** inter-server transfers.
+
+<Callout type="warning" title="InfiniBand is expensive">
+InfiniBand infrastructure represents **20 to 30% of the total budget** of an AI cluster. A single NDR 400G switch costs tens of thousands of dollars. That's why cheaper alternatives like RoCE are starting to emerge.
+</Callout>
+
+## RoCE: the budget-friendly alternative
+
+### The idea: RDMA without InfiniBand
+
+Remember RDMA, InfiniBand's superpower? **RoCE** (RDMA over Converged Ethernet, pronounced "rocky") takes that same capability and runs it **on standard Ethernet hardware**. No need for specialized InfiniBand switches: you reuse your existing Ethernet infrastructure. It's like grafting a turbo onto a stock car.
+
+The tradeoff? You save on cost, you lose a bit on performance. Here's the concrete comparison:
+
+| Aspect | InfiniBand | RoCE |
+|---|---|---|
+| Latency | < 1 microsecond | 1-2 microseconds |
+| Max bandwidth | 800 Gb/s | 400 Gb/s |
+| Congestion management | Excellent (credit-based) | Depends on Ethernet switch |
+| Cost | Very expensive | Moderate |
+| Scalability | 10,000+ nodes | ~1,000 nodes |
+| AI adoption | The dominant standard | Growing rapidly |
+
+For a cluster of a few hundred GPUs, RoCE does the job very well. Beyond 1,000 nodes, InfiniBand keeps the advantage thanks to its native congestion management: when thousands of GPUs send data simultaneously, congestion is inevitable, and InfiniBand handles it much better than Ethernet.
+
+## Why this matters
+
+Networking technology is **invisible**, but it determines whether your AI cluster will run at 30% or 60% efficiency. The difference? It's 100 million instead of 200 million dollars to train the same model.
+
+**To summarize**: NVLink connects GPUs inside a server. NVSwitch organizes those connections intelligently. InfiniBand (or RoCE) links servers together. Together, these three layers form the nervous system of every modern AI cluster.

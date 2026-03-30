@@ -1,0 +1,143 @@
+---
+title: "The chain rule: the heart of backpropagation"
+description: "How the chain rule allows differentiating composite functions, and why it's exactly what backpropagation does in a neural network."
+---
+
+## Composite functions are everywhere
+
+When you bake a cake, the internal temperature of the cake depends on the time spent in the oven. And the doneness of the cake (fluffy, overdone, raw) depends on the internal temperature. Ultimately, the doneness depends on time -- but **through** the temperature. It's a composite function: doneness = $f(\text{temperature}(\text{time}))$.
+
+In mathematics, a **composite function** is simply a function applied to the result of another function. If $f$ and $g$ are two functions, the composition is written:
+
+$$h(x) = f(g(x))$$
+
+You first apply $g$ to $x$, then $f$ to the result. It's a chain of transformations.
+
+### Why it's crucial in AI
+
+A neural network **is** a composition of functions. Each layer applies a linear transformation (multiplication by a weight matrix + bias), followed by a nonlinear activation function. A 3-layer network is:
+
+$$\hat{y} = f_3(f_2(f_1(x)))$$
+
+Where each $f_i$ represents a layer: matrix multiplication + activation. The input $x$ passes through layer after layer, each transformation applying to the result of the previous one. The deeper the network, the longer the composition.
+
+## The chain rule
+
+How do you differentiate a composite function? The **chain rule** answers this question. If $h(x) = f(g(x))$, then:
+
+$$h'(x) = f'(g(x)) \cdot g'(x)$$
+
+In words: the derivative of the composition is the derivative of the outer function (evaluated at the intermediate point) **multiplied** by the derivative of the inner function.
+
+### The gear analogy
+
+Imagine two connected gears. The first turns at 3 revolutions per minute. The second, connected to the first with a 2:1 ratio, turns at $3 \times 2 = 6$ revolutions per minute. To find the final speed, you **multiply** the ratios at each stage. The chain rule works exactly the same way: you multiply the "rates of change" at each step of the composition.
+
+### Leibniz notation
+
+Leibniz notation makes the chain rule even more intuitive. If $y = f(u)$ and $u = g(x)$, then:
+
+$$\frac{dy}{dx} = \frac{dy}{du} \cdot \frac{du}{dx}$$
+
+It almost looks like the $du$'s "cancel out" like in a fraction. That's not exactly what happens mathematically, but this intuition always works for the chain rule and helps you never make a mistake.
+
+## Concrete examples
+
+### Example 1: differentiate $(3x + 1)^2$
+
+Let $u = 3x + 1$ and $y = u^2$. Then:
+
+$$\frac{dy}{dx} = \frac{dy}{du} \cdot \frac{du}{dx} = 2u \cdot 3 = 6(3x + 1)$$
+
+### Example 2: differentiate $e^{-x^2}$
+
+Let $u = -x^2$ and $y = e^u$. Then:
+
+$$\frac{dy}{dx} = e^u \cdot (-2x) = -2x \cdot e^{-x^2}$$
+
+This function is the shape of the **Gaussian distribution**, ubiquitous in ML.
+
+### Example 3: differentiate $\ln(\sigma(x))$ (cross-entropy)
+
+Let $u = \sigma(x) = \frac{1}{1 + e^{-x}}$ and $y = \ln(u)$. Then:
+
+$$\frac{dy}{dx} = \frac{1}{u} \cdot \sigma'(x) = \frac{1}{\sigma(x)} \cdot \sigma(x)(1 - \sigma(x)) = 1 - \sigma(x)$$
+
+This elegant result explains why cross-entropy works so well with the sigmoid: the gradient has a simple form and doesn't saturate.
+
+## Multi-link chain
+
+When the composition is longer, the rule generalizes naturally. For $h(x) = f(g(k(x)))$:
+
+$$h'(x) = f'(g(k(x))) \cdot g'(k(x)) \cdot k'(x)$$
+
+You multiply the derivatives of each link in the chain, from the outside inward. For a network with $n$ layers, you get a product of $n$ terms -- one for each layer traversed.
+
+$$\frac{\partial \mathcal{L}}{\partial \theta_1} = \frac{\partial \mathcal{L}}{\partial a_n} \cdot \frac{\partial a_n}{\partial a_{n-1}} \cdot \ldots \cdot \frac{\partial a_2}{\partial a_1} \cdot \frac{\partial a_1}{\partial \theta_1}$$
+
+It's a **product of matrices** (or scalars in the simple case). And it's exactly what backpropagation computes.
+
+## Backpropagation, step by step
+
+Let's take a simple 2-layer network to make things concrete. The input $x$ passes through:
+
+1. **Layer 1**: $z_1 = w_1 \cdot x + b_1$, then $a_1 = \text{ReLU}(z_1)$
+2. **Layer 2**: $z_2 = w_2 \cdot a_1 + b_2$, then $\hat{y} = \sigma(z_2)$
+3. **Loss**: $\mathcal{L} = -(y \ln(\hat{y}) + (1-y)\ln(1-\hat{y}))$
+
+To update $w_1$, we need $\frac{\partial \mathcal{L}}{\partial w_1}$. By the chain rule:
+
+$$\frac{\partial \mathcal{L}}{\partial w_1} = \frac{\partial \mathcal{L}}{\partial \hat{y}} \cdot \frac{\partial \hat{y}}{\partial z_2} \cdot \frac{\partial z_2}{\partial a_1} \cdot \frac{\partial a_1}{\partial z_1} \cdot \frac{\partial z_1}{\partial w_1}$$
+
+Each term is simple to compute individually:
+
+- $\frac{\partial \mathcal{L}}{\partial \hat{y}}$: derivative of the loss with respect to the prediction
+- $\frac{\partial \hat{y}}{\partial z_2}$: derivative of the sigmoid
+- $\frac{\partial z_2}{\partial a_1} = w_2$: the weight of layer 2
+- $\frac{\partial a_1}{\partial z_1}$: derivative of ReLU ($1$ if $z_1 > 0$, $0$ otherwise)
+- $\frac{\partial z_1}{\partial w_1} = x$: the input
+
+**Backpropagation** consists of computing these terms from right to left (from output to input) and propagating them layer by layer. Hence the name: **backward** propagation of the gradient.
+
+## The computational graph
+
+To organize all these computations, you use a **computational graph**. It's a directed acyclic graph (DAG) where:
+
+- Each **node** represents an operation (addition, multiplication, activation)
+- Each **edge** represents the data flow
+
+The forward pass traverses the graph from input to output. The backward pass traverses it in reverse, multiplying local derivatives along each path. This is exactly what frameworks like PyTorch and TensorFlow do: they automatically build this graph during the forward pass, then traverse it backward to compute all gradients.
+
+### Autograd: automatic differentiation
+
+In PyTorch, when you write `loss.backward()`, the framework:
+
+1. Traverses the computational graph backward
+2. Applies the chain rule at each node
+3. Accumulates gradients in the `.grad` attribute of each parameter
+
+You never need to differentiate by hand. But understanding the chain rule lets you **diagnose** problems when training isn't going well.
+
+## The vanishing gradient problem
+
+The chain rule implies a **product** of derivatives. For a deep network (50, 100 layers), this product contains dozens of terms. If each derivative is less than 1 (which happens with the sigmoid, whose maximum derivative is $0.25$), the product tends exponentially toward zero:
+
+$$0.25^{50} \approx 10^{-30}$$
+
+The gradient arriving at the first layers is nearly zero: they learn almost nothing. This is the **vanishing gradient problem**, the bane of deep networks before modern innovations.
+
+The solutions that enabled deep learning all rest on managing this product of derivatives:
+
+- **ReLU**: its derivative is $1$ for positive values, which avoids multiplication by fractions
+- **Batch Normalization**: stabilizes intermediate activations so that gradients stay in a reasonable range
+- **Residual connections** (ResNet): add a direct path from input to output, creating a "shortcut" for the gradient that bypasses the destructive product
+- **LSTM and GRU**: in sequences, gates control the gradient flow to prevent it from vanishing over long dependencies
+
+## Key takeaways
+
+- The **chain rule** allows differentiating composite functions by multiplying the derivatives of each step
+- A neural network is a **function composition**, so backpropagation is a direct application of the chain rule
+- The **computational graph** organizes the forward and backward pass
+- **Automatic differentiation** (autograd) applies the chain rule automatically in modern frameworks
+- The **vanishing gradient** is a direct consequence of the product of derivatives in the chain rule: derivatives less than 1, multiplied many times, tend toward zero
+- ReLU, batch norm, and residual connections are direct solutions to this mathematical problem

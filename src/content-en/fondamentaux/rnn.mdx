@@ -1,0 +1,186 @@
+---
+title: "RNN: Sequences and Memory"
+description: "Recurrent Neural Networks (RNN), their ability to process sequential data through a hidden state, and the vanishing gradient problem."
+---
+
+## The Problem: Data That Has an Order
+
+"The cat eats the mouse" vs "The mouse eats the cat". Same words. **Opposite** meaning. A classic network (dense, feedforward) doesn't understand order: it just sees a set of numbers as input, like a shuffled bag of words. Permuting the inputs changes nothing for it.
+
+Yet real-world data is very often **sequential**: text is a sequence of words, speech is a sequence of sounds, a video is a sequence of images, a financial signal is a sequence of prices. Order isn't a detail -- it's often **the most important information**.
+
+CNNs handle the spatial structure of images well (neighborhood relationships between pixels). But for sequences where context **accumulates over time** -- "this word refers to another word 10 positions earlier" -- you need a network with **memory**. That's exactly what RNNs (Recurrent Neural Networks) provide.
+
+## How an RNN Works
+
+<ImageWithSource
+  src="/images/admin/img-1774010351560.png"
+  alt="Diagram of a Recurrent Neural Network (RNN)"
+  caption="This diagram illustrates the fundamental operation of a Recurrent Neural Network (RNN). It shows how inputs (x_t) and outputs (y_t) are linked through hidden states (h_t) that propagate through time, enabling the processing of data sequences."
+  size="large"
+/>
+
+### The Hidden State = Memory
+
+The central idea of the RNN is simple: the network processes the sequence **element by element**, and at each step it maintains a **hidden state** $h$ that summarizes everything it has seen so far. That's its memory.
+
+At each time step $t$, the RNN takes two inputs:
+- The current element $x_t$ (for example the current word)
+- The hidden state from the previous step $h_{t-1}$ (the summary of everything that came before)
+
+And it computes:
+
+$$
+h_t = \tanh(W_{hh} \cdot h_{t-1} + W_{xh} \cdot x_t + b_h)
+$$
+
+$$
+y_t = W_{hy} \cdot h_t + b_y
+$$
+
+Let's break down the first equation, which is the heart of the RNN:
+- **$W_{xh} \cdot x_t$**: transforms the current input into a contribution to the hidden state ("what does this element bring?")
+- **$W_{hh} \cdot h_{t-1}$**: transforms the previous state into a contribution ("what does the past bring?")
+- Both are added together and passed through a **tanh** that compresses values between -1 and 1
+- The result is the new hidden state $h_t$
+
+A crucial point: the matrices $W_{hh}$, $W_{xh}$, $W_{hy}$ are **shared at every time step**. The same "module" is reused to process each element of the sequence. Whether the sequence is 5 words or 500 words, it's the same weights. This sharing is what allows the RNN to process sequences of arbitrary length.
+
+<Callout type="info" title={"The hidden state: an imperfect compressor"}>
+$h_t$ is a fixed-size vector (for example 256 or 512 dimensions) that must summarize **everything the network has seen** up to step $t$. It's a necessarily imperfect summary: the most recent information is well represented, but older information is progressively "overwritten" by new information. It's like your working memory: you remember well what you were told 5 seconds ago, but not 5 minutes ago. This fundamental limitation motivates the LSTM and GRU architectures.
+</Callout>
+
+### Unrolling Through Time
+
+To understand how an RNN trains, you need to "unroll" it through time. Imagine copying the same RNN module once for each element in the sequence. The module at step 1 sends its hidden state to the module at step 2, which sends it to step 3, etc.
+
+Visually, an RNN unrolled over a 50-word sequence looks like a **very deep** feedforward network with 50 layers. The difference: all these "layers" share the same weights. And you train this deep network by classic backpropagation applied through time: that's **BPTT** (Backpropagation Through Time).
+
+This observation -- an unrolled RNN is a deep network -- immediately explains why the same deep network problems (vanishing gradient, exploding gradient) manifest here too. But before getting to that, let's look at the different possible configurations.
+
+## Types of RNN by Task
+
+<ImageWithSource
+  src="/images/admin/img-1774396736609.png"
+  alt="Diagram of RNN architectures by task type"
+  caption="The image illustrates the four main types of Recurrent Neural Network (RNN) architectures based on the nature of the input and output data: one-to-one, one-to-many, many-to-one, and many-to-many. Each diagram shows the data structure and recurrent connections between time steps."
+  size="large"
+/>
+
+The flexibility of the RNN allows several configurations depending on the problem.
+
+In the **many-to-one** configuration, the network consumes an entire sequence to produce a single output. For example, it reads all the words of a movie review and, once it reaches the last word, uses the final hidden state to predict the sentiment (positive or negative).
+
+The inverse configuration, **one-to-many**, starts from a single input to generate a complete sequence. A classic use case is image captioning: an image is encoded into a vector, then the RNN produces a description word by word, like "a black cat sleeping on a red couch".
+
+In **synchronous many-to-many** mode, each element of the input sequence produces a corresponding output. This is particularly useful for grammatical tagging (POS tagging), where each word receives a label indicating whether it's a noun, verb, adjective, etc.
+
+Finally, **asynchronous many-to-many** mode transforms an input sequence into an output sequence of potentially different length. Machine translation is the typical example: the network first reads the entire source sentence, then generates the translation token by token. This is the seq2seq architecture, also called encoder-decoder.
+
+## The Killer Problem: The Vanishing Gradient
+
+<ImageWithSource
+  src="/images/admin/img-1774010403570.png"
+  alt="Diagram of a recurrent neural network over 7 time steps"
+  source="https://www.researchgate.net/figure/The-vanishing-gradient-problem-for-RNN_fig1_387318867"
+  caption="This diagram illustrates the architecture of a Recurrent Neural Network (RNN) deployed over 7 time steps. Each hidden layer passes its state to the next, enabling the feedback necessary for processing temporal sequences."
+  size="large"
+/>
+
+### Why the Gradient Vanishes
+
+When you train an RNN with BPTT, the gradient must travel back through **all time steps** to reach the shared weights. At each step it traverses, the gradient is multiplied by the matrix $W_{hh}$ and by the derivative of the activation (tanh).
+
+The problem: the derivative of tanh is always less than 1 (it equals at most 1, when the input is 0). If the norm of the eigenvalues of $W_{hh}$ is also less than 1, then at each step the gradient is multiplied by a number < 1. After 20 steps: $0.9^{20} = 0.12$. After 50 steps: $0.9^{50} = 0.005$. After 100 steps: essentially 0.
+
+The gradient becomes **microscopic** well before reaching the first elements of the sequence. The network cannot learn long-term dependencies because the error signal doesn't travel back far enough.
+
+### Practical Consequences
+
+A vanilla RNN "forgets" after about **10-20 time steps**. Concretely, this means it's unable to:
+- Link a pronoun ("he") to a noun mentioned 5 sentences earlier
+- Capture the narrative structure of a long paragraph
+- Detect long cycles in a financial time series
+- Maintain context across a multi-turn conversation
+
+For tasks with short dependencies (sentence sentiment, short-term next word prediction), vanilla RNNs work. For everything else, you need specialized architectures like LSTM or GRU.
+
+<Callout type="info" title="The exploding gradient exists too">
+The opposite is possible: if the multipliers are > 1, the gradient **explodes** instead of vanishing. This is solved with **gradient clipping**: if the gradient norm exceeds a threshold (for example 5.0), you renormalize it. It's a simple and effective patch. The vanishing gradient, however, isn't solved as easily -- you need to change the network architecture (LSTM, GRU), which is designed to let the gradient flow over long distances.
+</Callout>
+
+## Training an RNN
+
+### BPTT (Backpropagation Through Time)
+
+Training follows these steps:
+1. **Unroll** the network over the entire sequence (copy the module for each step)
+2. **Forward pass**: compute the outputs and hidden states for each step
+3. **Compute the loss** at each step (or only at the end, depending on the task)
+4. **Backward pass**: backpropagate the gradient through all time steps
+5. **Update** the shared weights (sum of gradients from all steps)
+
+<ImageWithSource
+  src="/images/admin/img-1774396776119.png"
+  alt="Diagram of backpropagation through time for RNN"
+  caption="This diagram illustrates the Backpropagation Through Time (BPTT) mechanism in a Recurrent Neural Network (RNN). Each hidden state s_i depends on the previous state and input x_i, with gradient propagation for learning."
+  size="medium"
+/>
+
+An important practical point: **regularizing** RNNs. Applying classic dropout (randomly cutting connections during training) doesn't work well in an RNN, because the noise propagates through time steps and destroys sequential information. Zaremba, Sutskever, and Vinyals showed how to apply dropout correctly: only on the **non-recurrent** connections (between layers), leaving the recurrent connections intact. This became the standard method for regularizing RNNs.
+
+<ArxivLink id="1409.2329" title="Recurrent Neural Network Regularization (Zaremba et al., 2014)" />
+
+### Truncated BPTT
+
+For very long sequences (thousands of steps), unrolling the entire network and computing the gradient over everything is prohibitive in memory. The pragmatic solution: cut the sequence into **chunks** of fixed length (for example 35 or 50 steps) and backpropagate only within each chunk.
+
+The hidden state is passed from one chunk to the next (the forward pass is continuous), but the gradient is cut at chunk boundaries. It's a trade-off: you lose the ability to learn dependencies longer than the chunk size, but you gain memory efficiency and training speed.
+
+<Callout type="tip" title="Teacher forcing">
+During training of an RNN in generation mode (one-to-many or many-to-many), you have a choice: feed the network **its own prediction** from the previous step as input, or give it the **correct answer** (the correct token from the training set). The second option is called **teacher forcing**: the "teacher" forces the correct answer.
+
+Teacher forcing considerably speeds up training because the network doesn't wander off into sequences of bad predictions. But it creates a problem: at test time, the network no longer has a teacher and must use its own predictions. The gap between these two situations is called **exposure bias**. Modern models mix both approaches: sometimes the correct answer, sometimes the model's prediction.
+</Callout>
+
+## Bidirectional RNNs
+
+<ImageWithSource
+  src="/images/admin/img-1774043537511.png"
+  alt="Diagram of a bidirectional recurrent neural network"
+  source="https://medium.com/data-science/understanding-bidirectional-rnn-in-pytorch-5bd25a5dd66"
+  caption="This diagram illustrates the architecture of a bidirectional Recurrent Neural Network (RNN). The arrows show the flow of information in both temporal directions: forward (left to right) and backward (right to left), enabling better context understanding."
+  size="large"
+/>
+
+A classic RNN reads the sequence from left to right: each hidden state only contains **past** context. But for certain tasks, future context is also important. To classify the sentiment of a sentence, knowing how it ends helps understand its beginning.
+
+A **BiRNN** (Bidirectional RNN) uses two RNNs in parallel:
+- A **forward** RNN that reads left to right
+- A **backward** RNN that reads right to left
+
+For each position, the hidden states from both directions are **concatenated**, giving a vector that captures both past and future. The hidden state size doubles, but the richness of the representation increases considerably.
+
+Warning: BiRNNs are only usable when the complete sequence is available in advance (classification, NER -- Named Entity Recognition, POS tagging -- Part-of-Speech tagging). For real-time generation (word-by-word translation, dialogue), you don't know the future, so a BiRNN is impossible.
+
+## Historical Applications
+
+Before the arrival of Transformers in 2017, RNNs (and especially their LSTM and GRU variants) dominated virtually all sequential tasks:
+- **Machine translation** (Google Translate 2014-2017, seq2seq architecture)
+- **Speech recognition** (DeepSpeech, dictation systems)
+- **Text generation** (character-level language models). If you want to see just how impressive RNNs can be at generation, definitely read Andrej Karpathy's blog post [The Unreasonable Effectiveness of Recurrent Neural Networks](http://karpathy.github.io/2015/05/21/rnn-effectiveness/) (2015). He trains character-level RNNs on Shakespeare, Linux source code, and LaTeX, and the results are stunning -- it's become an essential classic for understanding the power of RNNs.
+- **Sentiment analysis** (review classification, tweets)
+- **Time series prediction** (finance, weather, IoT)
+- **Image captioning** (CNN + RNN to describe photos)
+
+<Callout type="paper" title={"RNNs Today"}>
+Transformers have largely replaced RNNs for NLP thanks to their parallelism and long-distance attention. But the story isn't over. **SSMs** (State Space Models, like Mamba) and **RWKV** (Receptance Weighted Key Value) are reinventing the RNN idea by solving the vanishing gradient through different mathematics (differential equations, linear recurrences). They recover the classic advantages of RNNs -- $O(1)$ inference per token and constant memory -- while rivaling Transformers in performance. RNNs aren't dead, they're evolving.
+
+Another interesting research direction: **Relational RNNs**, which enrich RNN memory by allowing them to explicitly model **relationships between entities** stored in their hidden state, using attention mechanisms between memory slots. This allows the network to reason about interactions between memorized elements, not just store them.
+
+<ArxivLink id="1806.01822" title="Relational Recurrent Neural Networks (Santoro et al., 2018)" />
+</Callout>
+
+## Final Intuition
+
+The RNN is the first architecture that gives **memory** to neural networks. It reads a sequence step by step, updates its hidden state as a running summary, and uses this summary to predict. Its fundamental limitation -- the vanishing gradient that destroys long-term memory -- motivated the LSTM and GRU architectures, then the Transformers. But understanding the vanilla RNN is essential: it's the conceptual foundation on which all sequence processing has been built.

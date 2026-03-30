@@ -1,0 +1,154 @@
+---
+title: "Expectation, variance, and moments"
+description: "Expectation, variance, covariance, and the bias-variance tradeoff: the fundamental statistical tools for understanding and analyzing machine learning models."
+---
+
+## Summarizing a distribution in a few numbers
+
+A probability distribution contains an enormous amount of information. But to reason efficiently, we need compact summaries: where is the "center"? What is the "spread"? Are the variables related to each other? These are the moments of a distribution, and they are at the heart of analyzing ML models.
+
+## Expectation: the expected average value
+
+### Definition
+
+The expectation $E[X]$ is the weighted average of all possible values, each weighted by its probability:
+
+- **Discrete case**: $E[X] = \sum_x x \cdot P(X = x)$
+- **Continuous case**: $E[X] = \int_{-\infty}^{+\infty} x \cdot f(x) \, dx$
+
+### Analogy
+
+Imagine a loaded die. If the 6 comes up twice as often as the other faces, the expectation is no longer 3.5 but shifts upward. The expectation is the "center of gravity" of the distribution: if you placed weights on a ruler at each possible value, proportional to their probability, the balance point would be exactly the expectation.
+
+### Essential properties
+
+- **Linearity**: $E[aX + bY] = aE[X] + bE[Y]$, always, even if $X$ and $Y$ are not independent
+- **Expectation of a constant**: $E[c] = c$
+- **Expectation of a function**: $E[g(X)] = \sum_x g(x) P(X = x)$ (law of the unconscious statistician)
+
+### In ML
+
+Expectation appears everywhere:
+
+- The **average loss** over a batch is an empirical expectation: $\hat{L} = \frac{1}{n} \sum_{i=1}^n \ell(y_i, \hat{y}_i)$
+- Training with SGD estimates the expected gradient using a random sample
+- The **ELBO** of VAEs is an expectation under the variational distribution
+
+## Variance: measuring the spread
+
+### Definition
+
+Variance measures how far values stray from the mean:
+
+$$\text{Var}(X) = E[(X - E[X])^2] = E[X^2] - (E[X])^2$$
+
+The second formula is often more practical for calculations.
+
+### Analogy
+
+Two archers each shoot 100 arrows. Both hit the center on average (same expectation). But the first archer's arrows are clustered near the center, while the second's are scattered across the entire target. The second has a much larger variance.
+
+### Properties
+
+- **Non-negative**: $\text{Var}(X) \geq 0$, and $\text{Var}(X) = 0$ only if $X$ is constant
+- **Scaling**: $\text{Var}(aX) = a^2 \text{Var}(X)$ (the square matters!)
+- **Sum of independent variables**: $\text{Var}(X + Y) = \text{Var}(X) + \text{Var}(Y)$ if $X$ and $Y$ are independent
+
+## Standard deviation: the square root of variance
+
+$$\sigma = \sqrt{\text{Var}(X)}$$
+
+The standard deviation shares the usefulness of variance for measuring spread, but with a practical advantage: it's expressed in the same units as $X$. If $X$ is in meters, $\sigma$ is in meters (variance would be in square meters).
+
+In ML, when we say "the weights are initialized with a standard deviation of 0.02," we mean $\sigma = 0.02$ in $W \sim \mathcal{N}(0, 0.02^2)$.
+
+## Covariance: relationships between variables
+
+### Definition
+
+Covariance measures how two variables vary together:
+
+$$\text{Cov}(X, Y) = E[(X - E[X])(Y - E[Y])] = E[XY] - E[X]E[Y]$$
+
+### Interpretation
+
+- $\text{Cov}(X, Y) > 0$: when $X$ increases, $Y$ tends to increase too
+- $\text{Cov}(X, Y) < 0$: when $X$ increases, $Y$ tends to decrease
+- $\text{Cov}(X, Y) = 0$: no linear relationship (but there can be a nonlinear relationship!)
+
+### Correlation: normalized covariance
+
+$$\rho(X, Y) = \frac{\text{Cov}(X, Y)}{\sigma_X \sigma_Y}$$
+
+Correlation is always between $-1$ and $1$, making it easier to interpret than raw covariance.
+
+## Covariance matrix
+
+### For a random vector
+
+When you have a vector $\mathbf{X} = (X_1, X_2, \ldots, X_d)$, the covariance matrix $\boldsymbol{\Sigma}$ gathers all pairwise covariances:
+
+$$\boldsymbol{\Sigma}_{ij} = \text{Cov}(X_i, X_j)$$
+
+It's a $d \times d$ matrix, symmetric and positive semi-definite.
+
+### Geometric properties
+
+The covariance matrix describes the "shape" of the distribution:
+- Its **eigenvalues** give the variance in each principal direction
+- Its **eigenvectors** give the axes of that shape
+
+### In ML: PCA
+
+Principal Component Analysis (PCA) consists exactly of diagonalizing the covariance matrix. The eigenvectors associated with the largest eigenvalues are the directions of greatest variance in the data. Projecting onto these directions lets you reduce dimensionality while keeping the maximum amount of information.
+
+### In ML: multivariate Gaussian
+
+The multivariate Gaussian is entirely defined by its mean vector and covariance matrix. That's why these two quantities are enough to describe the latent space of a VAE.
+
+## The bias-variance tradeoff
+
+### The central problem of ML
+
+When you train a model, the prediction error decomposes into three terms:
+
+$$E[(\hat{f}(x) - y)^2] = \text{Bias}^2 + \text{Variance} + \text{Irreducible noise}$$
+
+### Bias: systematic error
+
+Bias measures how much the model is wrong on average. A model that's too simple (a straight line for curved data) has high bias. It systematically misses the target, regardless of the training data.
+
+$$\text{Bias} = E[\hat{f}(x)] - f(x)$$
+
+### Variance: sensitivity to data
+
+Variance measures how much predictions change when you change the training data. A model that's too complex (a degree-100 polynomial for 10 data points) has high variance. It fits the training data perfectly but changes drastically with a slightly different dataset.
+
+### The tradeoff
+
+- **Simple model**: high bias, low variance (underfitting)
+- **Complex model**: low bias, high variance (overfitting)
+- **Optimal model**: the right balance between the two
+
+### Practical translation
+
+| Technique | Effect on bias | Effect on variance |
+|---|---|---|
+| Increase model size | Decreases | Increases |
+| Regularization (L2, dropout) | Slightly increases | Decreases |
+| More training data | Unchanged | Decreases |
+| Ensemble methods (bagging) | Unchanged | Decreases |
+| Boosting | Decreases | Slightly increases |
+
+### The deep learning paradox
+
+Classical theory predicts that very large models should have enormous variance and overfit severely. Yet, overparameterized neural networks often generalize very well. This phenomenon, sometimes called "double descent," is an active research topic. The current intuition is that gradient descent acts as an implicit regularizer, favoring "simple" solutions even in an immense parameter space.
+
+## Key takeaways
+
+- Expectation is the expected average value, fundamental for defining loss functions
+- Variance measures spread, essential for understanding the reliability of estimates
+- Covariance captures linear relationships between variables
+- The covariance matrix is at the heart of PCA and Gaussian modeling
+- The bias-variance tradeoff explains why a model that's neither too simple nor too complex is necessary
+- Deep learning challenges the classical view of this tradeoff with the double descent phenomenon

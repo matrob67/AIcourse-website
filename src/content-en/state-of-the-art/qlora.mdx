@@ -1,0 +1,117 @@
+---
+title: "QLoRA: Accessible 4-bit Fine-Tuning"
+description: "QLoRA combines 4-bit NormalFloat quantization with LoRA to enable fine-tuning of massive models on a single consumer GPU. A major democratization of fine-tuning."
+---
+
+
+
+
+## The Problem: Fine-Tuning a 65B Parameter Model
+
+Even with LoRA (Low-Rank Adaptation, which only trains a few million parameters), fine-tuning a 65-billion-parameter model requires loading **all the weights** into GPU memory. In FP16 (16 bits per parameter), 65B parameters take up about 130 GB of VRAM. No single GPU can handle that.
+
+That's where QLoRA comes in. The idea is simple but powerful: store the base model in an **ultra-compressed** format (4 bits per parameter instead of 16), while keeping the LoRA adapters at full precision so as not to sacrifice learning quality. The base model is frozen and compressed, only the small LoRA adapters are trained in BF16.
+
+<ArxivLink id="2305.14314" title="QLoRA: Efficient Finetuning of Quantized LLMs (Dettmers et al., 2023)" />
+
+## The Three Technical Innovations of QLoRA
+
+### 1. NormalFloat 4-bit (NF4)
+
+The NF4 format is a 4-bit data type specifically designed for neural network weights. The key observation behind it: pre-trained weights approximately follow a **normal distribution** (a Gaussian centered on zero). Most weights are close to zero, with a few rare extreme values.
+
+<Callout type="paper" title="Optimal Quantiles">
+In standard quantization (INT4), the 16 quantization levels are uniformly distributed across the value range. That's wasteful: many levels fall in sparsely populated zones. NF4 places the 16 levels at the **quantiles** of the normal distribution, meaning each level covers an equal proportion of the distribution. Result: quantization error is minimized for normally distributed data.
+</Callout>
+
+Concretely, NF4 achieves significantly better representation quality than standard INT4 or FP4, with exactly the same memory footprint (4 bits per weight). It's free precision, obtained simply by choosing better quantization levels.
+
+### 2. Double Quantization
+
+All block-wise quantization requires **scaling constants**: for each block of 64 weights, you store an FP32 constant (4 bytes) that allows converting the 4-bit values back to real values. With 64 elements at 4 bits (32 bytes per block), these constants represent a 12.5% overhead.
+
+QLoRA's trick: quantize the constants themselves. Instead of storing each constant in FP32 (4 bytes), they're quantized to FP8 (1 byte). The overhead drops to about 3%.
+
+It might seem marginal, but on a 65B parameter model, this optimization saves several gigabytes of VRAM. At this scale, every GB counts.
+
+### 3. Paged Optimizers
+
+During fine-tuning, the Adam optimizer stores two states per parameter (momentum and variance), which can consume a lot of memory. QLoRA uses a **GPU-CPU paging** system: when VRAM is insufficient, optimizer states are automatically moved to CPU RAM, then reloaded to the GPU when needed.
+
+<Callout type="info" title="Transparent Memory Management">
+This technique leverages CUDA's Unified Memory feature to automatically manage page-by-page transfers between GPU and CPU. For the developer, it's completely transparent: no extra code, no manual configuration. The system handles the back-and-forth on its own.
+</Callout>
+
+## Concrete Impact on Memory
+
+Here's the compared memory footprint for a LLaMA 65B model:
+
+| Method | Required VRAM | Minimum GPU |
+|---|---|---|
+| FP32 fine-tuning | ~780 GB | Multi-GPU cluster |
+| FP16 fine-tuning | ~130 GB | 2x A100 80GB |
+| LoRA FP16 | ~130 GB + adapters | 2x A100 80GB |
+| QLoRA NF4 | ~33 GB | 1x A100 40GB |
+| QLoRA NF4 (7B) | ~6 GB | 1x RTX 3090/4090 |
+
+Notice an important point: LoRA alone does NOT reduce the memory needed to load the model. It reduces the number of trained parameters (and therefore gradients/optimizer states), but the base model still needs to fit in memory in FP16. It's QLoRA's 4-bit quantization that divides the base model's footprint by 4.
+
+The base model is stored in NF4 (4-bit), but the LoRA adapters are trained in full **BF16** precision. Gradients are computed in BF16, backpropagated through the quantized layers, and updated only on the LoRA parameters.
+
+
+## Fine-Tuning Quality: The Surprise
+
+<Callout type="paper" title="Remarkable Results">
+The paper demonstrates that QLoRA NF4 achieves performance comparable to full FP16 fine-tuning on several benchmarks. The gap is often less than 1%, which is surprising given the massive memory reduction (4x less).
+</Callout>
+
+To prove their point, the authors created **Guanaco**, a family of models fine-tuned with QLoRA on the OASST1 dataset. The Guanaco 65B reaches 99.3% of ChatGPT's performance according to human evaluation on the Vicuna benchmark, while having been fine-tuned on a single 48 GB GPU in 24 hours. This demonstration is what convinced the community.
+
+## Practical Implementation
+
+QLoRA is perfectly integrated into the Hugging Face ecosystem via `bitsandbytes` and `PEFT`:
+
+```python
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model
+
+# 4-bit quantization configuration
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
+)
+
+# Load the quantized model
+model = AutoModelForCausalLM.from_pretrained(
+    "mistralai/Mistral-7B-v0.1",
+    quantization_config=bnb_config,
+    device_map="auto",
+)
+
+# Apply LoRA
+lora_config = LoraConfig(r=16, lora_alpha=32, target_modules="all-linear")
+model = get_peft_model(model, lora_config)
+```
+
+Four key parameters in the `bitsandbytes` config: `load_in_4bit` activates quantization, `nf4` chooses the NormalFloat format, `bfloat16` for the compute dtype, and `double_quant` activates double quantization. With these four lines, you divide memory by 4.
+
+## Practical Tips
+
+### Choosing the Compute Dtype
+- **BF16** (recommended): better numerical stability thanks to its extended dynamic range, suited for Ampere and newer GPUs (RTX 3000+, A100, H100)
+- **FP16**: alternative on older GPUs that don't support BF16
+
+### LoRA Rank with QLoRA
+With QLoRA, you can afford a **higher rank** than with standard LoRA. Why? Because the memory footprint of the adapters is negligible compared to the base model in 4-bit. An r=32 or r=64 adds a few dozen MB, while the base model takes up several GB. You might as well take advantage of it to maximize adaptation capacity.
+
+<Callout type="warning" title="Limitations of 4-bit Quantization">
+NF4 quantization introduces a small **irreversible** information loss in the base model. For tasks requiring very high numerical precision (complex mathematics, highly technical code), 8-bit or FP16 fine-tuning may give better results. Always evaluate on your specific task before concluding.
+</Callout>
+
+## Impact on the Ecosystem
+
+QLoRA was a true catalyst for the democratization of LLM fine-tuning. Before QLoRA, adapting a 7B+ parameter model required a professional GPU (A100 minimum). After QLoRA, an RTX 3090 or 4090 is enough to fine-tune a 7B, and a single A100 is enough for a 65B.
+
+The consequence: thousands of practitioners and researchers who didn't have access to GPU clusters were able to start fine-tuning LLMs. The vast majority of fine-tuned models in the open-source community today use QLoRA as their base method. It has become the default entry point for fine-tuning.

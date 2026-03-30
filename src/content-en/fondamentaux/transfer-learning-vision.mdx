@@ -1,0 +1,142 @@
+---
+title: "Transfer Learning in Vision"
+description: "How to reuse models pre-trained on ImageNet for new computer vision tasks, with feature extraction and fine-tuning strategies."
+---
+
+## The genius of transfer learning
+
+Imagine: you learn to play the piano for 10 years. Then you're asked to learn the accordion. You don't start from scratch. You don't relearn how to read sheet music, keep time, or coordinate your hands. You **reuse** all of that, and you only learn what's specific to the accordion: the bellows, the button layout.
+
+Transfer learning in AI follows exactly the same principle. A model trained on **14 million images** from ImageNet spent weeks of GPU computation learning universal visual representations: what an edge is, a texture, a shape, a spatial composition. Rather than throwing away all that knowledge and starting over for each new problem, you **reuse** that knowledge and only specialize the final part of the model. Even if you only have 100 photos for your specific task, you benefit from millions of training images.
+
+## Why ImageNet is the magical starting point
+
+ImageNet is the dataset that launched the deep learning revolution in vision. The full dataset contains 14 million images across more than 20,000 categories. The ILSVRC subset (ImageNet Large Scale Visual Recognition Challenge, used for the annual competition): **1.2 million images** spread across 1,000 categories. Dogs, cars, plants, tools, food -- a very broad sample of the visual world.
+
+A CNN trained on ImageNet develops a **hierarchy of representations**:
+- **Low layers** (close to the image): edge detectors, contrast detectors, simple textures. These filters are nearly **universal** -- they work just as well on cat photos as on medical X-rays or satellite images.
+- **Middle layers**: combinations of textures, repeating patterns, basic geometric shapes.
+- **High layers** (close to the output): specific object shapes, face parts, fine textures specific to natural images. These representations are more **domain-specific** to ImageNet.
+
+When you want to solve a problem like "recognizing flower species", the CNN already knows what petals, colors, and organic shapes are. All that's left is to teach it "this combination of petals + this color = tulip, this other one = rose".
+
+<Callout type="info" title="Why it works so well">
+Low-level visual features (edges, textures, contrasts) are **identical** regardless of the domain. Whether you're looking at handwritten digits, tree leaves, or Martian rocks, edges are still edges. Only the high layers (which combine these primitives into specific concepts) change from one domain to another. Transfer learning exploits this natural hierarchy of vision.
+</Callout>
+
+<ImageWithSource
+  src="/images/admin/img-1774010203223.png"
+  alt="Diagram of transfer learning in computer vision"
+  source="https://toloka.ai/blog/transfer-learning/"
+  caption="The image illustrates how the convolution layers of a network pre-trained on ImageNet (object recognition) can be reused for a medical task (lesion classification). Only the final layers are adapted to the new task."
+  size="large"
+/>
+
+## Strategy 1: Feature Extraction
+
+This is the simplest and fastest approach. You use the pre-trained model as a **frozen feature extractor**, without modifying its weights.
+
+Concrete procedure:
+1. Load a model like ResNet-50 pre-trained on ImageNet
+2. **Freeze all weights**: no gradient flows through the pre-trained model
+3. Remove the last classification layer (the one that classified into 1,000 ImageNet categories)
+4. Add a new dense layer adapted to your problem: for example, 2048 inputs -> 5 outputs if you have 5 classes
+5. Train **only** this new layer
+
+Concretely, the pre-trained model transforms each image into a rich 2048-dimensional vector (for ResNet-50). This vector captures everything the model "sees" in the image. You then train a simple logistic regression on these vectors. It's **ultra-fast** (only one layer to train), requires **very little data** (few parameters = low risk of overfitting), and gives excellent results when your task is reasonably close to ImageNet.
+
+<Callout type="tip" title="Speed trick: pre-computing features">
+Instead of passing each image through the CNN at every training epoch, you can **pre-compute the features** of all your images once and save them. Then, you train your dense layer on these pre-computed vectors. It's literally 1000 times faster, because you eliminate the repeated forward passes through the CNN.
+</Callout>
+
+## Strategy 2: Fine-tuning
+
+Instead of locking the model, you progressively "unfreeze" its weights so it adapts to your specific data. The model is no longer a passive extractor -- it actively **specializes** on your domain.
+
+Procedure:
+1. Load ResNet-50 pre-trained, replace the classification layer
+2. **Unfreeze the weights**: reactivate gradients on all layers (or a subset)
+3. Train the complete model, but with a **very low learning rate**: typically 100 to 1000 times smaller than training from scratch
+
+Why such a low learning rate? Because the pre-trained weights are **already close to a good solution**. A gradient that's too strong would eject them from this favorable zone, destroying the acquired knowledge. A very gentle gradient **delicately adjusts** them toward your specific task.
+
+### Progressive fine-tuning in two phases
+
+The best approach is often a gradual unfreezing:
+
+**Phase 1**: low layers stay frozen, you train only the high layers and the new classification layer. Standard learning rate. You let the model learn the new categories.
+
+**Phase 2**: you unfreeze all layers and train the complete model with a very low learning rate. The low layers subtly adjust to your domain.
+
+Even better: **discriminative learning rates**. The idea is to apply a different learning rate depending on the layer depth. Layers close to the output (to be strongly adapted) receive a higher LR. Base layers (to be preserved) receive a much lower LR. You can typically divide the LR by 10 at each "group" of layers going back toward the input.
+
+## Choosing your strategy: the decision matrix
+
+The choice between feature extraction and fine-tuning depends on two factors: the **size of your dataset** and the **similarity to ImageNet**.
+
+### Small dataset + task similar to ImageNet
+
+Example: 200 photos of dog breeds. The model already knows dogs; it has learned perfectly adapted features. **Feature extraction** is the optimal choice. With so little data, fine-tuning would risk overfitting.
+
+### Large dataset + similar task
+
+Example: 50,000 photos of bird species. You have enough data to specialize the model without risk of overfitting. **Full fine-tuning**: the model will learn the fine nuances between species (beak shape, feather patterns, etc.).
+
+### Small dataset + different task
+
+Example: 500 chest X-rays. The images are visually very different from ImageNet. But the low layers (edges, contrasts, textures) remain useful. **Feature extraction on low layers only**: you keep the universal filters and replace everything specific to natural images.
+
+### Large dataset + very different task
+
+Example: thousands of satellite images or microscope images. The domain is radically different from ImageNet. Consider **aggressive fine-tuning** (less conservative learning rate) or even training **from scratch** if you have enough data. ImageNet representations can introduce more noise than useful signal in these extreme cases.
+
+<Callout type="info" title={"Rule of thumb: always try transfer learning first"}>
+In practice, fine-tuning works in about 95% of cases, even when the domain seems very far from ImageNet. Low-level representations (edges, contrasts, local textures) apply to virtually all images. Always try transfer learning before diving into training from scratch -- you'll often be pleasantly surprised by the results.
+</Callout>
+
+## Best practices for success
+
+### Input normalization
+
+A crucial point often overlooked: your images must be **normalized exactly like ImageNet**. The model learned its features with a certain pixel distribution. If you feed it differently normalized images, it "hallucinates" -- its filters react to patterns that don't exist. Standard ImageNet values: mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225] for the R, G, B channels.
+
+### Input size
+
+Each architecture expects a specific image size: ResNet = 224x224, Vision Transformer = 384x384, Inception = 299x299. Resize or center-crop your images without distortion (don't squash the proportions).
+
+### Data augmentation
+
+Essential when you have little data. Light rotations (5-10 degrees), horizontal flips, random crops, color variations (brightness, contrast, saturation). Each augmentation artificially creates a new training example, which reduces overfitting.
+
+### Choice of base model
+
+- **ResNet-50**: the solid default choice. Good everywhere, well understood, fast.
+- **EfficientNet-B4**: best performance/compute ratio. Recommended when GPU resources are limited.
+- **ViT** (Vision Transformer): excellent performance with massive data, but risky on small datasets without adapted pre-training.
+
+### Key hyperparameters
+
+- **Learning rate**: 1e-5 to 1e-4 for fine-tuning (100 to 1000 times less than training from scratch)
+- **Batch size**: as large as your GPU memory allows (better gradient signal)
+- **Early stopping**: monitor the validation loss and stop as soon as it rises (sign of overfitting)
+
+<Callout type="tip" title={"Transfer learning is everywhere today"}>
+What we're doing here in vision has become the dominant paradigm across all of AI. BERT, GPT, LLaMA in NLP: pre-trained on billions of words, then fine-tuned on specific tasks. Whisper in audio: pre-trained on 680,000 hours of speech. The principle is always the same: pre-train on a massive corpus to learn universal representations, then specialize with little data. Vision showed the way.
+</Callout>
+
+## Practical tools
+
+PyTorch provides `torchvision.models` with all the classics pre-trained. Hugging Face `transformers` offers the same for Vision Transformers. In practice, 3 lines are enough to get started:
+
+```python
+from torchvision import models
+model = models.resnet50(pretrained=True)
+model.fc = nn.Linear(2048, num_classes)
+# freeze all but last
+for p in model.parameters():
+    p.requires_grad = False
+model.fc[].requires_grad = True
+# train
+```
+
+Transfer learning is exactly that: a giant pre-training done by others, a surgical fine-tuning done by you. You benefit from millions of images and weeks of GPU computation without paying the cost.

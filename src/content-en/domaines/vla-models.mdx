@@ -1,0 +1,92 @@
+---
+title: "Vision-Language-Action (VLA) Model Architecture"
+description: "VLA models unify visual perception, language understanding, and action generation in a single architecture for robotic control."
+---
+
+
+
+## A New Paradigm: The Vision-Language-Action Trilogy
+
+For 50 years, classical robotics separated everything into distinct modules: perception (what does the robot see?), planning (what should it do?), and control (how to move the motors?). Each module was developed independently, and errors propagated from one module to the next. **Vision-Language-Action** (VLA) models make a radical conceptual leap: **a single end-to-end model** takes an image and a text instruction as input, and directly generates motor actions.
+
+This paradigm inherits from two lineages: the seq2seq tradition from NLP (translating one sequence into another) and vision-language models (VLMs) that understand images through text. VLAs extend this lineage to the generation of physical actions in the real world.
+
+<Callout type="info" title="VLA = VLM + Actions">
+A VLA is essentially a vision-language model augmented with the ability to generate actions. Actions become a new type of token, exactly like text or visual tokens. Generating a robot movement is like generating the next word in a sentence.
+</Callout>
+
+## General Architecture
+
+### The Three Inputs
+
+1. **Vision**: images from the robot's cameras. Typically an overview of the scene and/or a wrist camera to see up close what the robot is manipulating
+2. **Language**: the user's text instruction, such as "put the cup in the cabinet"
+3. **Proprioception** (optional): the robot's internal state, meaning its joint positions, forces measured by its sensors. It's the equivalent of your kinesthetic sense -- the feeling that tells you where your arm is even with your eyes closed
+
+### Encoding: Turning the World into Tokens
+
+**Visual encoder**: the image is transformed into visual tokens via a pre-trained encoder. Several options exist:
+- **ViT** (Vision Transformer): cuts the image into square patches (typically 16x16 pixels) and encodes them as tokens
+- **SigLIP**: a CLIP variant optimized for vision-language alignment. SigLIP understands the relationship between what you see and what you describe in words
+- **DinoV2**: a self-supervised encoder that captures rich spatial features, excellent for understanding where objects are in space
+- Some models combine multiple encoders (OpenVLA uses SigLIP + DinoV2) to benefit from each one's strengths
+
+**Text encoder**: the instruction is tokenized via the LLM's standard tokenizer (SentencePiece, BPE), exactly as with normal text.
+
+### The Transformer Backbone: The Brain
+
+Visual and text tokens are concatenated into a single sequence and processed by a **decoder-only Transformer** (GPT or Llama architecture). This is the heart of the system:
+- It learns the relationships between pixels (what I see) and words (what I'm being asked)
+- Implicit cross-attention (via token concatenation) connects instructions to visual observations
+- Deep layers learn to plan and reason: understanding that "put the cup away" involves locating the cup, grasping it, finding the cabinet, opening it, and placing the cup inside
+
+<Callout type="tip" title="Why Decoder-Only?">
+The decoder-only (autoregressive) architecture generates actions token by token, exactly like an LLM generates text word by word. The major advantage: you can directly reuse the weights of an LLM pre-trained on billions of texts. The robot inherits the LLM's world understanding.
+</Callout>
+
+### Action Generation: Where the VLA Stands Apart
+
+This is the part that distinguishes a VLA from a simple VLM. Two main approaches:
+
+**Discrete tokenization**: the robot's continuous actions (positions x, y, z, rotations, gripper opening) are **discretized** into bins (typically 256 levels per dimension) and added to the model's vocabulary. Concretely, an action looks like:
+
+Action = `[x_bin_142, y_bin_87, z_bin_203, rx_bin_12, ry_bin_45, rz_bin_78, gripper_open]`
+
+It's as if the robot learned 256 words for each direction of movement, and constructs a sentence describing its gesture.
+
+**Continuous regression head**: alternatively, an MLP head projects the Transformer's last hidden layer directly into the continuous action space. This avoids discretization but loses autoregressive modeling (you can no longer condition each dimension on the previous ones).
+
+## Architectural Variants: Concrete Models
+
+**RT-2** (Google): fine-tunes a massive existing VLM (PaLI-X 55B or PaLM-E 12B), with actions tokenized as text and co-fine-tuning mixing web and robotic data.
+
+**OpenVLA** (Stanford): based on Prismatic-7B (Llama 2 + SigLIP + DinoV2), 7B parameters, fully open-source, actions discretized into 256 bins.
+
+**Octo** (Berkeley): a Transformer designed from scratch, smaller (93M parameters) and modular, with a diffusion head for modeling complex action distributions.
+
+**Pi0** (Physical Intelligence): uses flow-matching for action generation, with a pre-trained 3B parameter VLM. Continuous actions are generated through iterative denoising rather than tokenization.
+
+<Callout type="paper" title="Action Chunking: Predicting the Future">
+An important innovation: instead of predicting a single action at each time step, the model predicts a chunk of H future actions (typically H=10-20). This reduces compounding error (small errors that accumulate step by step) and produces smoother, more natural trajectories. **ACT** (Action Chunking with Transformers) popularized this approach.
+</Callout>
+
+## Training a VLA: From Web to Robot
+
+Training happens in several phases:
+
+**VLM pre-training**: the model learns vision and language on massive web data (billions of image-text pairs). This is where it acquires its world understanding: what a cup is, a drawer, a robot.
+
+**Robotic phase**: fine-tuning on robotic demonstration data, typically from the Open X-Embodiment dataset (800K+ trajectories from 22 robot types). The model learns to turn its world understanding into concrete actions.
+
+**Co-fine-tuning**: joint training mixing web and robotic data in the same batch. This technique prevents catastrophic forgetting: without it, robotic fine-tuning would make the model forget its web knowledge.
+
+**Robotic data collection**: data is typically collected through teleoperation: a human controls the robot via a haptic device (gloves, controller) while observations (images) and actions (movements) are recorded. It's laborious but currently the most reliable method.
+
+## Open Challenges
+
+- **Real-time**: 7B+ parameter models are too slow for high-frequency control (100 Hz). Distillation and quantization are active research directions
+- **Dexterous manipulation**: high-dimensional action spaces (a 20-finger hand) remain difficult to model
+- **Cross-embodiment generalization**: a single model for all robot types, from industrial arms to humanoids
+- **Safety**: how to guarantee the model never generates actions dangerous to nearby humans?
+
+The **main bottleneck** remains the quantity and diversity of robotic data. VLMs have billions of web images. The best robotic datasets contain a few million trajectories, often on limited tasks. Bridging this data gap is the most limiting factor for future VLA progress.

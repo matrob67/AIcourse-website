@@ -1,0 +1,134 @@
+---
+title: "Document OCR: LayoutLM, Donut, Mistral OCR"
+description: "Document understanding models combine OCR, layout comprehension, and information extraction to process complex documents."
+---
+
+## The Real Problem: 10,000 Invoices, 10,000 Formats
+
+Imagine a company that receives 10,000 invoices per month. Each vendor uses a different format: the total amount is sometimes in the bottom right, sometimes in the middle, sometimes in a table, sometimes bold, sometimes tiny. A human would spend a month extracting everything manually.
+
+Basic OCR (Optical Character Recognition) tools (like Tesseract) can extract raw text from an image. But extracting text isn't enough: once you have a list of words and numbers, how do you know which one is the total amount? Which one is the date? Which one is the invoice number?
+
+That's where **document understanding** comes in. It's no longer "what text do you see?" but "what's the total amount on this invoice?" or "who signed this contract?" The model understands the *spatial* structure and the *semantic* meaning of the document.
+
+<Callout type="info" title="OCR vs. Understanding: Two Very Different Levels">
+Traditional OCR tells you: "I see the characters I-N-V-O-I-C-E, 2-5-0-0, A-C-M-E." Document understanding tells you: "This is a 2,500 euro invoice issued by Acme Corp, dated March 15, payable in 30 days." One reads letters, the other understands a document.
+</Callout>
+
+## LayoutLM: Seeing the Document Like a Human
+
+When a human reads an invoice, they don't read word by word from left to right. They scan the page, spot important zones (logo at the top, totals at the bottom, product lines in the middle), and use the position of each element to understand its role. LayoutLM reproduces this ability by fusing three sources of information:
+
+1. **The text**: the words themselves and their linguistic meaning
+2. **The position**: the 2D coordinates of each word on the page (at the top? at the bottom? to the right of the word "Total"?)
+3. **The visual**: the appearance of the layout (tables, borders, bold, colors)
+
+### Evolution: From v1 to v3
+
+- **v1** (2020): text + 2D position --- a convincing first proof of concept
+- **v2** (2021): adds visual context and multimodal training --- better understanding of tables and layout
+- **v3** (2022): unified architecture with massive pre-training --- state-of-the-art performance on most benchmarks
+- **XLM**: multilingual version that handles documents in different languages
+
+The evolution follows a clear logic: with each version, more context is added to the model, and it understands documents better. It's like going from reading blind (just the text) to reading with your eyes (text + visual + position).
+
+## Donut: The Revolution Without OCR
+
+Donut (Document Understanding Transformer) brings a radically different idea: what if we skip the OCR step entirely?
+
+**The analogy**: the traditional approach (LayoutLM) is like listening to a podcast by first having it transcribed in writing, then reading the transcript to understand the content. If the transcript contains errors, your understanding suffers. Donut looks at the raw document image and understands directly, like a human reading a page.
+
+### How It Works
+
+1. **Visual encoder**: a Vision Transformer looks at the document image and converts it into a rich internal representation
+2. **Decoder**: an auto-regressive decoder directly generates the structured output (JSON, text, table)
+
+### The Result in Practice
+
+For an invoice, instead of the "OCR -> parsing -> extraction -> structuring" pipeline, Donut directly produces:
+```json
+{"vendor": "ACME Corp", "date": "2024-03-15", "total": "1250.00"}
+```
+
+**The major advantage**: no OCR error propagating downstream. With a classic OCR pipeline, if the number "1250" is misread as "1230," the extraction perpetuates that error. Donut looks at the raw source and avoids this error cascade.
+
+<Callout type="paper" title="OCR-Free vs. OCR-Based: Who Wins?">
+OCR-free models (Donut) considerably simplify the pipeline and avoid cascading errors, but can lose precision on very small or degraded text. OCR-based models (LayoutLM) are often more accurate on poor-quality documents. In a real project, the choice depends on your data: if your scans are clean, Donut is often sufficient and simpler. If your documents are degraded, LayoutLM will be more robust.
+</Callout>
+
+## Mistral OCR: The Turnkey Approach
+
+Mistral offers a pragmatic solution via API:
+
+- High-quality extraction from images and PDFs
+- Native understanding of document structure (sections, headings, paragraphs)
+- Output in well-structured and usable Markdown
+- Handling of complex tables, mathematical formulas, and diagrams
+
+```python
+from mistralai import Mistral
+
+client = Mistral(api_key="...")
+response = client.ocr.process(
+    model="mistral-ocr-latest",
+    document={"type": "pdf", "url": "https://...document.pdf"}
+)
+```
+
+The advantage: zero infrastructure to manage, no GPU to provision. You call an API and receive structured content. Ideal for rapid prototyping or moderate volumes.
+
+
+
+## The Comparison: Choosing Your Approach
+
+| Approach | Examples | Advantages | Disadvantages |
+|---|---|---|---|
+| Generic VLM | GPT-5.4 + image | Ultra flexible, handles all cases | Expensive per document, slow |
+| OCR-based | LayoutLM v3 | Accurate, fast at inference | Complex multi-step pipeline |
+| OCR-free | Donut | Simple, end-to-end | Weaker on very small text |
+| Specialized | Mistral OCR | Optimized for documents | Less flexible, API dependency |
+
+## Concrete Use Cases
+
+### Invoice Extraction
+Identifying the vendor, date, product lines, and total amount --- even when invoices come from 50 completely different formats. The model learns the semantics of the "invoice" concept rather than memorizing fixed positions.
+
+### Form Analysis
+Extracting answers from a handwritten or printed form by associating each answer with its corresponding question. The challenge: hand-filled forms are often unreadable for standard OCR.
+
+### Table Understanding
+Transforming a table in an image into usable structured data, preserving relationships between rows and columns. Particularly useful for financial reports and statistical tables.
+
+### Long Report Analysis
+Extracting key financial figures, conclusions, and recommendations from a 100-page report, without having to read each page manually.
+
+<Callout type="tip" title="VLMs for Prototyping, Specialized Models for Production">
+Testing an idea? A generic VLM (GPT-5.4, Claude Opus 4.6, Pixtral) with a good prompt allows deployment in 1 hour. For high-volume production (thousands of documents per day), specialized models (LayoutLM, Donut) offer a much better cost/performance ratio. Both approaches have their place in the development cycle.
+</Callout>
+
+## Technical Corner: Scan Quality Accounts for 80% of the Result
+
+Before optimizing your model, optimize your capture process. That's often where the easiest gains are found:
+
+- **Good scan**: 300 DPI (dots per inch), well-lit, parallel to the document &rarr; reliable extraction at 95%+
+- **Smartphone photo**: weird angle, shadows, motion blur &rarr; extraction at 50-70%
+
+An entry-level $100 scanner + a mediocre model will give better results than a high-end smartphone + the best model on the market. The most cost-effective investment is often the most basic one.
+
+## The Remaining Challenges
+
+### Handwriting: Still the Big Challenge
+
+Handwriting remains about 10 times harder to process than printed text. Cursive writing, personal abbreviations, and individual variations make the task daunting. This is a domain where much progress remains to be made.
+
+### Multilingual Documents
+
+When a document mixes French, Chinese, and Arabic on the same page (which happens in international documents), models struggle to juggle between writing systems, reading directions, and character sets.
+
+<Callout type="warning" title={"Image Quality Is King"}>
+The number 1 factor for success in document understanding is input quality. A clean 300 DPI scan gives 10x better results than a photo taken by hand with a smartphone. Before investing weeks in model optimization, invest in a good digitization process.
+</Callout>
+
+## Where the Field Is Heading
+
+Document understanding is booming. Companies process millions of documents per year and pay armies of humans to handle them manually --- it's a huge market ripe for automation. Between ultra-flexible generalist VLMs and ultra-efficient specialized models, there is now a solution for virtually every use case, from rapid prototyping to industrial deployment.

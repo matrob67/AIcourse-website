@@ -1,0 +1,138 @@
+---
+title: "Self-Consistency: Majority Voting"
+description: "Self-consistency improves Chain-of-Thought by generating multiple reasoning chains and selecting the most frequent answer through majority voting."
+---
+
+
+
+## The Problem: A Single Reasoning Chain Can Fail
+
+A single Chain-of-Thought, even well-structured, can be wrong. The model can make a calculation error, skip a step, or head in the wrong direction. A single reasoning chain is like a single dice roll: sometimes it lands right, sometimes it doesn't.
+
+But here's the elegant idea behind self-consistency: **ask the same question 10 times and see what the majority says**. If 8 out of 10 answers say "42" and 2 say "37," the correct answer is probably "42." Random errors scatter, truth converges.
+
+It's the principle of the **wisdom of crowds**, applied to a single model.
+
+<ArxivLink id="2203.11171" title="Self-Consistency Improves Chain of Thought Reasoning in Language Models (Wang et al., 2022)" />
+
+<Callout type="info" title="Majority voting: simple and powerful">
+Instead of generating a single answer (greedy decoding, temperature 0), generate N independent answers with temperature (> 0). Each answer takes a different reasoning path, but correct paths converge to the same destination. You select the most frequent answer.
+</Callout>
+
+## How It Works in Practice
+
+### Step 1: Generate N Reasoning Chains
+
+With a temperature of 0.5 to 0.7 (enough randomness to diversify without descending into chaos), you generate 10 or 20 independent CoT reasoning chains.
+
+Each one will take a slightly different path. One might start by calculating the unit price, another by setting up a ratio, a third by using proportionality. But if the problem has a unique solution, the correct paths converge to the same final answer.
+
+### Step 2: Extract the Answers
+
+From each reasoning chain, you extract the final answer. A structured format ("Answer: X") makes this step much easier. Without reliable extraction, everything else falls apart.
+
+### Step 3: Majority Vote
+
+You count: which answer comes up most often? That's the one you keep. Simple, effective, mathematically grounded.
+
+### Concrete Example
+
+> **Q: 3 apples cost 6 euros. How much do 5 apples cost?**
+>
+> **Answer 1:** $3 = 6$, so $1 = 2$, so $5 = 10$ &rarr; 10 euros
+> **Answer 2:** Price/apple $= 6/3 = 2$. $5 \times 2 = 10$ &rarr; 10 euros
+> **Answer 3:** $5/3 \times 6 = 10$ &rarr; 10 euros
+> **Answer 4:** 3 apples $= 6$, so $5 = 6 + 2 \times 2 = 10$ &rarr; 10 euros
+> **Answer 5:** $6 \div 3 = 2$/apple, $2 \times 5 = 10$ &rarr; 10 euros
+>
+> **Vote:** 10 euros (5/5) &rarr; **Final answer: 10 euros**
+
+Five different paths, same destination. That's the strength of self-consistency: the diversity of reasoning chains reinforces confidence in the answer.
+
+## Impressive Gains
+
+On GSM8K (elementary/middle school math problems):
+
+| Model | CoT alone | Self-consistency (N=40) | Gain |
+|---|---|---|---|
+| PaLM 540B | 56.5% | 74.4% | +17.9 points |
+
+Nearly 18 points of improvement just by asking multiple times and voting. No new training, no additional model, just intelligent redundancy.
+
+<Callout type="paper" title="Consistent and predictable gains">
+Self-consistency improves performance on **all** tested reasoning benchmarks. The gains are particularly significant on math and logic tasks, where different reasoning paths naturally converge toward the correct answer. It's one of the most reliable techniques for improving an LLM without retraining it.
+</Callout>
+
+## The Parameters That Change Everything
+
+### How Many Samples (N)?
+
+| N | Effect |
+|---|---|
+| 5 | Already visible and significant improvement |
+| 10-20 | Sweet spot for cost/quality in most use cases |
+| 40 | Strongly diminishing returns |
+| > 100 | Almost no measurable improvement |
+
+The gains follow a **logarithmic curve**: the first doubling (from 1 to 2 samples) brings a huge gain. The fifth doubling (from 16 to 32) brings very little. This is important for calibrating the budget.
+
+### Temperature (T)
+
+| Temperature | Effect |
+|---|---|
+| $T = 0.5\text{-}0.7$ | The sweet spot: enough diversity to explore different paths, enough coherence to stay logical |
+| $T < 0.3$ | Answers too similar to each other, voting serves no purpose |
+| $T > 1.0$ | Too much chaos, answers become nonsensical |
+
+The balance is crucial: enough randomness for each sample to explore a genuinely different path, but not so much that each path becomes nonsensical.
+
+### Answer Extraction
+
+The often underestimated link: how do you extract the final answer from each reasoning chain?
+
+Common techniques:
+- Parse the last line containing a number
+- Enforced structured format ("Answer: X")
+- Regex on the expected pattern
+
+**Bad extraction makes the entire vote useless.** If you extract "10 euros" from one chain and "10" from another, the vote will count them as two different answers. Normalize your answers.
+
+## Advanced Variants
+
+### Weighted Self-Consistency
+
+Instead of giving each answer an equal vote, you weight by the **probability** of the reasoning chain. A reasoning chain that the model generates with high confidence (high log-likelihood) weighs more than a hesitant one. This uses information that's free (the probabilities are already computed).
+
+### Universal Self-Consistency (USC)
+
+For free-text answers (not a simple number), raw voting doesn't work. USC uses an LLM to **compare and aggregate** the answers: "Here are 10 answers to the same question. What is the consensus answer?" It's more expensive but extends self-consistency to open-ended tasks.
+
+### Self-Consistency + Verification
+
+You can combine voting with a verification step: after identifying the majority answer, you ask the model to explicitly verify it. Belt and suspenders.
+
+<Callout type="tip" title="In practice: N=5 is often enough">
+Start with N=5. The gains diminish quickly beyond that. For a critical task, go up to N=10 or N=20, but rarely more. Important point: a small model with many samples can beat a large model with a single sample, which changes the economic calculus.
+</Callout>
+
+## When to Use Self-Consistency
+
+### Ideal Use Cases
+- **Unique verifiable answer**: math, logic, code with precise output
+- **Critical reliability**: diagnostics, compliance, financial decisions
+- **Inconsistent results** with CoT alone: if the model gives a different answer each time, voting stabilizes it
+
+### Use Cases to Avoid
+- **Creative answers**: there is no "right" answer, voting doesn't make sense
+- **Simple classification**: CoT alone suffices, no need for redundancy
+- **Tight token budget**: N=5 means 5 times the cost, it needs to be worth it
+
+<Callout type="warning" title="The majority can be systematically wrong">
+Self-consistency relies on the assumption that errors are **random and independent**. If the model has a **systematic bias** (it always confuses two concepts, it always applies the wrong formula), voting doesn't correct the bias — it **reinforces** it. 10 answers wrong in the same way give a unanimous vote... for the wrong answer.
+
+Self-consistency eliminates random noise, not systematic bias. That's a crucial distinction.
+</Callout>
+
+## The Historical Impact
+
+Self-consistency was the first concrete step toward **test-time compute scaling**. Instead of improving the model itself, you improve its results by investing more computation at query time. This seemingly modest idea directly inspired reasoning models like o1 and DeepSeek-R1, which push the concept much further: not just voting among multiple answers, but truly **thinking** longer and deeper.

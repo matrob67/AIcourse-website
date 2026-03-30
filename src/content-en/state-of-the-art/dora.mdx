@@ -1,0 +1,100 @@
+---
+title: "DoRA: Weight-Decomposed Low-Rank Adaptation"
+description: "DoRA (Weight-Decomposed Low-Rank Adaptation) improves LoRA by decomposing weights into magnitude and direction, closing the gap with full fine-tuning while maintaining parameter efficiency."
+---
+
+## The Problem: LoRA Is Good, but Not Good Enough
+
+LoRA has become the standard method for efficiently fine-tuning LLMs. But when you compare it to full fine-tuning (modifying all parameters), there's always a performance gap. On complex tasks or major domain shifts, this gap can reach 2-3%, which matters when every percentage point translates to perceptible quality.
+
+The researchers who created DoRA dug into this question and discovered something fundamental: **full fine-tuning and LoRA don't modify weights in the same way**.
+
+<ArxivLink id="2402.09353" title="DoRA: Weight-Decomposed Low-Rank Adaptation (Liu et al., 2024)" />
+
+## The Key Insight: Magnitude vs Direction
+
+To understand DoRA, imagine each model weight as an **arrow** (a vector). This arrow has two independent properties:
+1. **Magnitude**: the length of the arrow --- how "strong" or important this weight is
+2. **Direction**: where the arrow points --- what role this weight plays in the model
+
+Think of a GPS: magnitude is the car's speed; direction is the heading. You can accelerate without turning, or turn without changing speed. These are two independent controls.
+
+**Full fine-tuning** adjusts these two properties independently. It can increase a weight's magnitude without changing its direction, or rotate the direction without touching the magnitude. This flexibility is what makes it so effective.
+
+**LoRA**, on the other hand, modifies both simultaneously via its low-rank update. It's as if your GPS could only accelerate while turning at the same time --- constraining.
+
+<Callout type="paper" title={"The Key Observation"}>
+Full fine-tuning shows a **negative** correlation between magnitude and direction changes. When magnitude increases a lot, direction stays stable. When direction changes strongly, magnitude moves little. LoRA can't reproduce this pattern. DoRA can.
+</Callout>
+
+
+
+## How DoRA Works
+
+DoRA explicitly decomposes each weight matrix into two components:
+
+$$W = m \times \frac{V}{\|V\|}$$
+
+{/* ||V|| denotes the Euclidean norm of vector V, i.e., its length. */}
+
+- **m**: a magnitude vector (one scalar per column --- "how important?")
+- **V**: a direction matrix (normalized to have unit norm --- "what role?")
+
+The magnitude **m** is directly trainable --- it's just a vector of a few thousand parameters. The direction **V** is updated via standard LoRA (low-rank adaptation).
+
+The result: two independent learning paths. Magnitude can change freely without impacting direction, and vice versa. It's this separation that gives DoRA the flexibility of full fine-tuning while keeping LoRA's parameter efficiency.
+
+<Callout type="info" title="Tiny Overhead">
+DoRA only adds the magnitude vector m per layer. For a 4096-dimensional layer, that's only **4,096 extra parameters** --- a drop in the bucket compared to LoRA's millions of parameters. The memory overhead is negligible.
+</Callout>
+
+## Results: DoRA Closes the Gap
+
+Benchmarks show that DoRA gets significantly closer to full fine-tuning, where LoRA plateaued:
+
+| Task | LoRA | DoRA | Full tuning |
+|---|---|---|---|
+| Commonsense (LLaMA-7B) | 68.9 | 71.2 | 72.1 |
+| Instruction (LLaMA-7B) | 73.4 | 75.1 | 75.8 |
+| VQA (LLaVA-7B) | 79.1 | 80.3 | --- |
+
+Look at the numbers: on the Commonsense benchmark, LoRA is 3.2 points from full tuning, while DoRA is only 0.9 points away. On instruction following, LoRA loses 2.4 points, DoRA only 0.7. The gap is systematically reduced by a factor of 3 to 4.
+
+<Callout type="tip" title={"DoRA Closes the Gap"}>
+With DoRA and rank 16, you approach full fine-tuning performance. With LoRA and the same rank 16, you're often 2-3% below. And DoRA is almost as fast as LoRA during training.
+</Callout>
+
+## Using DoRA in Practice
+
+Integration is trivial with Hugging Face's PEFT library:
+
+```python
+from peft import LoraConfig, get_peft_model
+
+config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    use_dora=True,  # Activates DoRA instead of LoRA
+    lora_dropout=0.05,
+)
+
+model = get_peft_model(base_model, config)
+```
+
+A simple `use_dora=True` and that's it. No new API to learn, no pipeline to rewrite. The computational overhead comes mainly from the column-by-column normalization of V, which is a fast operation on GPU.
+
+## When to Choose DoRA vs LoRA?
+
+- **LoRA is sufficient** if: you're doing a simple adaptation (chatbot, tone change), or if training speed is absolutely critical
+- **DoRA is preferable** if: you want the best possible quality with a limited parameter budget, if you notice a significant gap between LoRA and full tuning, or if you're working on complex tasks (reasoning, instruction following)
+
+<Callout type="warning" title={"Overhead: 20-30% Training Time"}>
+DoRA is about 20-30% slower than LoRA during training. It's not dramatic, but it's worth considering if you're training massively or iteratively. If speed trumps quality, stick with LoRA with a higher rank (r=32 or r=64).
+</Callout>
+
+## Powerful Combinations
+
+DoRA works perfectly with **QLoRA** (4-bit quantization of the base model). The QDoRA combination is one of the best current approaches for fine-tuning LLMs on consumer GPUs: memory-efficient (the model fits in 4-bit), parameter-efficient (only LoRA + magnitude are trained), and quality-efficient (DoRA closes the gap with full tuning).
+
+In summary: DoRA is an improvement over LoRA that separates weight magnitude and direction. Better quality, minimal overhead, trivial integration. If you're looking for the best possible quality without the cost of full fine-tuning, DoRA should be your default choice.

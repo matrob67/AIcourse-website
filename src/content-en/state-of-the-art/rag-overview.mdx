@@ -1,0 +1,99 @@
+---
+title: "RAG: Retrieval-Augmented Generation"
+description: "RAG combines information retrieval with text generation to ground LLMs in factual, up-to-date knowledge, reducing hallucinations."
+---
+
+## The Problem: LLMs Hallucinate
+
+An LLM says convincing things that are sometimes completely false. Why? Its knowledge is **frozen** at the date of its last training data. You ask it for last quarter's financial results? Hallucination. You ask it to answer questions about your internal documents it's never seen? Hallucination again. The model doesn't know how to say "I don't know" — it makes things up with confidence.
+
+**RAG** (Retrieval-Augmented Generation) solves this problem with a simple but powerful idea: instead of asking the LLM to answer from memory, you **provide it with relevant documents** as context. It's the difference between a closed-book exam (the LLM alone) and an open-book exam (the LLM with RAG).
+
+<ArxivLink id="2005.11401" title="Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (Lewis et al., 2020)" />
+
+<Callout type="info" title={"The Simple Idea Behind RAG"}>
+Instead of relying solely on its weights (its internal memory), the LLM receives relevant documents directly in the prompt. It can **cite its sources**, use **up-to-date data**, and answer questions about your **private documents**. Simple but revolutionary.
+</Callout>
+
+
+
+## RAG Pipeline: 3 Steps
+
+### 1. Indexing (offline, done once)
+This is the preparation phase, executed ahead of time:
+- Split your documents into **chunks** (pieces of 200-500 words each)
+- Generate a **vector embedding** for each chunk using an embedding model
+- Store the embeddings in a **vector database** (Chroma, Qdrant, Pinecone...)
+
+### 2. Retrieval (online, for each question)
+When a user asks a question:
+- Convert the question into an embedding (same model used for documents)
+- Find the **K most similar chunks** in the vector database (typically 5-10)
+- These chunks become the "context" for the answer
+
+### 3. Generation (online)
+The LLM comes into play:
+- Build a prompt that combines the context (retrieved chunks) and the question
+- The LLM generates an answer **grounded in the provided documents**
+
+> **Context:**
+> [Document 1: ...]
+> [Document 2: ...]
+>
+> **Question:** your question
+>
+> Answer based ONLY on the context provided.
+
+
+
+## Why It Works
+
+### Fewer Hallucinations
+By providing sources directly in the prompt, the LLM no longer needs to **guess** — it synthesizes the given information. Studies show a 30-50% reduction in hallucinations with a well-configured RAG. The model shifts from "I'm reciting what I memorized" mode to "I'm reading and summarizing" mode.
+
+### Always Up-to-Date Data
+The vector database can be updated in real time. A new document is published? Index it, and it's immediately available for answers. No need to retrain the model, which would take weeks and thousands of dollars.
+
+### Proprietary Data, Fully Secure
+Your internal documents (emails, reports, source code) are **never** sent to a provider to train a model. They stay in your vector database, indexed and retrieved locally. Confidentiality is preserved by design.
+
+<Callout type="tip" title="RAG vs Fine-tuning?">
+**RAG**: when data changes frequently, when you need traceability (citing sources), or for factual knowledge.
+**Fine-tuning**: when you want to change the model's behavior, style, or response format.
+In practice: you'll probably do both. RAG for knowledge, fine-tuning for behavior.
+</Callout>
+
+## Key Components
+
+### Embeddings
+The embedding model transforms text into vectors. It's the most critical component — retrieval quality depends directly on it.
+
+Typical choices: all-MiniLM (free, fast, 384 dims), BGE-M3 (multilingual, 1024 dims, excellent), or OpenAI text-embedding-3 (paid, very performant).
+
+### Vector Database
+Stores embeddings and enables cosine similarity search at scale.
+
+Options: Chroma (prototyping), Qdrant (open-source production), Pinecone (zero-ops SaaS).
+
+### Chunking
+How you split documents is an art in itself. Too small (50 tokens): each chunk loses its context and becomes incomprehensible on its own. Too large (2000 tokens): the chunk contains too much noise and dilutes relevant information. The sweet spot is generally between **256 and 512 tokens**, with a 10-20% overlap between chunks to avoid cutting an idea in half.
+
+## Pitfalls of Naive RAG
+
+<Callout type="warning" title={"RAG Isn't Magic"}>
+1. **Garbage in, garbage out**: if retrieval doesn't find the right documents, the LLM can't produce a good answer — regardless of its power
+2. **Lost in the middle**: LLMs tend to ignore information in the middle of a long context, only retaining the beginning and end
+3. **Conflicting sources**: when retrieved documents contradict each other, the LLM can produce an incoherent answer
+4. **Multi-step questions**: "Which supplier has the best price among those that deliver to Europe?" requires cross-referencing multiple pieces of information — a single retrieval isn't enough
+
+RAG reduces hallucinations but doesn't eliminate them. Plan for human validation in critical cases.
+</Callout>
+
+## Evaluation
+
+Three essential metrics to measure the quality of your RAG:
+- **Recall@K**: what percentage of relevant documents end up in the K results? (measures retrieval quality)
+- **Faithfulness**: is the answer faithful to the provided documents, or is the LLM making things up? (measures hallucinations)
+- **Answer relevancy**: does the answer actually address the question asked? (measures relevance)
+
+The following sections explore each component in detail and the advanced techniques for pushing quality beyond basic RAG.

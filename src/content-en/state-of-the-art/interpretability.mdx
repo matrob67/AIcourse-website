@@ -1,0 +1,156 @@
+---
+title: "Interpretability and Explainability (XAI)"
+description: "How do you understand what a model has really learned? SHAP, LIME, attention maps, mechanistic interpretability — the tools for opening the black box."
+---
+
+## The Doctor Who Doesn't Know Why
+
+The model says the patient has cancer. The doctor asks: why?
+
+The model answers: I don't know, I just trained on millions of images, and this image looks like the others with cancer.
+
+Would you trust a human doctor who answered the same way? Who couldn't show you which clinical sign alerted them, which area of the image seems abnormal, why they're confident or hesitant?
+
+This is the central problem of **AI interpretability**: our best models are often black boxes. They produce remarkably accurate predictions, but their internal reasoning is opaque — even to the researchers who built them. We know *that* the model is right (most of the time), but we don't understand *why*.
+
+## Why Interpretability Matters
+
+### Trust and Adoption
+
+A model whose decisions you can't understand will be hard to deploy in critical contexts. A cardiologist won't blindly trust a model that displays "heart attack at 94%" without being able to show them which ECG elements led to that conclusion. And they're right: a model can be right for the wrong reasons.
+
+### Detecting Biases and Shortcuts
+
+A model can achieve excellent performance on the test set for entirely fallacious reasons. The classic example that marked the field: a model trained to distinguish wolves from huskies that, in reality, was classifying based on the **presence of snow in the background**. Wolves were photographed in snow, huskies indoors. The model had learned a perfect shortcut on the training data — but one that collapses as soon as you show it a husky in the snow. Without interpretability, this kind of shortcut remains invisible until it causes an incident in production.
+
+### Regulation
+
+The EU AI Act and GDPR require in certain cases a **right to explanation** for automated decisions affecting individuals. Credit models (why was this loan denied?), recruitment models (why was this CV rejected?), or medical models (why this diagnosis?) must be able to justify their decisions in a way that's understandable to a non-expert.
+
+<Callout type="warning" title="EU AI Act and high-risk systems">
+The EU AI Act classifies certain AI applications as "high risk": medical systems, recruitment, credit, border control. For these systems, transparency and explainability requirements are mandatory. Independent audits may be required. Ignoring interpretability in these domains is no longer a legal option in Europe.
+</Callout>
+
+
+## SHAP: Each Feature Gets Its Contribution
+
+**SHAP** (SHapley Additive exPlanations) is one of the most widely used and theoretically best-founded methods for explaining individual predictions.
+
+The intuition comes from cooperative game theory: imagine a group of players who collaborate to win. How do you fairly distribute the winnings? Shapley values measure the marginal contribution of each player — here, each feature — to the collective outcome.
+
+<ArxivLink id="1705.07874" title="A Unified Approach to Interpreting Model Predictions (SHAP)" />
+
+### How It Works
+
+For each prediction, SHAP calculates the contribution of each feature by considering all possible combinations of features. A feature's contribution is the average of its marginal impact when added to any subset of the other features. It's fair in the mathematical sense: no feature is favored or penalized by the evaluation order.
+
+**Concrete example for a credit risk model:**
+
+| Feature | Value | SHAP value |
+|---------|--------|------------|
+| Salary | 45,000 EUR | +0.15 (reduces risk) |
+| Payment history | Incidents | -0.32 (increases risk) |
+| Seniority | 3 years | +0.08 (reduces risk) |
+| Age | 28 years | -0.03 (slightly increases) |
+
+The sum of SHAP values exactly reconstructs the difference between the prediction for this individual and the average prediction across the population. You can therefore precisely explain why this client is judged more or less risky than average.
+
+<Callout type="info" title="SHAP global and local">
+SHAP works at two scales. **Locally**: explain why the model made this decision for this specific client. **Globally**: by aggregating the absolute SHAP values across the entire dataset, you get a feature importance ranking much more reliable than classic methods (permutation feature importance, etc.). It's useful for understanding what the model has learned in general, not just on one example.
+</Callout>
+
+### Limitations of SHAP
+
+Exact computation is exponential in the number of features (all combinations). Efficient approximations exist for different model types — TreeSHAP for decision trees, DeepSHAP for neural networks — but they introduce independence assumptions between features that aren't always valid in real data.
+
+## LIME: Local Approximation
+
+**LIME** (Local Interpretable Model-agnostic Explanations) takes a different philosophy: rather than analyzing the model as a whole, you focus on a single prediction and build a simple (linear) model that approximates the complex model's behavior **in the immediate neighborhood** of the example to explain.
+
+<ArxivLink id="1602.04938" title="Why Should I Trust You? Explaining the Predictions of Any Classifier" />
+
+**Algorithm:**
+
+1. Take the example x to explain
+2. Generate neighbors of x by random perturbation (slightly modifying features)
+3. Get the complex model's predictions on these neighbors
+4. Train a linear model on these neighbors, weighted by their proximity to x
+5. The linear model's coefficients constitute the explanation
+
+The idea is powerful: even if the global model is incredibly complex, its behavior around a precise point can often be well approximated by a line. LIME works for any model (model-agnostic) and any data type (text, images, tabular).
+
+<Callout type="tip" title="LIME for text">
+For text, neighbors are generated by randomly masking words. The explanation identifies which words are most influential for the prediction. For a sentiment model, LIME might show that "excellent" and "perfect" push toward positive, while "disappointed" pushes toward negative. It's intuitive and easily communicable to a non-expert.
+</Callout>
+
+## Attention Maps: Practical Tool with Theoretical Limits
+
+In Transformers, attention scores indicate which tokens the model "looks at" when processing a given token. Visualizing these scores — the **attention maps** — is intuitive and often the first debugging reflex.
+
+For a translation task, you can verify that the model correctly aligns "chat" with "cat." For a question-answering task, you can verify that the model looks at the right sentence in the context. It's fast, free (the scores are already computed), and visually compelling.
+
+### The Limits of Attention Maps
+
+Important research has, however, called into question the actual explanatory value of these visualizations.
+
+<ArxivLink id="1902.10186" title="Attention is not Explanation" />
+
+**Main problems:**
+
+- Attention weights and **causality** are not equivalent: a token can receive lots of attention without being causally important for the final prediction
+- There are dozens of attention heads per layer, dozens of layers — which ones to look at? Their combination is nonlinear and difficult to interpret
+- You can often find **radically different** attention distributions that produce exactly the same predictions
+
+<Callout type="warning" title="Attention is not Explanation">
+Jain and Wallace's 2019 paper empirically demonstrated that attention weights do not constitute a reliable explanation of predictions. A paper by Wiegreffe and Pinter then provided a more nuanced view. The current consensus: attention maps are a useful debugging tool for spotting obvious anomalies, but not a rigorous causal explanation of what the model is actually doing.
+</Callout>
+
+## Mechanistic Interpretability
+
+**Mechanistic interpretability** is the most ambitious approach in the field: understanding not "which features matter" (like SHAP or LIME), but **exactly what algorithm the model executes**, at the level of neurons and their connections.
+
+The analogy with biology is illuminating: you can observe an animal's behavior (behavioral interpretability), but you can also dissect its brain and map the neural circuits to understand mechanisms at the cellular level. Mechanistic interpretability is the neuroscience of AI.
+
+### Circuits and Features
+
+Researchers at Anthropic and DeepMind have identified internal structures — "circuits" — in neural networks that correspond to interpretable functionalities.
+
+In vision models, circuits detect curves, then combine those detections to identify eyes, then faces — reproducing a hierarchy analogous to the human visual cortex.
+
+In LLMs, work has identified components that perform precise algorithms: induction heads (which enable in-context learning by copying patterns seen earlier), copy circuits (which reproduce tokens from context), and factual recall circuits (which retrieve facts memorized during training).
+
+<Callout type="paper" title="Anthropic and Mechanistic Interpretability">
+Anthropic has invested heavily in this field, with work like "Toy Models of Superposition," "Softmax Linear Units," and "Scaling Monosemanticity." This research attempts to understand how features are encoded in neural activations, including in large models. The ultimate goal: being able to audit a model from the inside to verify it's really doing what you think it's doing.
+</Callout>
+
+### Superposition
+
+A surprising and fundamental finding: models encode **more features than they have dimensions** by superimposing multiple features on the same neurons. How? Thanks to sparsity: most features are only active a small fraction of the time, which allows coexistence on the same neurons without too much interference — like multiple simultaneous phone conversations on the same fiber optic cable.
+
+This makes direct interpretation of neurons very difficult: an individual neuron doesn't correspond to a single concept, but contributes to dozens of different features depending on context.
+
+## Gradient-Based Methods
+
+Gradient-based methods offer a computationally lightweight approach to identifying the most influential parts of the input.
+
+**Saliency maps**: you compute the gradient of the prediction with respect to each input pixel. Pixels with the largest gradients are those whose small modification would most affect the prediction.
+
+**Grad-CAM**: instead of looking at gradients with respect to pixels (often noisy), you use gradients in deep convolutional layers to produce a heatmap showing the image regions most relevant for classification. Results are visually more readable and more stable.
+
+These methods are fast and easy to implement, but they can be misleading if the model uses non-semantic shortcuts — the saliency map will show the important pixels, but not whether those pixels are important for the right reasons.
+
+## Interpretability vs Accuracy
+
+An often-cited trade-off: the most interpretable models (logistic regression, decision trees, rules) are generally less accurate than black boxes (deep learning, gradient boosting).
+
+This trade-off is real but often overstated. In many domains, a slightly less accurate but fully interpretable model is preferable — not only for trust and regulatory compliance, but also because errors from an interpretable model are easier to diagnose, correct, and prevent.
+
+<Callout type="tip" title="Intrinsically interpretable models">
+Modern architectures like GAMs (Generalized Additive Models) and their variants (EBM, NODE-GAM) achieve performance close to deep learning on tabular data while remaining fully interpretable — each feature has a visible and understandable contribution curve. For many business use cases, starting with these models before moving to opaque deep learning is the wisest approach.
+</Callout>
+
+## Takeaways
+
+Interpretability is a field in full maturation, with tools at different levels of rigor. Post-hoc methods (SHAP, LIME) are practical and widely deployed, but they approximate explanations rather than guaranteeing them. Mechanistic interpretability is more rigorous but still nascent and limited to smaller models.
+
+For practitioners, the pragmatic rule: in high-stakes domains (medical, financial, HR), demand interpretability and test it seriously. Don't settle for pretty attention visualizations or reassuring heatmaps — verify that explanations correspond to real causes, not artifacts.

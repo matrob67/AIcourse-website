@@ -1,0 +1,139 @@
+---
+title: "Advanced RAG: HyDE, Self-Querying, and More"
+description: "Advanced techniques to improve RAG: HyDE generates hypothetical documents, self-querying transforms questions into structured queries, and other approaches."
+---
+
+## Beyond Basic RAG
+
+Basic RAG follows a simple pipeline: you transform the question into an embedding, search for the closest documents, and inject them into the LLM prompt. It's effective, but it quickly hits its limits. Some questions remain poorly served because retrieval brings back irrelevant documents, or because the question is too ambiguous to find the right passages.
+
+Advanced techniques intervene at every link in this chain to fix these weaknesses. The idea isn't to add complexity all at once, but to identify **the** weak link in your pipeline and apply the right technique in the right place.
+
+<ArxivLink id="2212.10496" title="Precise Zero-Shot Dense Retrieval without Relevance Labels (Gao et al., 2022)" />
+
+<Callout type="info" title="When to Move to Advanced RAG">
+Measure first. If your recall@5 exceeds 80% and the LLM's answer is satisfactory, don't add complexity. If recall drops below 70%, that's the sign that retrieval needs help, and advanced techniques can make a real difference.
+</Callout>
+
+## HyDE: Hypothetical Document Embeddings
+
+### The Fundamental Problem
+
+Imagine you're looking for a book in a library. Your question is "How does photosynthesis work?" It's short, interrogative, formulated from the perspective of someone who doesn't know. The document that contains the answer says something like "Photosynthesis is a biochemical process by which plants convert..."
+
+The problem is that in embedding space, these two texts are **far apart**. The question and the answer don't resemble each other at all, neither in style, nor in length, nor in structure. It's like looking for a book with the wrong cover.
+
+### The HyDE Solution
+
+The idea is brilliant in its simplicity: ask the LLM to **generate a fake document** that would answer the question. This hypothetical document doesn't need to be factual — it just needs to stylistically resemble the real documents in your database.
+
+1. **Question**: "How does photosynthesis work?"
+2. **LLM Generation**: "Photosynthesis is a biochemical process by which plants use light energy to..."
+3. **Embedding** of the generated text (not the question!)
+4. **Retrieval**: search for documents similar to the generated text
+
+The LLM acts as a **translator** between the language of questions and the language of documents. Even if the generated text contains inaccuracies, its embedding will be much closer to the real relevant documents than the original question's embedding.
+
+<Callout type="paper" title="HyDE Intuition">
+It's counterintuitive: a fictional and potentially wrong document is more useful for retrieval than the real question. But it's logical — we're looking for proximity of form, not content. The content will come from the real documents that are retrieved.
+</Callout>
+
+### Limitations of HyDE
+- **Latency**: you need an additional LLM call before even starting retrieval
+- **Quality**: if the LLM hallucinates completely (very specialized domain), the hypothetical document can steer the search in the wrong direction
+- **Not universal**: works well on general domains, less so on very technical niches
+
+## Self-Querying
+
+Sometimes the user's question mixes a semantic search with structured constraints. Self-querying lets the LLM decompose this automatically.
+
+<Callout type="example" title="Self-Querying in Action">
+**Question:** "What are the 2024 financial reports on renewable energy?"
+
+**Decomposition result:**
+- **Semantic search**: "renewable energy financial performance"
+- **Structured filters**: `type="financial report"` AND `year=2024`
+</Callout>
+
+The LLM understands that "2024" isn't a semantic concept but a metadata filter. It separates the semantic signal from the structural signal. For this to work, your documents must have well-organized metadata, and the model must know your schema.
+
+## Query Expansion
+
+### Multi-Query
+
+A single angle of attack is often insufficient. Multi-query generates **multiple reformulations** of the same question:
+
+1. "How does photosynthesis work?"
+2. "What is the biochemical mechanism of photosynthesis?"
+3. "How do plants convert light into energy?"
+
+Each formulation captures a slightly different aspect of the need. You run retrieval on each variant, then merge the results (simple union or Reciprocal Rank Fusion).
+
+The impact is concrete: 5 to 10 additional recall points for a moderate cost (LLM latency multiplied by 2-3).
+
+### Step-Back Prompting
+
+For **hyper-specific** questions, retrieval often fails because no document covers exactly that case. The solution: go up one level of abstraction.
+
+- **Question**: "Boiling point of ethanol at 2000m altitude?"
+- **Step-back**: "How does atmospheric pressure affect boiling points?"
+
+Retrieval on the step-back question provides the theoretical context needed for the LLM to then answer the specific question.
+
+<Callout type="tip" title="Combine Approaches">
+Multi-query + RRF fusion is the best effort-to-gain ratio. It's simple to implement and almost always improves recall. Start there before exploring more sophisticated techniques.
+</Callout>
+
+## RAG with Context Windows
+
+### Sentence Window Retrieval
+
+A classic chunking dilemma: small chunks are precise for retrieval (you land right on the correct passage), but lack context for generation. Large chunks provide context but dilute relevance.
+
+The solution: index **small chunks** (1-2 sentences) for search precision, but return to the LLM an **expanded window** including the sentences before and after. The best of both worlds.
+
+### Auto-Merging
+
+When multiple small chunks from the same parent document are retrieved, it's a strong signal: the entire document is relevant. Auto-merging combines these chunks and returns the complete parent document.
+
+## Corrective RAG (CRAG)
+
+CRAG adds a self-evaluation layer to the pipeline:
+
+1. Normal **retrieval**
+2. The LLM **evaluates**: are these documents truly relevant to the question?
+3. If **yes**: use them normally
+4. If **partially**: refine the query and relaunch
+5. If **no**: completely reformulate or launch a web search
+
+The idea is that the LLM becomes its own quality control. It doesn't blindly trust the retrieval — it verifies before using it.
+
+<Callout type="info" title="Self-RAG: Going Even Further">
+Self-RAG takes it a step further: the model generates special tokens that indicate when it needs to search for information, evaluates the retrieved documents, and checks whether its answer is well-supported by the sources. It's "self-reflective" RAG, where the model orchestrates the entire process itself.
+</Callout>
+
+## Adaptive RAG
+
+Not all questions deserve the same treatment. Adaptive RAG adapts the strategy to the **complexity of the question**:
+
+- **Simple** (factual): direct retrieval, a single passage suffices
+- **Intermediate**: retrieval + reranking to refine
+- **Complex** (multi-hop): decomposition into sub-questions + iterative retrieval
+
+A complexity classifier automatically routes each question to the right strategy. Result: you don't waste compute on easy questions, and you invest where it's needed.
+
+## Best Practices
+
+<Callout type="warning" title="Complexity Often Kills Performance">
+Each advanced technique adds latency, complexity, and failure points. A well-optimized simple RAG (good chunking, good embeddings, reranking) **often outperforms** a complex RAG that's poorly calibrated.
+
+Measure first. Optimize the basics. Add advanced techniques **only when metrics show it's necessary**.
+</Callout>
+
+1. **Start simple**: basic RAG + good chunking + good embeddings
+2. **Measure**: recall, faithfulness, answer relevancy
+3. **Identify the bottleneck**: is the problem in retrieval or generation?
+4. **Add a technique**: measure its impact, keep it only if it improves things
+5. **Iterate**: each addition must justify the complexity it introduces
+
+RAG optimization is an iterative process. There is no magic solution. Technical sophistication is never synonymous with quality — it's rigorous measurement that guides good choices.

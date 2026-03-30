@@ -1,0 +1,115 @@
+---
+title: "A/B Testing and Progressive Deployments for ML Models"
+description: "Why your model sucks in production: A/B testing, canary deployments, shadow mode. Validate your models with real users."
+---
+
+## The Big Gap: Lab vs Reality
+
+Imagine a recommendation model. In offline evaluation, it hits 95% accuracy on your test set. You deploy it to production. And clicks plummet. Why? Because **accuracy on a static dataset has nothing to do with real user behavior**.
+
+This gap between offline metrics (accuracy, F1, perplexity) and business results (click-through rate, revenue, satisfaction, retention) is the fundamental problem of ML in production. Offline metrics tell you if the model "understands" the data. Business metrics tell you if it creates value.
+
+Deploying a model is like pulling a parachute: you don't really know if it works until you open it in real conditions. Progressive deployment strategies are your safety nets.
+
+<Callout type="info" title="The real test is real users">
+Measuring "our model correctly predicts 95% of cases" is easy and comforting. Measuring "our model generates more revenue" or "users are more satisfied" is much harder, but it's the only question that matters in production. Offline metrics are indicators, business metrics are the verdict.
+</Callout>
+
+## A/B Testing: The Scientific Showdown
+
+A/B testing is the most rigorous method for evaluating the real impact of a new model. The principle is simple: split your users into two random groups.
+
+- **Group A (control)**: receives the current model (the baseline)
+- **Group B (test)**: receives the new model you want to evaluate
+
+Measure a **business metric you actually care about** (click-through rate, revenue per session, time spent, NPS satisfaction). After collecting enough data, a statistical analysis tells you whether the observed difference is real or due to chance.
+
+### The Ingredients of a Good A/B Test
+
+Before launching a test, clearly define:
+
+**The hypothesis**: "Our new recommendation model will increase the click-through rate by 2% compared to the current model." A precise and measurable hypothesis.
+
+**The primary metric**: usually not the model's accuracy, but something business-related. Conversion rate, engagement, revenue, ticket resolution time. This is the metric you'll base your decision on.
+
+**Guardrail metrics**: the things that **absolutely must not** degrade. Latency must stay under X ms. The error rate must not increase. Day-7 retention must not drop. A model that increases clicks but drives users away long-term is a bad model.
+
+**The required sample size**: how many users do you need to detect a 2% difference with 95% confidence? That depends on your metric's variability and the expected effect size. There are online calculators for this, and ignoring them is a classic mistake.
+
+**The duration**: one week minimum, often two to four. Watch out for seasonal cycles: a test launched on Monday and stopped on Wednesday doesn't capture weekend behavior.
+
+<Callout type="tip" title="The peeking trap: don't look too early">
+It's tempting to check results after 2 hours and get excited: "B is at +5%!" But with little data, statistical fluctuations are huge. If you stop the test at that point because you like the results, you've introduced a major bias. Either define the duration upfront and wait, or use "sequential tests" that let you check progressively without biasing results.
+</Callout>
+
+### The Timing Problem for ML Models
+
+Some models need time to show their true value. A personalized recommendation model may need several days to learn a new user's preferences. Testing for only 2 hours biases results in favor of the existing model (which already knows the users). Plan for a "warm-up" period in your experimental design.
+
+## Canary Deployment: Safety First
+
+A/B testing typically sends 50% of traffic to the new model. Canary deployment is more cautious: it starts with a trickle.
+
+1. Deploy the new model, but send only **1-5%** of traffic to it
+2. **Monitor closely**: is latency increasing? Is the error rate climbing? Are unexpected exceptions appearing?
+3. If everything is stable after a few hours, gradually increase: 10% &rarr; 25% &rarr; 50% &rarr; 100%
+4. If a problem occurs at any stage, **immediate rollback** to the old model
+
+The canary doesn't try to prove that the new model is better (that's the A/B test's job). It tries to prove that it **doesn't break anything**.
+
+| Aspect | A/B Testing | Canary Deployment |
+|---|---|---|
+| **Goal** | Validate business impact | Validate technical stability |
+| **Typical duration** | Days to weeks | A few hours to a day |
+| **Initial traffic** | 50/50 | 1-5% |
+| **Decision** | Rigorous statistical analysis | Automatic thresholds (latency, errors) |
+| **Question** | "Is it better?" | "Does it break anything?" |
+
+<Callout type="warning" title="In practice, combine both">
+The standard production workflow: first a **canary** (1-5% of traffic for a few hours) to validate that nothing breaks technically. Then, if the canary passes, launch an **A/B test** (50/50 for 1-2 weeks) to measure business impact. The canary protects you against bugs. The A/B test tells you if it's worth deploying.
+</Callout>
+
+## Shadow Mode: Testing with Zero Risk
+
+The new model **runs in parallel** with the production model, but its responses are **never returned to users**. Real traffic goes through both models, and you log both predictions to compare them afterward.
+
+**Major advantage**: zero risk to users. You see exactly where the new model diverges and can analyze problematic cases in detail before exposing anyone.
+
+**Drawbacks**: you pay double in compute (two models run on every request). And most importantly, you learn nothing about real user engagement. The new model can predict perfectly in "simulation" and fail when it actually interacts with users (the user changes their behavior based on the response).
+
+## Blue/Green: The Instant Switch
+
+You maintain two identical production environments: "blue" (current) and "green" (new). Traffic is entirely routed to one of them via a load balancer. The switch happens instantly: change the routing, and 100% of traffic goes to green.
+
+**Advantage**: instant rollback. If things go wrong, switch back to blue in one second.
+
+**Drawback**: no progressive validation. You go from 0% to 100% all at once. And you pay the infrastructure cost of two complete environments permanently.
+
+## Strategy Summary
+
+| Strategy | Risk | Business Signal | Infra Cost | When to Use |
+|---|---|---|---|---|
+| **Shadow Mode** | None | None (no real interaction) | x2 | Before any deployment, to compare predictions |
+| **Canary** | Very low (1-5%) | Limited | +5% | Validate technical stability |
+| **A/B Testing** | Moderate (50%) | Strong | x1 | Measure business impact |
+| **Blue/Green** | High (100% at once) | Immediate | x2 | Switch with guaranteed rollback |
+
+<Callout type="paper" title={"A/B testing at industrial scale"}>
+Companies like Uber, LinkedIn, and Netflix run hundreds of A/B tests in parallel with dedicated infrastructure. Platforms like Statsig, LaunchDarkly, or Optimizely handle traffic routing, statistical calculations, and automatic anomaly detection. At this scale, tests are no longer done by hand.
+</Callout>
+
+## Tools to Put It into Practice
+
+- **Traffic routing**: Istio, Envoy, AWS ALB to direct a precise percentage toward each model
+- **Feature flags**: LaunchDarkly, Unleash, Flagsmith to enable/disable a model without redeploying code
+- **Statistical analysis**: A/B testing frameworks calculate significance, statistical power, and confidence intervals. Don't do these calculations by hand.
+
+## Best Practices
+
+- **Never 100% of traffic at once**: always progressive, canary first, then A/B
+- **Define rollback criteria in advance**: "If P99 latency exceeds 500ms OR error rate exceeds 1%, automatic rollback." No discussion in the middle of a crisis.
+- **Monitor continuously**: a deployment without monitoring is like driving blindfolded. Real-time dashboard mandatory.
+- **Automate rollback**: if alert thresholds are breached, rollback should trigger automatically, without waiting for a human to wake up at 3 AM
+- **Document every test**: hypothesis, configuration, results, decision made. This is your logbook. In 6 months, when someone asks "why do we use this model?", the answer will be in the test documentation.
+
+The best model in the world is worthless if it breaks production. Progressive rollout is just good engineering common sense applied to ML.

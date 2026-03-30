@@ -1,0 +1,134 @@
+---
+title: "CI/CD for Machine Learning"
+description: "Automating model training and deployment: testing data, validating models, deploying progressively."
+---
+
+## Traditional CI/CD vs CI/CD for ML
+
+**CI/CD** stands for **Continuous Integration / Continuous Deployment**. The idea: every code change is automatically tested (CI) then deployed to production (CD), without human intervention. In traditional software, it's straightforward: compile, test, deploy the code. If the tests pass, you're good. In ML, the code is only part of the equation. **The data changes, the models change, and the system's behavior depends on both.** The same code with a different dataset produces a completely different model. It's as if your web application changed behavior based on the weather: same code, unpredictable results.
+
+ML CI/CD has to manage three dimensions instead of one:
+
+- **Code**: just like traditional software (linting, unit tests, etc.)
+- **Data**: validate the schema, the distribution, check for test-train leakage
+- **Model**: verify that the new model is better than the old one, that it doesn't regress on certain groups, that it meets latency constraints
+
+<Callout type="info" title="The three maturity levels (according to Google)">
+**Level 0**: 100% manual. You train in a notebook, eyeball the metrics, copy the model to prod. It's fragile, slow, and error-prone.
+
+**Level 1**: automated training pipeline. New data = automatic retraining. But the pipeline itself is still managed manually.
+
+**Level 2**: full CI/CD. Every commit to main = automatic tests + automatic training + automatic deployment. The pipeline is tested and deployed like code.
+
+Most teams are at level 0 or 1. Reaching level 2 requires a serious infrastructure investment, but it's worth it for critical models.
+</Callout>
+
+## Continuous Integration: test before training
+
+### Classic tests first
+
+You start with the basics, just like traditional software:
+
+- **Linting**: clean and consistent code (black, ruff, mypy for typing)
+- **Unit tests**: preprocessing functions do what they're supposed to (does your tokenizer break on emojis? Does your normalization handle outliers?)
+- **Integration tests**: the complete pipeline runs on a mini-dataset without crashing
+
+### ML-specific tests
+
+This is where it gets interesting. In ML, there's a whole category of tests that traditional software doesn't have:
+
+- **Data tests**: is the schema correct? No aberrant missing values? Does the distribution look like what you expect? No leakage between train and test?
+- **Training tests**: does the model train without error? Does the loss decrease? Are gradients neither zero nor exploding?
+- **Performance tests**: accuracy >= minimum threshold? Are per-class metrics all acceptable?
+- **Non-regression tests**: is the new model better (or at least as good) as the old one on the reference test set?
+- **Fairness tests**: does the model perform comparably across different demographic groups? No hidden bias?
+
+<Callout type="tip" title={"The one-minute smoke test"}>
+Train the model for 10 iterations on 100 examples. Does the loss decrease? Yes = the pipeline is probably functional. No = you have a bug somewhere. This test takes 30 seconds and catches 80% of gross errors (bad learning rate, poorly formatted data, preprocessing bug). It's the most cost-effective test you can write.
+</Callout>
+
+### Validate data before wasting GPU
+
+Before launching 8 hours of GPU training (at 30 dollars per hour, that's 240 dollars), check that your data is healthy:
+
+- Are all expected columns present?
+- Is the percentage of missing values within acceptable limits?
+- Do the descriptive statistics look like last time, or is there observable drift (distributions have changed significantly)?
+- Are there enough examples in each class? (an unanticipated 99%/1% imbalance will ruin your model)
+
+The tools for this: **Great Expectations** (the most popular, declarative assertions on data), **Pandera** (DataFrame pandas validation), **Pydantic** (schema validation). They're guards that shout before you waste money.
+
+## Continuous Training: retrain at the right time
+
+**Continuous Training** means automatically retraining the model when needed. Not too often (it's expensive), not too rarely (the model degrades). The right cadence depends on your use case.
+
+### Triggers
+
+| Trigger | Type | Concrete example |
+|---|---|---|
+| **Schedule** | Periodic | Retrain every Monday morning |
+| **New data** | Event-driven | A new batch of annotated data arrives |
+| **Drift detected** | Event-driven | The PSI (Population Stability Index) exceeds 0.2 |
+| **Degraded performance** | Event-driven | Production accuracy drops below 80% |
+| **Code modified** | On each commit | A merge on the main branch |
+
+Choosing the right trigger is an art. Scheduling is simple but wastes GPU when nothing has changed. Event-driven is more efficient but more complex to set up. In practice, many teams start with scheduling and migrate to event-driven when GPU cost becomes a problem.
+
+## Continuous Deployment: verify before shipping
+
+Before putting a new model in production, you need to pass validation gates:
+
+- Performance >= minimum threshold on the reference test set?
+- Better (or at least equivalent to) the model currently in production?
+- Inference tests on representative real cases?
+- Acceptable latency (< X milliseconds for p99)?
+- Can the model handle the expected throughput without collapsing?
+
+### Deployment strategies
+
+**Blue/Green**: two identical environments. You switch all traffic at once. Simple, but if it breaks, it breaks for everyone.
+
+**Canary**: you send 5% of traffic to the new model, then 10%, 25%, 50%, 100%. If an anomaly appears, you stop the ramp-up. This is the most cautious and most recommended strategy.
+
+**Shadow**: the new model runs in parallel, receives the same requests, but its responses are not sent to users. You compare results offline. Ideal for testing without risk.
+
+**A/B Testing**: 50/50 between two models, measuring the real difference on business metrics (clicks, conversions, satisfaction). This is the gold standard when you have enough traffic.
+
+<Callout type="warning" title="Automatic rollback is non-negotiable">
+If the new model breaks something, you must be able to **revert to the previous model without waiting for a human**. If latency spikes, if errors explode, if business metrics drop: automatic rollback. For this, you need to keep old model versions accessible and have a fast switching mechanism (in seconds, not minutes).
+</Callout>
+
+## Tools and architecture
+
+### Orchestration
+
+- **GitHub Actions / GitLab CI**: classic CI, but you need runners with GPUs (which complicates things)
+- **Kubeflow Pipelines**: ML-native orchestration on Kubernetes, powerful but complex to set up
+- **Apache Airflow**: generic workflow orchestration, widely used in data engineering
+- **Prefect / Dagster**: modern Airflow alternatives, with better developer experience and good ML support
+- **SageMaker Pipelines**: AWS managed solution, integrated with the SageMaker ecosystem
+
+### A typical pipeline, step by step
+
+1. **Trigger**: a commit, new data, a schedule, or a monitoring alert
+2. **Validate the data**: quality, distribution, schema tests
+3. **Train**: with metric tracking (MLflow, W&B)
+4. **Evaluate**: compare to the champion model on a fixed, versioned test set
+5. **Validate**: automatic gates + optional human approval for critical models
+6. **Package**: create a Docker container or deployable artifact
+7. **Deploy**: canary or blue/green to production
+8. **Monitor**: watch post-deployment metrics for 24-48h
+
+<Callout type="paper" title={"The realistic cost of ML CI/CD"}>
+A full ML CI/CD setup means on-demand GPU infrastructure (expensive), maintained and versioned test datasets, dedicated monitoring, and engineering time. For many teams, level 1 (automated training pipeline, without CI/CD of the pipeline itself) is the right cost/benefit tradeoff. Level 2 is justified when you have multiple models in production and data bugs are costing you money.
+</Callout>
+
+## Best practices
+
+- **Start simple**: a smoke test + a non-regression test cover 80% of needs. Don't try to reach level 2 on day one.
+- **Test data as much as code**: in ML, data bugs are more frequent and more insidious than code bugs. A column silently filled with zeros can ruin a model without raising an error.
+- **Automate progressively**: start by automating training, then tests, then deployment. Each step delivers value independently.
+- **Keep a human in the loop**: for critical models (healthcare, finance, security), human approval before production deployment remains prudent.
+- **Version everything**: code (Git), data (DVC), models (registry), environment (Docker). Reproducibility means being able to recreate any past state.
+
+Essentially: treat your data and models like code. They deserve the same rigor, the same tests, the same versioning.

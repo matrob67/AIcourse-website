@@ -1,0 +1,131 @@
+---
+title: "Flash Attention 3 and hardware optimizations"
+description: "Exploration of Flash Attention 3 and advanced hardware optimizations leveraging Hopper GPUs (H100/H200): asynchronous pipelining, FP8, and warp-specialization."
+---
+
+## Flash Attention 3: squeezing the most out of the Hopper GPU
+
+Flash Attention 2 showed the way for hardware-aware optimizations. Flash Attention 3 pushes this philosophy even further by exploiting specific features of NVIDIA's **Hopper GPU** architecture (H100, H200). Where FA2 reached 50-73% of theoretical throughput on A100, FA3 aims for 75-85%+ on H100, approaching the physical limits of the hardware.
+
+The stakes are clear: every percentage point of GPU utilization gained represents millions of dollars in savings at the scale of large training clusters.
+
+## The Hopper's new weapons
+
+### Tensor Memory Accelerator (TMA)
+
+The H100 introduces the **TMA**, a dedicated hardware unit for memory transfers between HBM (the main memory, large but slow) and SRAM (the on-chip memory, small but ultra-fast). Before TMA, these transfers used the same units that do the computations, creating a queue.
+
+With TMA, it's like having an automated conveyor belt bringing ingredients to the kitchen while the chef cooks. The chef no longer needs to go fetch ingredients from the stockroom themselves.
+
+<Callout type="info" title="Asynchronous pipeline">
+On the Hopper architecture, memory transfers and computation can be **truly simultaneous** thanks to TMA. Flash Attention 3 exploits this capability to create a pipeline where data loading, computation, and result writing overlap in time, nearly eliminating memory-related wait times.
+</Callout>
+
+### Warp Groups and Warp Specialization
+
+Hopper introduces **warp groups** (groups of 4 warps) and a powerful concept: **warp specialization**. Instead of all warps doing the same thing (load then compute then write), different warps specialize in different tasks.
+
+Flash Attention 3 exploits this specialization:
+
+- **Producer warps**: responsible for loading data from HBM to SRAM via TMA
+- **Consumer warps**: responsible for computation (matmul on Tensor Cores)
+
+It's the principle of the industrial assembly line: instead of each worker doing all tasks sequentially, each one specializes. The pipeline runs continuously, with no downtime.
+
+### FP8 Tensor Cores
+
+The H100 has Tensor Cores capable of **FP8** computation (8 bits instead of 16), offering 2x theoretical throughput over FP16/BF16. Using only 8 bits per number is risky in terms of precision, but it doubles compute capacity.
+
+<Callout type="paper" title="FP8 attention">
+Flash Attention 3 offers an FP8 mode that performs matrix multiplications $QK^T$ and $PV$ in FP8, with FP32 accumulation to preserve numerical precision. Softmax operations remain in FP32 (they're too sensitive to rounding errors). This hybrid approach offers a ~1.5-2x speedup over FP16, with minimal quality degradation.
+</Callout>
+
+## Algorithm architecture
+
+### 3-stage pipeline
+
+The core of Flash Attention 3 is a **3-stage hardware pipeline** running in parallel:
+
+1. **Stage 1 (Producer)**: the TMA loads the next K/V block from HBM to SRAM
+2. **Stage 2 (Consumer)**: Tensor Cores compute $S = QK^T$ and the accumulation $O += PV$
+3. **Stage 3 (Producer)**: the TMA writes partial results to HBM if needed
+
+While stage 2 computes on block $i$, stage 1 is already loading block $i+1$ and stage 3 is writing results from block $i-1$. Each stage advances independently, like three workers on an assembly line.
+
+### Pipelined softmax
+
+The online softmax (invented for Flash Attention 1) is integrated into this pipeline:
+
+- The statistics $m$ (maximum) and $\ell$ (sum of exponentials) are updated incrementally at each block
+- The rescaling correction is amortized and fused with the following matmuls, minimizing non-matmul operations
+
+<Callout type="tip" title={"Overlapping: the key to everything"}>
+FA3's performance relies on a simple principle: never let any GPU unit sit idle. While Tensor Cores compute on block $i$, the TMA loads block $i+1$ and writes results from block $i-1$. This pipeline almost entirely hides memory latency, which is traditionally the attention bottleneck.
+</Callout>
+
+## Performance results
+
+### Benchmarks on H100
+
+| Configuration | Throughput (TFLOP/s) | % of theoretical |
+|--------------|-----------------|----------------|
+| FA2 on H100 (FP16) | ~400 | ~50% |
+| FA3 on H100 (FP16) | ~620 | ~75% |
+| FA3 on H100 (FP8) | ~1000 | ~60% (of FP8 theoretical) |
+| Theoretical H100 FP16 | 989 | 100% |
+| Theoretical H100 FP8 | 1979 | 100% |
+
+On H100 in FP16, FA3 offers a **1.5-1.75x** speedup over FA2. In FP8, we approach 1000 TFLOP/s, a number that would have seemed unrealistic a few years ago for a single attention computation.
+
+## FP8 numerical precision
+
+### The challenges of FP8 for attention
+
+FP8 is not a universal format. It comes in two variants:
+
+- **E4M3**: 4 exponent bits, 3 mantissa bits (decent range, modest precision)
+- **E5M2**: 5 exponent bits, 2 mantissa bits (large range, very low precision)
+
+The specific problem with attention: after softmax, the value distribution is very **peaked**. Most values are close to 0, a few are close to 1. This uneven distribution is hard to capture in just 8 bits.
+
+<Callout type="warning" title="Precision considerations">
+Flash Attention 3's FP8 mode keeps softmax in FP32 and uses FP32 accumulation for matmuls to avoid numerical drift. Only the Q, K, V inputs are in FP8 for multiplications. Sensitive intermediate operations remain in high precision. Experiments show minimal quality degradation for both training and inference.
+</Callout>
+
+### Per-block quantization
+
+To improve FP8 precision, Flash Attention 3 implements **per-block quantization**: each data block has its own scale factor. Instead of a single global factor trying to capture the full dynamic range, each block adapts locally. This is more precise and costs almost nothing in overhead.
+
+## Complementary optimizations
+
+### Optimized causal attention
+
+Flash Attention 3 refines masked block skipping by exploiting warp group granularity. The chunking is finer than in FA2, allowing more unnecessary computations to be skipped in causal masking.
+
+### Support for various attention patterns
+
+- **Sliding window**: native skipping of out-of-window blocks
+- **Block-sparse**: custom attention patterns via block masks
+- **Cross-attention**: optimized for encoder-decoder models
+
+### Backward pass on Hopper
+
+The backward pass (gradient computation) benefits from the same optimizations: asynchronous pipeline, warp specialization, and softmax rematerialization integrated into the pipeline. The speedup is similar to the forward pass, which is crucial since the backward is often more expensive.
+
+## Hardware perspectives
+
+### Post-Hopper GPUs
+
+Future GPU architectures (Blackwell B100/B200) introduce additional capabilities that future versions can exploit:
+
+- **FP4 Tensor Cores**: 2x throughput over FP8, even more precision/speed trade-offs
+- **Increased HBM bandwidth**: HBM3E at 12+ TB/s, reducing the memory bottleneck
+- **Improved TMA**: extended transfer capabilities for even deeper pipelines
+
+<Callout type="info" title="Hardware-algorithm co-design">
+Flash Attention 3 illustrates a fundamental trend: **hardware-algorithm co-design**. Algorithms are designed based on specific hardware capabilities, and in turn, hardware evolves to better support critical algorithms. This co-optimization loop is the primary path to continue improving Transformer efficiency.
+</Callout>
+
+## Key takeaways
+
+Flash Attention 3 pushes the limits of attention efficiency by fully exploiting Hopper GPU capabilities. The asynchronous pipeline eliminates memory wait times, warp specialization maximizes GPU occupancy, and FP8 support doubles compute throughput. Combined, these optimizations allow approaching the physical limits of the hardware, confirming that hardware-aware optimization is the royal road to LLM performance improvement.

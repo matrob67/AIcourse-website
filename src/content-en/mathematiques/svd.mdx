@@ -1,0 +1,162 @@
+---
+title: "Singular Value Decomposition (SVD)"
+description: "Understanding SVD -- the most powerful factorization in linear algebra -- and its applications in LoRA, dimensionality reduction, compression, and embeddings."
+---
+
+## Introduction: the universal factorization
+
+The eigendecomposition is powerful, but it only works on square matrices. In ML, matrices are rarely square: a dataset of $1000 \times 50$, a weight matrix of $4096 \times 768$, an embedding matrix of $50000 \times 300$.
+
+The **SVD** (Singular Value Decomposition) is the generalization that works for **any matrix**, regardless of its shape. It's probably the most important factorization in all of applied linear algebra.
+
+## The intuition: rotation, stretching, rotation
+
+Any linear transformation (matrix) can be decomposed into three simple steps:
+
+1. **Rotation** (or reflection) in the input space
+2. **Stretching** (or compression) along the axes
+3. **Rotation** (or reflection) in the output space
+
+Imagine you take a circle and apply a matrix to it. The circle becomes an ellipse. The SVD tells you exactly: which rotations, and which stretches. It's a complete X-ray of the transformation.
+
+## The formula
+
+For any matrix $\mathbf{A} \in \mathbb{R}^{m \times n}$, the SVD is:
+
+$$
+\mathbf{A} = \mathbf{U} \mathbf{\Sigma} \mathbf{V}^T
+$$
+
+Where:
+
+- $\mathbf{U} \in \mathbb{R}^{m \times m}$ is an **orthogonal** matrix (its columns are the **left singular vectors**)
+- $\mathbf{\Sigma} \in \mathbb{R}^{m \times n}$ is a **diagonal** matrix containing the **singular values** $\sigma_1 \geq \sigma_2 \geq \ldots \geq \sigma_r > 0$ (ordered by decreasing value)
+- $\mathbf{V}^T \in \mathbb{R}^{n \times n}$ is an **orthogonal** matrix (its rows are the **right singular vectors**)
+
+The number $r$ is the **rank** of the matrix -- the number of nonzero singular values.
+
+### What each component represents
+
+- **$\mathbf{V}^T$**: the first rotation. It identifies the important directions in the input space.
+- **$\mathbf{\Sigma}$**: the stretching. Each singular value $\sigma_i$ tells how much the transformation stretches in the $i$-th direction.
+- **$\mathbf{U}$**: the second rotation. It places the result in the output space.
+
+### Concrete example
+
+Take a simple matrix:
+
+$$
+\mathbf{A} = \begin{pmatrix} 3 & 0 \\ 0 & 1 \end{pmatrix}
+$$
+
+This matrix stretches the horizontal axis by 3 and leaves the vertical axis unchanged. Its SVD is trivial:
+
+- $\mathbf{U} = \mathbf{I}$, $\mathbf{V} = \mathbf{I}$ (no rotation needed)
+- $\sigma_1 = 3$, $\sigma_2 = 1$
+
+For a more complex matrix, the rotations $\mathbf{U}$ and $\mathbf{V}$ are nontrivial, but the idea remains the same: we decompose the transformation into its elementary components.
+
+## Connection with eigenvalues
+
+SVD and eigendecomposition are closely related:
+
+- The **singular values** of $\mathbf{A}$ are the square roots of the **eigenvalues** of $\mathbf{A}^T\mathbf{A}$: $\sigma_i = \sqrt{\lambda_i(\mathbf{A}^T\mathbf{A})}$
+
+- The **right singular vectors** (columns of $\mathbf{V}$) are the eigenvectors of $\mathbf{A}^T\mathbf{A}$
+
+- The **left singular vectors** (columns of $\mathbf{U}$) are the eigenvectors of $\mathbf{A}\mathbf{A}^T$
+
+For a symmetric positive semi-definite matrix, SVD coincides with the eigendecomposition.
+
+The advantage of SVD: singular values are **always real and non-negative**, even when the eigenvalues of $\mathbf{A}$ are complex or negative.
+
+## Low-rank approximation
+
+This is where SVD becomes truly powerful for ML.
+
+### The Eckart-Young theorem
+
+The rank-$k$ approximation of $\mathbf{A}$ is obtained by keeping only the $k$ largest singular values:
+
+$$
+\mathbf{A}_k = \sum_{i=1}^{k} \sigma_i \mathbf{u}_i \mathbf{v}_i^T
+$$
+
+This theorem says: among all rank-$k$ matrices, $\mathbf{A}_k$ is the **best approximation** of $\mathbf{A}$ (in terms of the Frobenius norm or spectral norm).
+
+The approximation error is:
+
+$$
+\|\mathbf{A} - \mathbf{A}_k\|_F = \sqrt{\sigma_{k+1}^2 + \sigma_{k+2}^2 + \ldots + \sigma_r^2}
+$$
+
+If the singular values decay quickly, you can approximate the matrix with very few components. A $1000 \times 1000$ matrix of rank 5 can be reconstructed exactly with only $5 \times (1000 + 1000 + 5)$ numbers instead of $1\,000\,000$.
+
+## Applications in machine learning
+
+### LoRA: efficient adaptation of LLMs
+
+**LoRA** (Low-Rank Adaptation) is directly inspired by SVD. The idea: when you fine-tune a large language model, the weight changes $\Delta\mathbf{W}$ are often **low-rank** -- they only affect a few directions in parameter space.
+
+Instead of modifying the full matrix $\mathbf{W} \in \mathbb{R}^{d \times d}$ (millions of parameters), you learn:
+
+$$
+\Delta\mathbf{W} = \mathbf{B}\mathbf{A}
+$$
+
+Where $\mathbf{B} \in \mathbb{R}^{d \times r}$ and $\mathbf{A} \in \mathbb{R}^{r \times d}$ with $r \ll d$ (typically $r = 8$ or $r = 16$).
+
+It's a low-rank approximation. Instead of storing $d^2$ parameters, you only store $2dr$. For $d = 4096$ and $r = 16$, you go from 16 million to 131,000 parameters. A compression factor of 120.
+
+### Dimensionality reduction
+
+Like PCA (which is a special case of SVD applied to centered data), SVD allows reducing the dimensionality of data by keeping only the most important components.
+
+**Truncated SVD** is often preferred over classical PCA because it's more computationally efficient for large sparse matrices.
+
+### Image compression
+
+A grayscale image is an $m \times n$ matrix. Its SVD gives $r$ components. By keeping only the first $k$ ($k \ll r$), you get a compressed version that preserves the main structures (shapes, contrasts) while eliminating noise and fine details.
+
+The compression ratio is approximately $\frac{mn}{k(m + n + 1)}$.
+
+### Recommendation systems
+
+Netflix, Spotify, and recommendation engines use **matrix factorization**, a cousin of SVD. The user-movie matrix (with many empty entries) is approximated by a product of two low-rank matrices:
+
+$$
+\mathbf{R} \approx \mathbf{U}\mathbf{V}^T
+$$
+
+The rows of $\mathbf{U}$ are the "latent profiles" of users, the columns of $\mathbf{V}^T$ are the "latent profiles" of movies. The product predicts missing ratings.
+
+### Embeddings and Latent Semantic Analysis
+
+**LSA** (Latent Semantic Analysis) applies SVD to the term-document matrix to discover "latent concepts." Words that appear in similar contexts end up close in the reduced space. It's an ancestor of modern embeddings like Word2Vec.
+
+## SVD in practice
+
+In Python with NumPy:
+
+```python
+import numpy as np
+
+# Full SVD
+U, S, Vt = np.linalg.svd(A)
+
+# Rank-k approximation
+A_k = U[:, :k] @ np.diag(S[:k]) @ Vt[:k, :]
+```
+
+For large sparse matrices, you use the truncated SVD from `scipy.sparse.linalg.svds` or `sklearn.decomposition.TruncatedSVD`, which only compute the first $k$ components -- much faster.
+
+## Why this matters for AI
+
+SVD is a cross-cutting tool in ML:
+
+- **LoRA** makes fine-tuning LLMs accessible to everyone through low-rank approximations
+- **Model compression** reduces size and inference cost
+- **Matrix factorization** powers recommendation systems
+- **Dimensionality reduction** allows visualizing and denoising data
+
+When you see a concept of "low-rank" or "factorization" in ML, SVD is never far away. It's the tool that says: this gigantic matrix can be well approximated by something much smaller. And in ML, smaller often means faster, cheaper, and sometimes even better.

@@ -1,0 +1,142 @@
+---
+title: "Vision-Language Models (VLM)"
+description: "Vision-language models combine visual and linguistic understanding to process images and text simultaneously. Architecture, training, and applications."
+---
+
+
+
+## The Grand Dream: Understanding Images AND Text
+
+For a long time, AI models were isolated specialists: they either understood text or images, but never both at the same time. It's like having one person who can read any document but is blind, and another who sees perfectly but can't read. Neither can analyze an invoice, interpret a chart, or describe what they see in a photo.
+
+**Vision-Language Models (VLMs)** are the union of these two capabilities: a single model that simultaneously understands images and text. You can show it a photo and ask questions about it, ask it to describe a scene, analyze a scanned document, or interpret a chart.
+
+<ArxivLink id="2304.08485" title="Visual Instruction Tuning (Liu et al., 2023) - LLaVA" />
+
+<Callout type="info" title={"The Blueprint of a Modern VLM"}>
+Most VLMs follow the same three-ingredient recipe: a **visual encoder** (a pre-trained Vision Transformer that transforms the image into a sequence of vectors), a **projection module** that translates those visual vectors into the "language" the LLM understands, and an **LLM** that processes visual and text tokens together to produce a response. It looks simple on the surface, but each component hides real complexity.
+</Callout>
+
+## How It Works: The Architecture
+
+### The Simplified Pipeline
+
+1. **Image** &rarr; Vision Encoder (ViT) &rarr; visual tokens
+2. Visual tokens &rarr; **Projection Layer** &rarr; visual tokens in the LLM's space
+3. **Text** &rarr; Tokenizer &rarr; text tokens
+4. Projected visual tokens + text tokens &rarr; **Large Language Model** &rarr; **Response**
+
+The key idea: the image is converted into a sequence of numerical "tokens," exactly like text. The projection layer acts as a translator between the "visual language" of the encoder and the "textual language" of the LLM. Once this translation is done, the LLM can process visual tokens as if they were text --- it doesn't even need to "know" it's looking at an image.
+
+### Concrete Example: LLaVA
+
+LLaVA (Large Language and Vision Assistant), created by Liu et al. in 2023, is the most influential open-source VLM. Its architecture has become a reference model:
+
+- **Vision Encoder**: CLIP ViT-L/14 (a pre-trained model for aligning images and text)
+- **Projection**: a simple linear layer in LLaVA 1.0, replaced by a small MLP (Multi-Layer Perceptron) network in LLaVA 1.5+ for better expressiveness
+- **LLM**: LLaMA or Vicuna as the language backbone
+- **Two-phase training**:
+  1. **Phase 1 (alignment)**: 558K image-text pairs. Only the projection layer learns. The goal: align the visual space with the LLM's space. It's fast (a few hours).
+  2. **Phase 2 (instruction tuning)**: 665K visual instruction examples. Both the projection AND the LLM learn together. The model learns to follow instructions involving images.
+
+### Architectural Variants
+
+There are three main families of vision-language integration:
+
+**Cross-attention** (Flamingo): special attention layers are inserted into the LLM so that text tokens can "look at" visual tokens at every layer. Powerful but costly and complex to implement.
+
+**Early fusion** (LLaVA): visual tokens are simply concatenated with text tokens at the LLM's input. The LLM processes everything through its standard attention. Simpler, surprisingly effective.
+
+**Native multimodal** (GPT-4V, Gemini, Claude): the model is pre-trained from the start on a mixture of text, images, and sometimes audio. The integration is the deepest, but requires a massive training budget.
+
+<Callout type="tip" title={"Early Fusion Has Become the Open-Source Standard"}>
+The LLaVA approach --- just concatenating visual tokens with text tokens at the input --- is the simplest to implement and delivers excellent results. It has become the reference approach for open-source VLMs, adopted by InternVL, Qwen-VL, and many others. Simplicity often wins.
+</Callout>
+
+
+
+## Training a VLM
+
+### The Required Multimodal Data
+
+VLMs need diverse data covering different types of vision-language interaction:
+
+| Type | Examples | Typical Volume |
+|---|---|---|
+| Image captioning | COCO Captions, CC3M | 3-12 million pairs |
+| VQA (question-answering) | VQA v2, Visual Genome | 1-5 million pairs |
+| OCR/Documents | DocVQA, ChartQA | 100K-1M pairs |
+| Visual instructions | LLaVA-Instruct, ShareGPT4V | 100K-1M pairs |
+| Interleaved data | MMC4, OBELICS | 10-100 million |
+
+"Interleaved data" is particularly interesting: these are web documents where text and images naturally alternate (illustrated articles, product pages). They teach the model to understand the link between text and images in a realistic context.
+
+### Training Pipeline
+
+1. **Visual pre-training**: the visual encoder learns to represent images on ImageNet or similar data (often done beforehand --- you use a pre-trained ViT)
+2. **Alignment**: the projection layer learns to map visual features to the LLM's space. A fast phase (a few hours) but critical.
+3. **Instruction tuning**: fine-tuning on mixed text-image instructions to make the model conversational and able to follow visual instructions
+
+## Image Resolution: The Quality vs. Cost Dilemma
+
+### More Pixels = More Detail, but Much More Expensive
+
+The higher the input resolution, the more detail the model captures in the image. But each additional pixel creates more visual tokens to process --- and the cost of attention grows quadratically:
+
+- **224x224**: 256 tokens (fast, but loses fine details --- impossible to read small text)
+- **336x336**: 576 tokens (good general compromise)
+- **672x672**: 2,304 tokens (high resolution, but cost explodes)
+- **Dynamic resolution**: automatically adapting based on the image and task
+
+### The Elegant Solution: Tiling
+
+<Callout type="paper" title="AnyRes: LLaVA-NeXT's Solution">
+LLaVA-NeXT introduces "AnyRes": instead of imposing a fixed resolution (and thus resizing all images), you split the image into standard-sized tiles, encode each tile separately, and add a low-resolution global view for overall context. Result: you can process images of any resolution and aspect ratio, without information loss, and without excessive overhead. It's a pragmatic and effective solution adopted by many modern VLMs.
+</Callout>
+
+## What Modern VLMs Can Do
+
+### Image Understanding
+
+- Describe scenes in detail (people, objects, context, mood)
+- Identify objects, places, situations
+- Read text in images (built-in OCR --- signs, labels, documents)
+- Understand charts, tables, and diagrams
+
+### Visual Reasoning
+
+- Answer questions about spatial relationships ("is the cat in front of or behind the vase?")
+- Count objects (with still-imperfect accuracy)
+- Reason logically about visual content ("why does this person look surprised?")
+- Compare two images and identify differences
+
+### Practical Applications That Are Game-Changers
+
+- Analyze complex documents (invoices, contracts, financial reports)
+- Assist visually impaired people by describing their environment
+- Analyze UI screenshots for automated testing
+- Visual diagnosis in medicine (X-rays, dermatology) or industry (quality control)
+
+## Evaluation Benchmarks
+
+| Benchmark | What It Measures | Best Score (approx.) |
+|---|---|---|
+| MMMU | Multi-discipline questions requiring images | 76% (Gemini 3.1 Pro, 2026 update) |
+| MathVista | Mathematical reasoning from images | 65% |
+| DocVQA | Questions about scanned documents | 95% |
+| ChartQA | Questions about charts and tables | 85% |
+| TextVQA | Questions requiring reading small text in images | 82% |
+
+<Callout type="warning" title="Watch Out for Visual Hallucinations">
+VLMs **hallucinate**: they can describe objects that aren't in the image, invent text that doesn't exist, or make counting errors. It's the visual equivalent of LLM (Large Language Model) text hallucinations. The POPE (Polling-based Object Probing Evaluation) benchmark specifically measures this problem. In practice, you should always verify VLM responses on critical tasks --- the model's confidence is not a reliable indicator of its accuracy.
+</Callout>
+
+## Notable Open-Source Models
+
+- **LLaVA-NeXT**: the LLaVA family with dynamic resolution and state-of-the-art performance
+- **InternVL**: very powerful models going up to 76 billion parameters, among the best open-source options
+- **Qwen-VL**: the Qwen series with vision, excellent performance and good multilingual coverage
+- **Idefics 2/3**: VLMs from Hugging Face, fully open-source with exemplary documentation
+- **Pixtral**: Mistral AI's VLM, combining vision with Mistral's language strengths
+
+VLMs are one of the most transformative advances of 2023-2025: they pave the way for truly multimodal AI assistants that understand the visual world as naturally as text. The boundary between "seeing" and "understanding" is fading.

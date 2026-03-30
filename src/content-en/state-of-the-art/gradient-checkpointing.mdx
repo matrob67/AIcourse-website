@@ -1,0 +1,123 @@
+---
+title: "Gradient Checkpointing"
+description: "Analysis of gradient checkpointing (activation checkpointing), a memory-compute tradeoff technique that reduces activation memory by recomputing them during the backward pass."
+---
+
+## The Problem: Activations Blow Up GPU Memory
+
+During the backward pass, you need the forward pass activations. For example, for a linear layer y = Wx + b, computing dL/dW = (dL/dy) x x^T requires x (the input activation).
+
+With a 7B model in BF16, a 4K token sequence, batch=1: the intermediate activations occupy **30-60 GB**. The parameters? 14 GB. Activations are often larger than the model itself.
+
+And you need to keep them in memory from the forward pass until the end of the backward pass. This is a major problem for GPU memory.
+
+## The Elegant Solution: Checkpointing
+
+Instead of storing **all** activations, you only store a few checkpoints. During the backward pass, you recompute missing activations from the nearest checkpoint.
+
+It's a tradeoff: a bit more compute, a lot less memory.
+
+### Illustration of the Tradeoff
+
+Without checkpointing (N layers):
+- Memory: O(N)
+- Compute: 1x forward
+
+With checkpointing every sqrt(N) layers:
+- Memory: O(sqrt(N))
+- Compute: 1x forward + ~33% recomputation
+
+For N=96 layers (LLaMA 7B):
+- Without: keep 96 activations, 0% recomputation
+- With: keep ~10 checkpoints, ~33% recomputation
+
+This reduces memory by a factor of **sqrt(N) ≈ 10x** for only +33% compute.
+
+<Callout type="paper" title="Mathematically optimal">
+Checkpointing every sqrt(N) layers is provably optimal for the memory-compute tradeoff. It's rare in machine learning to have such a mathematically elegant solution.
+</Callout>
+
+
+
+## In Practice: Per-Transformer Block Checkpointing
+
+Instead of checkpointing individually, you checkpoint per Transformer block (attention + MLP + normalizations).
+
+For each Transformer block:
+1. Forward: store only the block's input [batch, sequence, dim]
+2. Backward: recompute the block's internal activations
+3. Reduced memory: only the input instead of all internal activations
+
+This combines simplicity and efficiency.
+
+## Selective Checkpointing: Target the Big Consumers
+
+Instead of checkpointing everything, you can target expensive operations:
+
+- **Checkpoint attention**: the attention matrix is enormous (L x L)
+- **Keep the MLP**: MLP activations are smaller to store
+
+Result: ~40% memory reduction with only ~15-20% recomputation (vs 33%).
+
+<Callout type="tip" title="Flash Attention changes the game">
+Flash Attention never materializes the L x L attention matrix. It recomputes it block by block during the backward pass. Combined with per-Transformer block checkpointing, this eliminates the attention activation problem. With Flash Attention + checkpointing, you can often train on very long sequences.
+</Callout>
+
+## PyTorch Implementation
+
+PyTorch provides `torch.utils.checkpoint.checkpoint()` which does this automatically:
+
+```python
+def forward(self, x):
+    for block in self.transformer_blocks:
+        x = torch.utils.checkpoint.checkpoint(block, x)
+    return x
+```
+
+The framework handles storage/recomputation automatically.
+
+## When to Enable It? (Important!)
+
+Checkpointing is **not** always beneficial:
+
+- **Small model / small batch**: you have enough memory without checkpointing. Recomputation just slows down training.
+- **Large GPU memory**: same thing.
+- **Huge model / huge batch**: this is where checkpointing shines.
+
+<Callout type="warning" title={"Avoid checkpointing if you don't need it"}>
+Measure. If your GPU has enough memory without checkpointing, don't enable it. If you need to increase the batch or sequence length, then enable it. It's a hyperparameter like any other.
+</Callout>
+
+## Real Impact on Speed
+
+| Strategy | Activation memory | Compute overhead | Throughput loss |
+|-----------|-------------------|----------------|-----------------|
+| No checkpointing | 100% | 0% | 0% |
+| Full checkpointing | 15% | ~33% | ~10-25% |
+| Selective checkpointing | 40-50% | ~15-20% | ~5-10% |
+
+**Important point**: the 33% compute overhead often translates to only 10-25% throughput loss because the GPU was partially idle during communications. You gain useful compute without losing much speed.
+
+## Winning Combinations
+
+### Checkpointing + FSDP/Zero
+
+Standard for large models. FSDP/Zero reduces parameter memory, checkpointing reduces activation memory. Together: multiplicative reductions.
+
+### Checkpointing + TP
+
+With Tensor Parallelism, checkpointing reduces activations on each GPU, allowing you to increase the batch or sequence length.
+
+## Advanced Techniques
+
+### Reversible Layers
+
+Some architectures (Reformer, RevNet) allow recomputing forward activations from backward activations without storing them at all. It's checkpointing taken to the extreme.
+
+### Adaptive Checkpointing
+
+Recent techniques dynamically adjust the number of checkpoints based on available memory. You say "target 8 GB of activation memory" and the framework chooses the checkpointing rate.
+
+## Summary
+
+Gradient checkpointing is enabled by default in 99% of LLM trainings. It's indispensable for maintaining reasonable batch sizes and sequence lengths. The compute overhead (20-33%) is universally accepted. It's one of the most powerful and simplest techniques for saving GPU memory.

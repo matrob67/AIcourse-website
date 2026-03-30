@@ -1,0 +1,135 @@
+---
+title: "Curriculum Learning"
+description: "Study of curriculum learning applied to LLM training: progressive organization of training data by difficulty, length, or domain to improve convergence."
+---
+
+## The Simple Analogy: How We Actually Learn
+
+A child learns math by starting with counting (1, 2, 3), then addition (1+1=2), then multiplication, then algebra. Nobody starts with triple integrals.
+
+Why does this order work? Because each simple concept serves as a **foundation** for the next. By the time you get to algebra, you already have solid mental tools: you know how to add, multiply, and manipulate numbers. Algebra then becomes a natural extension of what you know, not a leap into the void.
+
+Curriculum learning applies exactly this idea to LLM training: instead of presenting data in a completely random order (the default), you organize the progression from simple to complex. The model builds its "foundations" first, then refines.
+
+## The Empirical Benefits
+
+The three main benefits observed in practice:
+
+1. **Faster convergence**: especially at the beginning of training (10-30% faster in the first 20% of tokens). The model reaches a given performance level more quickly.
+2. **Better final quality**: modest but measurable (1-3% on benchmarks). It's not spectacular, but it's free once the pipeline is in place.
+3. **Data efficiency**: certain presentation orders allow the model to extract more "signal" from each example, reducing computational waste.
+
+<Callout type="info" title="Not Revolutionary, but Useful">
+Curriculum learning isn't a game-changer that will double your model's performance. It's an additional optimizer, a cherry on top. But combined with other techniques (data annealing, quality filtering), the gains accumulate and become significant. In LLM training, every percent counts when you're spending millions on GPUs.
+</Callout>
+
+## Curriculum by Sequence Length
+
+### Idea: Start Short, Gradually Increase
+
+Train first on short sequences (2K tokens), then 4K, then 8K, then 16K. The advantage is twofold: short sequences are **much faster** to process (attention has O(L^2) complexity), and they allow the model to learn basic linguistic patterns before tackling long-distance dependencies.
+
+### Concrete Computational Savings
+
+A 2K-token sequence is about 16x faster than an 8K sequence for the attention mechanism (4M vs 64M operations). That makes an enormous difference at the scale of billions of tokens.
+
+**Typical strategy for an 8K token target**:
+- 50% of tokens in 2K sequences (16x faster)
+- 30% of tokens in 4K sequences (4x faster)
+- 20% of tokens in 8K sequences (reference speed)
+
+**Result**: about 30% reduction in total compute time, while achieving the same performance on 8K context. That's a substantial gain when training takes weeks.
+
+<Callout type="tip" title={"Standard Practice in the Industry"}>
+The length curriculum is used in **LLaMA, Mistral, Qwen** and most modern models. It's one of the rare techniques that offers both a quality gain and a reduction in computational cost --- a rare win-win in deep learning.
+</Callout>
+
+### The Challenge: Abrupt Transitions
+
+If you jump from 2K to 8K all at once, the model may struggle to adapt. It's like going from a 100m sprint to a marathon with no transition. A gradual length warmup (2K -> 2.5K -> 3K -> ... -> 8K) is much preferable. Models that make abrupt jumps often show a temporary loss spike at each transition.
+
+
+
+## Curriculum by Data Quality: The Real Gain
+
+### Data Annealing: The Critical Final Phase
+
+Instead of mixing all data uniformly throughout training, you use an increasing quality curriculum:
+
+1. **Phase 1 (50% of tokens)**: filtered good-quality web data --- the model learns language structure, broad vocabulary, general knowledge
+2. **Phase 2 (30% of tokens)**: web + specialized data mix --- the model begins developing skills in targeted domains
+3. **Phase 3 (20% of tokens)**: **Annealing** --- very high quality data only (books, scientific articles, premium code, textbooks)
+
+The culinary analogy: phase 1 is the basic ingredients (flour, water), phase 2 is the good ingredients (butter, fresh eggs), phase 3 is the chef's touch (truffle, saffron). It's the last phase that makes all the difference in the final taste.
+
+<Callout type="paper" title="Data Annealing = Real and Measurable Improvement">
+The annealing phase at the end of training significantly improves benchmarks. Even just 5-10% of tokens in annealing can improve final quality by 1-2%. That's disproportionate relative to the cost: a small investment in high-quality data at the end pays big dividends. The likely explanation: the last data seen by the model has a disproportionate impact on its final behaviors (the LR is low, updates are small and precise).
+</Callout>
+
+### Industrial Examples
+
+- **LLaMA 3**: increases the proportion of math and code data in final phases
+- **Qwen**: multi-stage curriculum with dynamic data mix changes
+- **DeepSeek**: explicit annealing phase with a curated high-quality dataset
+
+## Curriculum by Domain
+
+### Multi-Domain Order
+
+Instead of mixing all domains together from the start, you train progressively:
+
+1. **General text**: web, encyclopedias (linguistic foundations)
+2. **Structured domains**: code, mathematics (formal reasoning)
+3. **Specialized domains**: science, medicine, law (specialization)
+
+The idea is that general language knowledge helps the model better absorb specialized domains. A model that already understands syntax, grammar, and basic concepts will learn medical jargon faster than a model discovering everything at once.
+
+### The Risk: Catastrophic Forgetting
+
+<Callout type="warning" title="Catastrophic Forgetting">
+Watch out for the trap: if you switch to a new domain while completely abandoning the previous ones, the model risks **forgetting** what it learned before. That's catastrophic forgetting. The solution: maintain a "replay buffer" --- keep injecting 10-20% of data from previous domains even during the specialization phase. This allows the model not to "unlearn" its general knowledge.
+</Callout>
+
+## Curriculum by Difficulty (Theoretically Appealing, Practically Complicated)
+
+### Possible Difficulty Measures
+
+How do you define that an example is "hard"? Several proxies exist:
+
+- **Perplexity**: measured by a reference model --- a high-perplexity document is surprising and therefore potentially more complex
+- **Sentence length**: proxy for syntactic complexity (imperfect correlation)
+- **Vocabulary rarity**: proportion of rare tokens --- the more there are, the more specialized the text
+- **Model loss**: examples where the model has high loss are ones it hasn't mastered yet
+
+### Self-Paced Learning
+
+The model itself determines difficulty: documents with high loss are introduced progressively, as the model becomes capable of digesting them.
+
+Theoretically very elegant. In practice, rarely used for LLMs because you need to constantly re-evaluate each document's difficulty during training, which is costly and complex to parallelize.
+
+## Real Empirical Results
+
+| Technique | Convergence Gain | Final Quality Gain | Adoption |
+|-----------|-----------------|-------------------|----------|
+| Length curriculum | +20-30% (start) | ~0% | Very common |
+| Data annealing | +10% (end) | +1-2% | Very common |
+| Domain curriculum | Variable | ~0.5% | Moderate |
+| Self-paced (difficulty) | +5-10% | ~0.5% | Rare |
+
+## In Practice: What Should You Enable?
+
+**Length curriculum**: enabled in about 70% of modern projects. The computational gain is clear and easy to implement. If you're training a model with long context, it's almost mandatory.
+
+**Data annealing**: enabled in about 80% of projects. The empirical benefit is demonstrated and the implementation cost is minimal --- you just need to change the data mix at the end of training.
+
+**Domain curriculum**: enabled in about 20% of projects. The benefit is less clear and the implementation is more complex (you need to manage the replay buffer and decide on transitions).
+
+**Self-paced**: enabled in less than 5% of projects. The computational overhead generally exceeds the gain.
+
+<Callout type="info" title="Community Consensus">
+Curriculum learning isn't a panacea, but it's a valuable complementary tool. The practical recommendation: enable the length curriculum for computational efficiency and data annealing for final quality. These two techniques are well-established and easy to integrate. Other approaches are a bonus for teams that have time to experiment.
+</Callout>
+
+## Summary
+
+Curriculum learning applies human pedagogy (simple to complex) to LLM training. The two clear and proven applications: **sequence length curriculum** (30% computational gain) and **data quality / data annealing** (1-2% quality gain at the end of training). Other approaches (domain, difficulty) are theoretically interesting but not yet systematically adopted in practice.

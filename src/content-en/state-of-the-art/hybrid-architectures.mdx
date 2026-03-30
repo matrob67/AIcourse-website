@@ -1,0 +1,131 @@
+---
+title: "Hybrid Architectures: Attention + SSM"
+description: "Overview of hybrid architectures combining attention mechanisms and State Space Models to optimize the performance/efficiency ratio of language models."
+---
+
+## Neither one nor the other: both at once
+
+A chef who only knows how to make salads misses all the hot dishes. A chef who only knows how to fry misses all the salads. The truly versatile chef knows when to use each technique.
+
+That's exactly the philosophy of **hybrid architectures**: attention for what it does better than any other technique, SSMs (Mamba, RWKV...) for what they do better than attention. Neither one alone is optimal. Both together, placed in the right spot in the network, give the best result.
+
+## Why hybridization is necessary
+
+**Pure Transformers** excel at precise recall (retrieving exact information from the context, like a name or date mentioned 10,000 tokens earlier) and few-shot learning (learning from examples provided in the prompt). But their KV cache grows linearly with context, and memory quickly becomes limiting beyond a few tens of thousands of tokens.
+
+**Pure SSMs** (Mamba, RWKV, RetNet) offer constant-cost inference and fixed memory, regardless of context length. But they compress the entire history into a fixed-size state vector --- it's like trying to find an exact sentence in a novel's summary. The information is there in substance, but the details are lost.
+
+<Callout type="info" title="The guiding principle">
+Attention is a powerful but expensive tool --- to be used sparingly, only for operations that truly need it. SSMs are efficient and scalable --- to be used for the majority of routine sequential processing. The central design question: where to place attention layers in the network, and how many to include?
+</Callout>
+
+
+## The major hybrid architectures
+
+### Jamba (AI21 Labs)
+
+Jamba is the first hybrid SSM+Attention+MoE model deployed at scale, published by AI21 Labs in early 2024.
+
+Its architecture alternates Mamba blocks and attention blocks with a **7:1 ratio** --- seven Mamba layers for a single attention layer. The attention layers also integrate Mixture of Experts for even more efficiency. Why this ratio? Because attention layers are the most resource-hungry: they contribute to the KV cache and perform quadratic computations. By rationing them, you preserve their unique capabilities while benefiting from Mamba's efficiency for the bulk of the processing.
+
+- **Context**: 256,000 tokens processed efficiently
+- **KV cache**: reduced by ~80% (only attention layers contribute)
+- **Parameters**: 52B total, ~12B active via MoE
+- **Performance**: comparable to similarly-sized Transformer MoE models
+
+### Griffin and RecurrentGemma (Google)
+
+Google proposed **Griffin**, which combines linear recurrence layers called **RG-LRU** (Real-Gated Linear Recurrent Unit --- "Real-Gated" means the gate parameters are real numbers, unlike the complex gates used in S4, simplifying implementation) with **local attention** (window limited to 2,048 tokens).
+
+The RG-LRU is deliberately simpler than Mamba: a linear recurrence with gating, without the complexity of the selective scan. Less expressive, but faster and easier to optimize on hardware.
+
+<Callout type="paper" title={"Griffin's insight"}>
+Griffin demonstrates a counterintuitive result: **local** attention (2,048-token window) combined with recurrent layers is as performant as global attention on the majority of benchmarks, while being much more efficient. Why? Because when a recurrent mechanism already handles long-range dependencies, attention doesn't need to see the entire sequence --- it can focus on fine interactions between nearby tokens. It's like reading a novel: you don't need to reread the first chapter to understand the current sentence, if you have a good mental summary of what happened before.
+</Callout>
+
+**RecurrentGemma** is the official Griffin instantiation by Google, open-sourced in 2B and 9B parameter versions.
+
+### Zamba (Zyphra)
+
+Zamba takes an original approach: more attention layers than Jamba, but the **attention layers share their weights** between them. Concretely, a single attention matrix is reused at multiple points in the network. This drastically reduces the total number of parameters while maintaining recall capabilities --- each attention layer "sees" the context differently thanks to the different intermediate representations produced by the interleaved Mamba layers. Excellent parameter efficiency for small models.
+
+### StripedHyena (Together AI)
+
+StripedHyena alternates Hyena layers (long convolutions via FFT) with standard attention layers. It's proof that the hybrid principle isn't limited to SSMs --- any sub-quadratic mechanism can play the role of "efficient layer" combined with a few attention layers.
+
+### Samba (Microsoft)
+
+Samba combines Mamba with **Sliding Window Attention** in an interleaved arrangement. Local attention with a window of a few thousand tokens complements the Mamba recurrence: it handles fine short-range interactions while Mamba takes care of propagating information over long distances, all without the constraints of a global KV cache.
+
+## Key hybrid design questions
+
+### Attention layer placement
+
+Where to put the precious attention layers? It's an open design question, but clear trends are emerging:
+
+- **Regular**: one attention layer every N SSM layers (Jamba, 7:1 ratio). Simple and effective.
+- **Beginning and end**: more attention in the first layers (which form initial representations) and the last ones (which make final decisions).
+- **Adaptive**: placement determined by automatic architecture search (NAS), letting the algorithm find the best configuration.
+
+<Callout type="tip" title="What empirical studies suggest">
+Placing attention layers **regularly** throughout the network, with a ratio between 1:4 and 1:8 (one attention layer for every 4 to 8 SSM layers), offers a good general trade-off. Studies also show that the first and last layers benefit more from attention than middle layers --- which makes sense, as these are the ones that must encode inputs and make output decisions.
+</Callout>
+
+### Global or local attention in the hybrid?
+
+In a hybrid context, SSM layers already handle long-range dependencies via their recurrent state. Attention therefore doesn't necessarily need to be global --- it can focus on what it does best: fine interactions between nearby tokens.
+
+| Attention type | Range | KV cache | Typical use |
+|-----------------|--------|----------|---------------|
+| Global | Entire sequence | O(L) | Very long-range recall |
+| Local (window) | Last W tokens | O(W) | Precise local interactions |
+| Dilated | Spaced positions | O(L/k) | Wide coverage at low cost |
+
+Griffin demonstrates that local attention (2,048-token window) is sufficient in the vast majority of cases when SSMs handle the long term. The KV cache is then bounded by the window size, not the total context length.
+
+### The triple MoE + SSM + Attention combination
+
+Jamba proves that all three technologies --- MoE, SSM, Attention --- are **compatible and complementary**, each optimizing a different aspect:
+
+- **SSMs** reduce computational cost compared to pure attention (sequential processing in O(1) per token)
+- **Attention** preserves recall and few-shot learning capabilities (exact access to context)
+- **MoE** increases model capacity without increasing per-token cost (only a few experts are activated)
+
+## Trade-off analysis
+
+### Impact on inference memory
+
+| Architecture | KV cache | Size for 100K tokens, 32 layers, d=4096 |
+|-------------|----------|----------------------------------------------|
+| Pure Transformer | All layers | ~100 GB |
+| 7:1 Hybrid | 1/8 of layers | ~12.5 GB |
+| Pure SSM | None | 0 GB (fixed state ~a few MB) |
+
+The 8x KV cache reduction is transformative for large-context deployments. A model that required 4 A100 GPUs (80 GB each) for the KV cache alone can now run on a single GPU.
+
+<Callout type="warning" title={"The hidden cost of SSM state"}>
+SSM layers don't require a KV cache but maintain a hidden state. For Mamba, this state is N x d per layer. For RetNet, it's d x d per head. These states are generally much more compact than the KV cache, but they're not negligible --- especially if the state is matrix-valued (RetNet) or if you have many SSM layers. You need to count this "hidden state" in the total memory budget.
+</Callout>
+
+### Impact on model quality
+
+Empirical results show that hybrids **preserve the essentials of pure Transformer capabilities**, with nuances:
+
+- **Perplexity**: comparable to same-size Transformers --- no measurable degradation
+- **Recall**: slight degradation on exact long-range recall (the few attention layers don't cover everything)
+- **Few-shot learning**: preserved thanks to attention layers that maintain exact access to examples
+- **Very long sequences**: superior to pure Transformers, as SSM layers handle extended context efficiently
+
+## Emerging trends
+
+### Adaptive hybridization
+
+Research is exploring architectures that **dynamically choose** between attention and SSM depending on the nature of the current token. The idea: allocate more attention computation to critical tokens (complex terms, recall references, logical connectors) and use SSMs for ordinary tokens. It's the computational equivalent of slowing down when the text is complex and speeding up when it's predictable.
+
+### Theoretical unification
+
+Mamba-2's SSD framework suggests that attention and SSM are special cases of a more general mechanism --- a semi-separable matrix parameterized differently. Future architectures could exploit a **unified operator** that dynamically adapts along this spectrum, eliminating the artificial distinction between "SSM layer" and "attention layer."
+
+<Callout type="info" title="The industrial convergence">
+There's a clear convergence in the industry toward hybrid architectures. Most major labs are actively exploring SSM+Attention combinations for their next-generation models. Hybrid architectures aren't a tepid compromise --- they're a synthesis that offers the best of both worlds: SSM efficiency for routine processing and attention power for operations that truly need it.
+</Callout>

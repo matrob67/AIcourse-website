@@ -1,0 +1,218 @@
+---
+title: "CNN: Seeing with Convolutions"
+description: "How convolutional networks see images. Convolutions, pooling, and hierarchical pattern learning."
+---
+
+## Introduction: Why standard neural networks fail on images
+
+A fully connected network sees an image as a **long vector**.
+
+Example: a 100x100 pixel color image (RGB, the three red, green, blue channels) = 10,000 pixels x 3 channels = 30,000 values.
+
+The first hidden neuron has **30,000 inputs**. With 1,000 hidden neurons, you have 30 million parameters. Huge. Slow. Inefficient. And each neuron uses every pixel in the image, regardless of where it is.
+
+**Convolutional networks** (CNN -- Convolutional Neural Networks) exploit a simple property: **nearby pixels are related**.
+
+An edge or important texture only occupies a few pixels. The appearance of a pattern (an eye, a wheel) is the **same regardless of its position** in the image. No need to learn separately for each position.
+
+CNNs are inspired by the biological visual cortex: neurons don't receive the entire image, just a small local region.
+
+<ImageWithSource
+  src="/images/admin/img-1774009209391.png"
+  alt="Diagram of a convolutional neural network (CNN)"
+  caption="This diagram illustrates how a convolutional neural network (CNN) works for image classification. The input image is processed through convolution, ReLU, and pooling layers to extract features, before being classified via fully connected layers."
+  size="large"
+/>
+
+## The convolution operation: the core mechanism
+
+A **convolution** slides a small filter (kernel) over the image and computes a **dot product** (a kind of similarity score) at each position.
+
+$$
+\text{Result}(i, j) = \sum_{a,b} \text{Image}(i+a,\; j+b) \times \text{Filter}(a, b)
+$$
+
+The result is a **feature map**: a new "image" that shows where that particular pattern appears and how intensely.
+
+<ImageWithSource
+  src="/images/admin/img-1774009290494.png"
+  alt="Example of 2D convolution with element-wise multiplication"
+  source="https://www.researchgate.net/figure/Convolution-operation_fig2_355656417"
+  caption="This image illustrates the 2D convolution process: an input image is multiplied element-wise with a filter, then the values are accumulated to produce a feature map. This allows detecting specific patterns in the image."
+  size="large"
+/>
+
+Concrete example: a filter that detects vertical edges:
+
+$$
+\text{Filter} = \begin{bmatrix} -1 & 0 & +1 \\ -2 & 0 & +2 \\ -1 & 0 & +1 \end{bmatrix}
+$$
+
+This filter highlights vertical intensity changes (edges).
+
+<ImageWithSource
+  src="/images/admin/img-1774009401218.png"
+  alt="Filtering a dog image with different convolution kernels"
+  source="https://medium.com/@abhishekjainindore24/all-about-convolutions-kernels-features-in-cnn-c656616390a1"
+  caption="This image illustrates the effect of different convolution kernels on an original image. The edge detection filter highlights vertical intensity changes, revealing the contours of the image."
+  size="large"
+/>
+
+## Filters learn patterns
+
+Each filter (typically 3x3 or 5x5) is a set of **learnable weights**. During training, they naturally specialize.
+
+### Emergent hierarchy
+
+**Low layers** (near the input): detect simple **primitives**. Horizontal edges, vertical edges, colors, contrast.
+
+**Middle layers**: combine primitives to detect **textures**, simple shapes.
+
+**Deep layers**: recognize **complex** structures. Eyes, wheels, faces.
+
+This hierarchy emerges **automatically** without being coded.
+
+<Callout type="info" title="Weight sharing">
+The same filter is applied **everywhere** in the image. This is powerful: few parameters (a 3x3 = 9 weights), and the network learns **translation invariance** (a pattern is detected no matter where it is in the image).
+</Callout>
+
+<ImageWithSource
+  src="/images/admin/img-1774009485721.png"
+  alt="Example of weight sharing in a CNN"
+  source="https://www.researchgate.net/figure/A-convolutional-neural-network-for-a-facial-recognition-application_fig10_330373042"
+  caption="A convolutional neural network for a facial recognition application."
+  size="large"
+/>
+
+## Stride and padding: controlling the sliding
+
+<ImageWithSource
+  src="/images/admin/img-1774009628280.png"
+  alt="Example of 2D convolution with 3x3 kernel"
+  source="https://www.analyticsvidhya.com/blog/2022/03/basics-of-cnn-in-deep-learning/"
+  caption="This image illustrates a 2D convolution operation on a 7x7 input matrix with a 3x3 kernel and a stride of 1. The result shows the computed value (114) after applying the kernel."
+  size="large"
+/>
+
+### Stride
+
+<ImageWithSource
+  src="/images/admin/img-1774009709789.png"
+  alt="Comparison of convolutions with stride=1 and stride=2"
+  caption="The image illustrates the impact of the 'stride' parameter on the result of a convolution. On the left, with a stride of 1, the convolution window moves one pixel at each step, producing a more detailed output. On the right, with a stride of 2, the window skips a pixel at each step, reducing the output size."
+  size="large"
+/>
+
+It's the **step size** of the filter.
+
+- Stride 1: the filter moves one pixel at a time. Feature map of similar size.
+- Stride 2: the filter moves 2 pixels. Feature map half the size.
+
+Larger stride = size reduction, fewer computations, but you lose local information.
+
+### Padding
+
+Adding **zeros around** the image.
+
+- "Same" padding: adds enough zeros to maintain the dimensions
+- "Valid" padding: no zeros, dimensions shrink naturally
+
+Padding helps when you want to maintain the feature map size or process edge pixels.
+
+## Pooling: reducing resolution
+
+**Pooling** reduces the size of feature maps. Three benefits:
+
+1. **Fewer computations**: subsequent layers work on less data
+2. **Invariance**: if a pattern shifts slightly, the max stays similar. Robustness to small translations
+3. **Implicit regularization**: fewer dimensions = less overfitting
+
+<ImageWithSource
+  src="/images/admin/img-1774009780503.png"
+  alt="Max Pooling and Average Pooling on convolution output"
+  caption="The image illustrates the application of Max Pooling and Average Pooling on a 4x4 convolution output. These operations reduce dimensionality while preserving the main features, improving computational efficiency and robustness to translations."
+  size="medium"
+/>
+
+### Max Pooling
+
+Takes the **maximum** in each window (typically 2x2). Preserves strong activations (salient patterns).
+
+### Average Pooling
+
+Takes the **average** in each window. Used at the end to convert feature maps into a fixed-size vector.
+
+<Callout type="tip" title="Global Average Pooling">
+Instead of fully connected layers at the end, use Global Average Pooling: average each entire feature map to get a single number. Dramatically fewer parameters, limits overfitting. This has become standard.
+</Callout>
+
+## Hierarchy of representations: layer by layer
+
+Each layer receives the feature maps from the previous layer. It applies multiple filters **in parallel**. If a layer has 64 filters, it produces 64 feature maps.
+
+Each filter captures a different aspect. Together, they build a complete understanding.
+
+## Receptive field: the region we "see"
+
+A deep neuron doesn't look at a single position. It "sees" a **region** of the input image. The deeper you are in the network, the larger this region becomes.
+
+This is the **receptive field**. It grows with depth, allowing deep neurons to detect large objects and global patterns.
+
+A powerful technique to enlarge the receptive field without losing resolution or blowing up the number of parameters is **dilated convolutions**. Instead of sliding a 3x3 filter over adjacent pixels, you space out the sampled pixels -- a 3x3 filter with dilation 2 covers the same area as a 7x7 filter, but with only 9 weights. This is massively used in image segmentation and audio processing (WaveNet uses it to capture long-range dependencies in the signal).
+
+<ArxivLink id="1511.07122" title="Multi-Scale Context Aggregation by Dilated Convolutions (Yu & Koltun, 2015)" />
+
+Example: a deep CNN can have a receptive field of 100x100 pixels. Each neuron in the deep layers "sees" a large area of the image.
+
+## Typical CNN architecture
+
+### Part 1: feature extractor
+
+**Conv** → ReLU → Pooling → **Conv** → ReLU → Pooling → **Conv** → ReLU → Pooling
+
+Features become progressively more abstract. Resolution decreases.
+
+### Part 2: classifier
+
+**Flattened features** (from 3D to 1D) → **Fully connected layers** → **Softmax** to get probabilities
+
+Or more modern: Global Average Pooling + 1x1 convolutions instead of fully connected layers (fewer parameters).
+
+## Beyond 2D images
+
+CNNs are not limited to 2D images:
+
+**1D convolutions**: process text, audio signals, time series. The filter slides along one dimension.
+
+**3D convolutions**: process videos (spatial + temporal) and volumetric medical imaging (MRI, CT scans).
+
+The principle remains: exploit the **local structure** of the data.
+
+## Common use cases
+
+- **Classification**: is it a cat or a dog?
+- **Detection**: where are all the cats in the image?
+- **Segmentation**: which class for each pixel?
+- **Facial recognition**: who is this face?
+- **Medical imaging**: detecting tumors
+- **Autonomous vehicles**: understanding the road
+- **Style transfer**: applying the style of a painting to a photo
+
+<Callout type="warning" title="CNNs aren't just for images">
+NLP (Natural Language Processing) used CNNs for text classification for a long time. Effective and simple. Transformers took over, but CNNs remain competitive for certain tasks.
+</Callout>
+
+## Summary: why CNNs are revolutionary
+
+CNNs made image analysis **practical** by keeping the number of parameters reasonable. An elegant architecture:
+
+- Few parameters thanks to **weight sharing**
+- Computationally efficient
+- Naturally captures the **spatial structure** of data
+- Learns a hierarchy of patterns automatically
+
+That's why CNNs have dominated computer vision since 2012 (AlexNet). It's an indispensable tool.
+
+## Why this matters
+
+Images are everywhere. CNNs give you the tools to analyze them. It's an elegant architecture that captures the intuition about how images work. Understanding CNNs means understanding a quarter of modern deep learning.

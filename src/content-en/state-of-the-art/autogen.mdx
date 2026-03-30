@@ -1,0 +1,145 @@
+---
+title: "AutoGen: Multi-Agent Conversational Agents"
+description: "Microsoft's AutoGen allows creating multi-agent systems where LLMs collaborate through conversation to solve complex tasks."
+---
+
+## The Idea: Agents That Talk to Each Other
+
+Instead of a single LLM doing everything, create a **team** of specialized agents that discuss among themselves like human colleagues. A developer who writes the code, a reviewer who critiques it, a tester who verifies it works. Each has their role, their skills, and their perspective.
+
+The intuition behind AutoGen is powerful: humans solve complex problems through **collaboration and conversation**. A developer alone makes mistakes. Add a reviewer, quality goes up. Add a tester, bugs are caught earlier. AutoGen reproduces this dynamic with LLM agents.
+
+Why conversation rather than a rigid pipeline? Because conversation is **flexible and self-correcting**. If the developer writes buggy code, the tester detects the error and sends it back. The developer fixes it. This natural back-and-forth is impossible in a classic sequential pipeline where each step only communicates in one direction.
+
+<ArxivLink id="2308.08155" title="AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation (Wu et al., 2023)" />
+
+<Callout type="info" title="The Conversational Paradigm">
+An AutoGen agent = LLM + role (specialized system prompt) + tools. Agents communicate in **natural language** — no binary protocol or structured API. The conversation continues, message by message, until the problem is solved. It's simple, readable, and surprisingly effective.
+</Callout>
+
+
+
+## Types of Agents
+
+AutoGen offers a hierarchy of agents that covers most needs:
+
+**ConversableAgent**: the foundation of everything. Can send and receive messages, generate responses (via LLM or programmed logic), execute code, and use tools. All other types inherit from it.
+
+**AssistantAgent**: powered by an LLM. This is the "brain" — it reasons, plans, generates code, analyzes data. Its behavior is defined by a system prompt that gives it its role and instructions. Example: "You are an expert Python developer specializing in data science."
+
+**UserProxyAgent**: acts as a proxy for a human user. It can execute code locally (in a sandbox), request human approval before certain actions, or operate in fully autonomous mode. It's the bridge between the LLM world and the real world (file system, terminal, etc.).
+
+## Concrete Example: Collaborative Development
+
+Here's how two agents collaborate to create a script:
+
+```python
+from autogen import AssistantAgent, UserProxyAgent
+
+# Developer agent: reasons and writes code
+developer = AssistantAgent(
+    name="developer",
+    system_message="You are an expert Python developer.",
+    llm_config={"model": "gpt-4"},
+)
+
+# Executor agent: executes code and reports results
+executor = UserProxyAgent(
+    name="executor",
+    human_input_mode="NEVER",
+    code_execution_config={"work_dir": "workspace"},
+)
+
+# Launch the conversation
+executor.initiate_chat(
+    developer,
+    message="Create a script that analyzes a CSV and generates a chart.",
+)
+```
+
+### How the Conversation Unfolds
+
+The most fascinating part is watching the conversation unfold naturally:
+
+1. **Executor** sends the request to **Developer**: "Create a script..."
+2. **Developer** reasons and proposes Python code (pandas + matplotlib)
+3. **Executor** executes the code locally and replies: "FileNotFoundError: sample.csv not found"
+4. **Developer** understands the error, adapts: "I'll first create a test CSV file..."
+5. **Executor** executes: "Success! Chart saved."
+6. Conversation ended (stopping criterion reached)
+
+This is the classic **write-run-debug** pattern that human developers follow, automated through conversation between agents. The developer agent doesn't need to anticipate all errors — it fixes them as they come thanks to the executor's feedback.
+
+## Advanced Multi-Agent Patterns
+
+### Group Chat: Multi-Party Conversation
+
+For complex tasks, 3+ agents with a **manager** who orchestrates turn-taking:
+
+```python
+from autogen import GroupChat, GroupChatManager
+
+agents = [planner, developer, reviewer, tester]
+
+group_chat = GroupChat(
+    agents=agents,
+    messages=[],
+    max_round=20,
+    speaker_selection_method="auto",  # The manager chooses who speaks
+)
+
+manager = GroupChatManager(groupchat=group_chat,
+                           llm_config=config)
+```
+
+The manager dynamically decides which agent should speak at each turn. After the developer has proposed code, the manager gives the floor to the reviewer. After the review, to the developer to fix, then to the tester to validate. It's intelligent and adaptive orchestration.
+
+### Sequential Chat: Conversational Pipeline
+
+Agents pass the baton in sequence: Analyst analyzes requirements, Developer implements, Reviewer critiques, Tester validates, Deployer puts in production. Each agent receives the full context of previous exchanges.
+
+### Nested Chat: Sub-Conversations
+
+An agent can launch a **sub-conversation** to solve a specific sub-problem. For example, the Developer encounters a performance issue and launches a separate conversation with a PerformanceExpert. The result is reported back to the main conversation. It's the "ask an expert" pattern — natural and powerful.
+
+<Callout type="tip" title="Start with Two Agents">
+Complexity grows non-linearly with the number of agents. Start with the assistant + executor duo, validate that it works, then add a reviewer. A group chat of 5 agents is **much** harder to debug than a pair — conversations can go in unexpected directions, agents can contradict each other, and costs explode.
+</Callout>
+
+## AutoGen 0.4 (AG2): The Overhaul
+
+Version 0.4 (also called AG2) is a major overhaul with structural improvements:
+- **Native async**: communication via asynchronous messages, enabling truly parallel agents
+- **Modular architecture**: agents and tools completely decoupled, composable like LEGO
+- **Observability**: built-in tracing and logging — every message, every decision is traceable
+- **Scalability**: distributed computing support for workflows with dozens of agents
+
+The migration from 0.2 to 0.4 is significant (quite different API), but the fundamental concepts remain the same.
+
+## Concrete Use Cases
+
+**Software development**: the flagship use case. A planner decomposes the task, a developer writes the code, a tester verifies, a reviewer critiques. The write-test-review-fix loop happens naturally through conversation. It's particularly effective for scripts, data analyses, and prototypes.
+
+**Data analysis**: an SQL agent extracts data, an executor runs queries, an interpreter analyzes results, a visualizer creates charts. Each agent is specialized and does only one thing well.
+
+**Research and writing**: a researcher scans sources, a synthesizer summarizes key information, a writer produces the final text, a proofreader checks consistency and quality.
+
+## Multi-Agent Challenges
+
+<Callout type="warning" title="Conversations That Diverge">
+Without good coordination, agents can "chatter" endlessly, go in circles on a solved problem, or diverge on useless tangents. `max_round` and explicit stopping criteria are **essential**. Always define a maximum number of rounds AND a clear success condition ("TERMINATE" in the message when the task is accomplished).
+</Callout>
+
+**Cost**: 20 rounds of conversation between 3 agents = easily 50,000+ tokens. At $10/M tokens, that's $0.50 per task. For prototyping it's acceptable, for production at volume it's expensive. Monitor the number of rounds and total tokens per conversation.
+
+**Non-determinism**: the same initial prompt can lead to very different conversations depending on the LLM's stochastic "mood." This is both a strength (creative exploration, original solutions) and a major challenge (reproducibility, testing, debugging). Fix a seed when reproducibility is critical.
+
+**Error attribution**: when the final result is bad, which agent is at fault? The developer who wrote bad code? The reviewer who let it pass? The tester who didn't test the right case? Good logging with timestamps and complete content of each message is indispensable for post-mortem analysis.
+
+## When to Use AutoGen
+
+AutoGen shines for tasks where **role-based collaboration** is natural: development + test + review, research + synthesis + writing, analysis + visualization + interpretation. If you can imagine a human team solving the problem through discussion, AutoGen can probably automate it.
+
+For production with strict control, LangGraph or CrewAI often offer better control and predictability through explicit flows.
+
+AutoGen remains one of the most widely used multi-agent frameworks in research and prototyping. Its strength: conversational flexibility enables rich and adaptive interactions. Its challenge: this same flexibility makes behavior less predictable than a deterministic pipeline.

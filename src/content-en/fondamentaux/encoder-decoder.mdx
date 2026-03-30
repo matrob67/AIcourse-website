@@ -1,0 +1,197 @@
+---
+title: "Complete encoder-decoder architecture"
+description: "How the Transformer's encoder and decoder interact to transform one sequence into another."
+---
+
+## The story: a two-step translation machine
+
+Imagine a professional translator translating from English to French.
+
+**Step 1: Understanding**
+She reads the entire English sentence: "The black cat is sleeping on the couch." She understands it, captures every detail: who does what, what nuance, what context. She doesn't start translating until she's read the whole sentence -- she needs the full context.
+
+**Step 2: Generation**
+She now generates the French translation, word by word, mentally referring back to the English sentence she understood: "Le chat noir dort sur le canape." With every word she writes, she "consults" her understanding of the source sentence to pick the right word.
+
+This is **exactly** what the Transformer's encoder-decoder architecture does -- and it's the original architecture presented in the famous paper "Attention Is All You Need" (Vaswani et al., 2017).
+
+- **The encoder** = understanding (read, analyze, create a rich representation)
+- **The decoder** = generation (produce the translation word by word, consulting the encoder)
+
+Today, some models only use part of this architecture (encoder-only like BERT, decoder-only like GPT), but understanding the complete setup is essential to grasp how *all* Transformers work.
+
+<ImageWithSource
+  src="/images/admin/img-1774048041565.png"
+  alt="Complete architecture of a Transformer"
+  size="medium"
+/>
+
+## The encoder: the analyzer
+
+The encoder is a **stack** of N identical layers (6 in the original Transformer, but the number is a hyperparameter). Each layer performs two fundamental operations, always in the same order:
+
+### Operation 1: Multi-Head Self-Attention
+
+This is the heart of the Transformer. Each token looks at **all other tokens** in the sentence to decide what to pay attention to. It's **bidirectional**: the word "cat" can see "sleeping" (to the right) and "The" (to the left) simultaneously. Unlike an RNN that reads the sentence left-to-right sequentially (and therefore struggles to connect distant words), the Transformer sees the entire sentence at once.
+
+Why is this crucial? Take the sentence "The bank of the river was covered in moss." To understand that "bank" means "riverbank" here and not "financial institution," you need to see "river" and "moss" -- bidirectional attention enables exactly that. In a single pass, all tokens exchange relevant information with each other.
+
+### Operation 2: Feed-Forward Network (FFN)
+
+After attention, each token independently passes through a small two-layer neural network:
+
+$$
+\text{output} = \text{ReLU}(\text{token} \times W_1 + b_1) \times W_2 + b_2
+$$
+
+This network processes each position independently (unlike attention, which mixes positions). Recent research in mechanistic interpretability suggests that the FFN functions as an **associative memory**: it stores facts and patterns learned during pre-training. Attention decides *what* to look at, the FFN decides *what to do with it*.
+
+### The glue: residual connections + normalization
+
+After each operation (attention and FFN), a crucial pattern is applied -- the residual connection followed by normalization:
+
+$$
+\text{output} = \text{Norm}(\text{input} + \text{Attention}(\text{input}))
+$$
+
+$$
+\text{output} = \text{Norm}(\text{output} + \text{FFN}(\text{output}))
+$$
+
+The **skip connection** (the `input +`) is essential: it creates a "shortcut" that lets gradients flow freely during backpropagation. Without it, stacking 6 layers would make training unstable (gradients would vanish or explode). With it, you can stack 100+ layers without issues -- that's what makes deep models possible.
+
+<Callout type="info" title="Why 6 layers?">
+6 is arbitrary and empirical -- it's what worked well in 2017 with the available resources. Today, large models have 80 to 126 layers (LLaMA-3 405B has 126 layers). More layers = more reasoning and memorization capacity, but also slower and more expensive. It's a classic trade-off.
+</Callout>
+
+## The decoder: the generator
+
+The decoder also has N layers, but each layer has **3 operations** (one more than the encoder):
+
+### Operation 1: Masked Self-Attention (causal attention)
+
+Like the encoder's attention, except with a fundamental restriction: the token at position t can only see positions 1, 2, ..., t. It **cannot** look at future positions. In practice, this is done via a triangular mask that sets the attention scores toward future positions to $-\infty$ (which gives probabilities of 0 after softmax).
+
+Why this restriction? During training, the complete translation is shown to the decoder in a single pass (for speed). Without a mask, the decoder could "cheat" by looking at the word it's supposed to predict. The mask forces it to rely only on previous words.
+
+During generation (inference), it's natural: you generate word by word, so the future simply doesn't exist yet.
+
+### Operation 2: Cross-Attention (the encoder-decoder bridge)
+
+This is THE unique and magical part of the encoder-decoder architecture. The decoder asks the encoder: "Looking at the entire source sentence you understood, what word should I generate now?"
+
+The mechanism reuses the Queries/Keys/Values mechanics of attention, but with a crucial subtlety: the data comes from **two different sources**. The asymmetry is logical: Q comes from the decoder because it's the one "asking the question" (where am I, what do I need?), while K and V come from the encoder because that's where the source information to consult is:
+
+| Component | Source | Role |
+|---|---|---|
+| **Queries (Q)** | Come from the decoder | "Here's where I am in generation" |
+| **Keys (K) and Values (V)** | Come from the encoder | "Here's what the source sentence contains" |
+
+Concretely, when the decoder is about to generate the word "dort" (sleeps), it sends a query that "interrogates" the representations of all tokens in the source sentence. The attention tells it that "sleeping" is the most relevant token, and it uses that info to choose "dort." At each generation step, the decoder has access to **the entirety of the source context**.
+
+### Operation 3: Feed-Forward Network
+
+Identical to the encoder's. Each position processes information independently, with its own residual connections and normalization.
+
+## The complete pipeline
+
+| Step | Description |
+|---|---|
+| **Source text** (e.g., English) | Input sentence |
+| Tokenizer + Embedding | Conversion to token vectors |
+| Positional Encoding | Adding position information |
+| **Encoder** (6 layers) | Bidirectional self-attention + Feed-forward |
+| Rich representation | One vector per token of the source sentence |
+| ↕ **Cross-Attention** | Connects the encoder to the decoder |
+| **Target text** (e.g., French, shifted by one token) | Output sentence |
+| Tokenizer + Embedding | Conversion to token vectors |
+| Positional Encoding | Adding position information |
+| **Decoder** (6 layers) | Masked self-attention + Cross-attention + Feed-forward |
+| Linear projection | Convert vector to scores |
+| Softmax | Probability for each token in the vocabulary |
+
+During training, the complete target is shown with a mask. During inference, tokens are generated one by one.
+
+## Training vs Inference: two modes
+
+### Training Mode: Teacher Forcing
+
+The complete translation is shown to the decoder, but with the causal mask hiding the future:
+
+**Encoder**: reads "The black cat is sleeping" and produces a rich representation of the source sentence.
+
+**Decoder** (with mask): receives the target "Le chat noir dort" in its entirety. At each position, it predicts the next word without seeing what comes after:
+
+| Position | The decoder sees | It must predict |
+|---|---|---|
+| 0 | `<START>` | "Le" |
+| 1 | `<START>` "Le" | "chat" |
+| 2 | `<START>` "Le" "chat" | "noir" |
+| 3 | `<START>` "Le" "chat" "noir" | "dort" |
+
+The crucial point: thanks to the mask, **all these predictions happen in a single parallel pass**. It's ultra-fast. You don't need to wait for the model to generate "Le" before computing the prediction at position 2, because the mask guarantees it doesn't cheat.
+
+**Teacher forcing** = showing the true answer as the decoder's input. The name comes from the idea that you "force" the correct answer at each step, like a teacher who corrects immediately -- instead of letting the decoder use its own (potentially wrong) predictions as input for the next step. The error at each position is computed, and gradients are propagated to adjust the weights.
+
+### Inference Mode: Auto-Regressive Generation
+
+After training, the decoder must generate **without knowing the answer**:
+
+**Encoder**: reads the source sentence once and produces its representations (they are reused at each generation step).
+
+**Decoder** (generation):
+1. Starts with a special `<START>` token
+2. "What's the first word?" -> The model predicts "Le"
+3. Adds "Le" to the decoder's context
+4. "What's the next one?" -> The model predicts "chat"
+5. Continues token by token until the `<END>` token or a maximum length
+
+**Sequential**: one token at a time. **Slow**: N forward passes for N tokens -- each new token requires a new pass through the decoder (but not through the encoder, which is only run once).
+
+This is the **auto-regressive** mode: each token depends on all previous ones. Natural and high-quality generation, but inherently slow.
+
+<Callout type="tip" title="Why encoder-decoder vs decoder-only?">
+The original Transformer (encoder-decoder) is designed for translation. But research has shown you can also use:
+- **Encoder-only** (BERT): excellent comprehension, no generation
+- **Decoder-only** (GPT): excellent generation, indirect comprehension via context
+Today, almost all LLMs are decoder-only for flexibility.
+</Callout>
+
+## Comparison of the three architectures
+
+| Type | Attention | Pre-training | Strength | Examples |
+|---|---|---|---|---|
+| Encoder-only | Bidirectional | MLM -- Masked Language Modeling (masking tokens) | Comprehension | BERT, RoBERTa |
+| Decoder-only | Causal | CLM -- Causal Language Modeling (predict the next one) | Generation | GPT, LLaMA, Mistral |
+| Encoder-Decoder | Both | Span corruption (reconstruct masked portions) | Translation, summarization | T5, BART, Flan-T5 |
+
+## Why decoder-only dominates now
+
+Modern LLMs (GPT-4, Claude, LLaMA, Mistral) use **decoder-only**, not encoder-decoder. Why this choice?
+
+1. **Architectural simplicity**: a single stack of layers instead of two, no need for cross-attention. Less code, fewer bugs, easier to optimize
+2. **Scaling**: a single stack of layers is easier to parallelize across thousands of GPUs. Cross-attention adds communication complexity between encoder and decoder
+3. **Unification**: a single model does everything (comprehension AND generation). The "prompt" plays the role of the encoder -- the model reads the question/instruction, then generates the answer in the same stream
+4. **Data**: no need for aligned source-target pairs. Any raw text is enough for pre-training, giving access to colossal corpora
+
+The encoder-decoder architecture was designed for translation, where you naturally have pairs (source sentence, target sentence). But modern LLMs do much more: conversation, code, reasoning, summarization, creation. Decoder-only adapts to all of that with a single architecture.
+
+T5, BART, and Flan-T5 keep the encoder-decoder and remain excellent for targeted transformation tasks (summarization, translation), but they represent a minority of the current ecosystem.
+
+## Why this matters
+
+The encoder-decoder architecture reveals the **three key components** of the Transformer:
+1. The **encoder**: analyze and understand
+2. **Cross-attention**: connect encoder and decoder
+3. The **decoder**: generate with context
+
+Understanding these individual parts helps you understand how **every** Transformer model works, decoder-only or not.
+
+## Key takeaways
+
+1. **Encoder** = comprehension (bidirectional, everything sees everything)
+2. **Decoder** = generation (masked, only looks at the past)
+3. **Cross-attention** = the connection between them (decoder looks at source)
+4. **Teacher forcing** = fast parallel training
+5. **Auto-regression** = slow inference, token by token
+6. **Decoder-only** = modern LLM standard (GPT, LLaMA)

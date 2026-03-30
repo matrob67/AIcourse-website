@@ -1,0 +1,279 @@
+---
+title: "Overfitting and Underfitting: Diagnosing and Fixing"
+description: "Why your model fails: too simple or too memorized? How to recognize and fix each case."
+---
+
+## Introduction: Two Ways to Fail
+
+Your model can fail in **two completely opposite ways**.
+
+**Underfitting**: the model is too simple for the data. It doesn't capture the true patterns. Training error is **high**.
+
+**Overfitting**: the model is too complex. It memorizes the noise and specifics of the training data. Training error is **low** but validation error is **very high**.
+
+<ImageWithSource
+  src="/images/admin/img-1774007963495.png"
+  alt="Visual example of overfitting"
+  source="https://www.researchgate.net/figure/Overfitting-and-underfitting-of-ANN-models-Geron-2019_fig2_371793453"
+  caption="This image illustrates the phenomenon of overfitting where the model, being too complex, fits the training data (in red) perfectly but fails to generalize (in blue). The red curve follows the training points too closely, including their noise."
+  size="large"
+/>
+
+This is the **bias-variance** trade-off: the foundation of all statistical learning.
+
+## Bias vs Variance
+
+<ImageWithSource
+  src="/images/admin/img-1774008031084.png"
+  alt="Bias-variance quadrant diagram"
+  source="https://www.researchgate.net/figure/Le-compromis-entre-le-biais-et-la-variance_fig2_323141508"
+  caption="This diagram illustrates the four possible combinations of bias and variance in a machine learning model. The black dots represent the training data, while the concentric circles show the model's ability to fit the data."
+  size="large"
+/>
+
+### Bias
+
+This is the model's **systematic error**. It makes overly simplistic assumptions and sticks with them.
+
+Example: you predict that all Paris apartments cost 400k euros (your average), regardless of square footage. That's biased: you're systematically off.
+
+Cause: model too simple for the data.
+
+### Variance
+
+**Sensitivity to small variations** in the data. The model changes drastically if you slightly change the data.
+
+Example: a very deep decision tree learns individual noise. Change one training sample = completely different tree.
+
+Cause: model too complex, overfitting.
+
+### The Error Decomposition
+
+$$\text{Total Error} = \text{Bias}^2 + \text{Variance} + \text{Irreducible Noise}$$
+
+Ideal: small bias + small variance.
+
+Underfitting: high bias + low variance (systematically wrong but stable).
+
+Overfitting: low bias + high variance (fits the training data but unpredictable).
+
+<Callout type="info" title="The target-shooting analogy">
+High bias, low variance = all shots to the left (grouped but misplaced).
+Low bias, high variance = shots scattered around the target.
+Ideal = all shots in the center.
+</Callout>
+
+## Recognizing Underfitting
+
+**Signs**:
+- High training error. The model can't even learn its own data well.
+- Validation error similar to training error. No gap.
+- Poor overall performance. 50% accuracy on a 2-class classification?
+
+**Solutions**:
+- Increase complexity: more layers, more neurons
+- Add richer features
+- Reduce regularization (the "brakes" on complexity)
+- Train longer
+- Try a better architecture
+
+## Recognizing Overfitting
+
+**Signs**:
+- Large gap between training and validation error. Train = 2%, Validation = 15%.
+- Validation error that goes back up over epochs. At first it goes down, then up.
+- Perfect in the lab, terrible in production. Your numbers are excellent, but the user sees a model that doesn't work.
+
+<Callout type="warning" title={"A little overfitting is normal and desirable"}>
+Zero overfitting = probably underfitting. You want a **small** amount of overfitting: complex enough for the real patterns, not too much for the noise. It's an **art**, not a science.
+</Callout>
+
+## Learning Curves: Your Best Diagnostic Tool
+
+Plot two curves: training error and validation error over epochs.
+
+### Underfitting
+
+Both curves stay high and close together. Adding more data? It won't help (there isn't enough capacity to learn).
+
+### Overfitting
+
+Training error goes down (the model is learning). Validation error goes back up (overfitting to noise). Growing gap = classic signal.
+
+### Ideal
+
+Both curves go down together and stabilize low, with a small gap (0.5-5% max).
+
+<ImageWithSource
+  src="/images/admin/img-1774008117562.png"
+  alt="Error curves as a function of model complexity"
+  source="https://aiml.com/what-is-overfitting/"
+  caption="This graph illustrates the evolution of training and test errors as a function of model complexity. In the ideal zone, both errors are low and close together, indicating a good balance."
+  size="large"
+/>
+
+## Train/Validation/Test: The Three Sacred Sets
+
+Never train and evaluate on the same data. That's cheating.
+
+<ImageWithSource
+  src="/images/admin/img-1774008183135.png"
+  alt="Splitting data into training, validation, and test sets"
+  caption="This image illustrates the need to divide the available data into three distinct sets: the training set for learning the model, the validation set for tuning hyperparameters, and the test set for evaluating final performance. This prevents evaluation bias and overfitting."
+  size="large"
+/>
+
+### Training Set (70-80%)
+
+Data on which the model learns. Weights are adjusted on this data.
+
+### Validation Set (10-15%)
+
+Data you look at **during** development. Used to:
+- Choose hyperparameters
+- Select the architecture
+- Decide when to stop training (early stopping)
+
+The model doesn't train on it, you just **observe** it.
+
+### Test Set (10-15%)
+
+Data you **only touch once** at the end. It's your honest estimate of true performance. Sacred. Never used for choosing hyperparameters.
+
+<Callout type="warning" title="Why three and not two?">
+If you use the same set to choose hyperparameters AND estimate performance, you'll bias optimistically. You end up choosing the model that wins on *that* set, not the best one. The untouched test set gives an honest estimate.
+</Callout>
+
+## Cross-validation: Using 100% of the Data
+
+When you have little data (< 10k), fixed splits are wasteful. Cross-validation uses everything.
+
+**k-fold cross-validation**:
+1. Split into k parts (typically 5 or 10)
+2. For each part i: train on the other k-1, evaluate on i
+3. Final performance = average of k evaluations
+
+Example: 5-fold
+| Fold | Training | Evaluation |
+|------|----------|------------|
+| 1 | Parts 2-5 | Part 1 |
+| 2 | Parts 1, 3-5 | Part 2 |
+| 3 | Parts 1-2, 4-5 | Part 3 |
+| 4 | Parts 1-3, 5 | Part 4 |
+| 5 | Parts 1-4 | Part 5 |
+
+Performance = average of the 5 results
+
+Advantage: every data point is used for learning (k-1 times) and for evaluation (1 time).
+
+Disadvantage: k times slower.
+
+## Practical Solutions Against Overfitting
+
+### 1. More Data
+
+The best solution if you can. More diversity makes memorization impossible.
+
+### 2. Data Augmentation
+
+Create variants of your data without actually creating truly new data.
+
+**Images**: rotation, horizontal flip, zoom, random crop, noise, brightness changes.
+
+**Text**: paraphrase, synonym substitution, back-translation (translate then translate back to keep the meaning while varying the phrasing).
+
+**Tabular data**: add Gaussian noise, use SMOTE (Synthetic Minority Oversampling Technique) to oversample rare classes.
+
+Smart augmentation (RandAugment, AutoAugment) automatically chooses the best augmentations.
+
+<ImageWithSource
+  src="/images/admin/img-1774008251457.png"
+  alt="Example of image augmentation for AI"
+  source="https://www.ibm.com/fr-fr/think/topics/data-augmentation"
+  caption="This image illustrates different data augmentation techniques applied to an original cat image. These transformations help enrich a dataset to improve the performance of artificial intelligence models."
+  size="large"
+/>
+
+### 3. Regularization
+
+Add penalties that force the model to stay simple.
+
+**L2 (weight decay)**: penalizes large weights.
+
+**Dropout**: randomly deactivates neurons.
+
+<ImageWithSource
+  src="/images/admin/img-1774008306012.png"
+  alt="Comparison of a standard neural network and one with dropout"
+  source="https://medium.com/@amarbudhiraja/https-medium-com-amarbudhiraja-learning-less-to-learn-better-dropout-in-deep-machine-learning-74334da4bfc5"
+  caption="The image shows a standard neural network (left) and the same network after applying the dropout technique (right), where some neurons are randomly deactivated to prevent overfitting."
+  size="large"
+/>
+
+**Early stopping**: stop before the model starts overfitting.
+
+(Details in the next section.)
+
+### 4. Early Stopping
+
+Super simple and super effective. Monitor the validation error during training. As soon as it stops going down (or starts going back up), stop and keep the best weights.
+
+- **Epoch 1-10**: validation error decreases (keep the weights)
+- **Epoch 11-15**: validation error goes back up (stop, use epoch 10 weights)
+
+Zero computational overhead. Almost always helps.
+
+<ImageWithSource
+  src="/images/admin/img-1774008385282.png"
+  alt="Generalization error curve as a function of capacity"
+  caption="As a model begins training, highly biased and low in complexity, both the training error and validation error will decrease.  This can be seen in the underfitting zone when looking at the bias and generalization.  If the model trains for long enough the a very complex and unbiased model can be learned but the variance or error increases as seen in the overfitting zone.  The validation set is used in conjunction with early stopping to determine the optimal training zone for a model."
+  size="large"
+/>
+
+### 5. Reduce Complexity
+
+Fewer layers, fewer neurons, simpler model.
+
+Warning: too simple = underfitting.
+
+### 6. Ensembles
+
+Combine multiple models, by voting (majority vote) or stacking. This reduces variance automatically.
+
+Example: 10 decision trees instead of 1. The random variation of one is canceled out by the others.
+
+<ImageWithSource
+  src="/images/admin/img-1774008478930.png"
+  alt="Diagram of ensemble learning process with 3 learners"
+  source="https://www.geeksforgeeks.org/machine-learning/ensemble-classifier-data-mining/"
+  caption="The image illustrates the principle of ensemble learning where multiple models (learners) are trained on bootstrapped samples of the dataset. Their individual predictions are combined to form a more robust final prediction, reducing the impact of each model's random variation."
+  size="large"
+/>
+
+## Double Descent: Counter-intuitive
+
+Recent research: very large models (over-parameterized) can generalize **better** than intermediate-sized models. This is the "double descent" phenomenon:
+
+The error increases then decreases again. This phenomenon explains why giant LLMs (Large Language Models) with billions of parameters work so well despite their enormous over-parameterization.
+
+<ImageWithSource
+  src="/images/admin/img-1774008559102.png"
+  alt="Training and test error curve"
+  source="https://www.researchgate.net/figure/The-double-descent-phenomenon-for-highly-overparametrized-networks_fig1_346651475"
+  caption="This image illustrates the overfitting phenomenon where the training error decreases but the test error increases after a certain interpolation threshold. This shows why very large models (like GPTs) can perform well despite their over-parameterization."
+  size="large"
+/>
+
+## Quick Diagnostic Checklist
+
+1. Plot training error vs validation error
+2. Large train/validation gap? -> **Overfitting**. Regularize, add data, reduce complexity
+3. High training error? -> **Underfitting**. Increase capacity, train longer
+4. Both low and close? -> **Good fit**. Validate on test set
+5. Check your data: labeling errors, weird outliers create an error ceiling
+
+Quickly diagnosing the problem = the skill that separates experienced practitioners from beginners.
+
+## Why This Matters
+
+Overfitting and underfitting are the two main enemies of applied ML. Until you master how to recognize and fix them, you're building blind. It's the most important thing after having data.

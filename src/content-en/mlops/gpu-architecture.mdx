@@ -1,0 +1,115 @@
+---
+title: "GPU Architecture: CUDA Cores, Tensor Cores, and HBM"
+description: "Why GPUs dominate deep learning. Internal architecture, HBM memory, Tensor Cores. Hardware explained for humans."
+---
+
+## Why GPUs dominate deep learning
+
+Before diving into the specs, let's understand **why** GPUs are such a big deal. Deep learning, at its core, is all about **matrix multiplications**. Millions of multiply-add operations, all independent of each other. And independent means parallelizable.
+
+<Callout type="info" title={"The analogy to get it"}>
+Imagine you need to grade a million exam papers. A CPU is a brilliant professor who grades 1,000 papers per hour: it takes 1,000 hours. A GPU is 10,000 less experienced graders who each grade 10 papers per hour: together, they finish in 100 hours. For deep learning, the number of hands beats individual talent.
+</Callout>
+
+A CPU has a few ultra-powerful, versatile cores (8-64). A GPU like the NVIDIA H100 packs **16,896 CUDA cores** and **528 Tensor Cores**. Each individual core is weaker than a CPU core, but 16,000 cores running in parallel on the same matrix changes everything. In concrete terms, an H100 reaches ~67 TFLOPS (tera floating-point operations per second) in standard compute, versus ~1-2 TFLOPS for a good CPU. That's a **50x** factor in raw brute force alone.
+
+## Internal structure of a GPU
+
+### Streaming Multiprocessors (SM): the building blocks
+
+Think of a GPU as an office building. Each floor is a **Streaming Multiprocessor** (SM), a nearly self-contained unit with its own resources. The H100 has 132 of these "floors."
+
+In each SM, you'll find:
+- **128 CUDA cores**: the generalist workers, handling FP32 floating-point computation
+- **4 Tensor Cores** (4th generation): the matrix specialists, more on these in a moment
+- **64 INT32 cores**: for integer operations
+- **Shared memory** and **L1 cache**: the local desk, ultra-fast, accessible by all threads in the SM
+
+The GPU distributes tasks across its 132 SMs, and each one works on its chunk in parallel. This architecture is what makes scaling so natural.
+
+### CUDA Cores: the generalists
+
+**CUDA cores** do the basic work: one floating-point operation per clock cycle (an addition, a multiplication). In deep learning, they handle everything that isn't a large matrix multiplication:
+
+- **Element-wise** operations: activation functions (ReLU, GELU), normalization, dropout
+- **Reductions**: sums, averages, softmax
+
+They're versatile, but for the heart of deep learning (matrix multiplications, ~95% of a Transformer's compute), you need specialists.
+
+### Tensor Cores: the real engine of deep learning
+
+This is where it gets interesting. A CUDA core multiplies **two numbers** per cycle. A **Tensor Core** multiplies **two entire matrices** (typically 4x4 or 8x8) in a single cycle. Specifically, it computes **D = A x B + C** where A, B, C, D are matrices, not scalars.
+
+The performance difference is dramatic on the H100:
+- CUDA cores in FP32: ~67 TFLOPS
+- Tensor Cores in FP16: ~990 TFLOPS
+- Tensor Cores in FP8: ~1,979 TFLOPS
+
+Tensor Cores are **15 to 30 times faster** for matrix multiplications. In practice, this means that when you train a Transformer, the vast majority of computation goes through these Tensor Cores. If you're not using a framework that leverages them (PyTorch with `torch.float16` or `torch.bfloat16`), you're leaving 95% of the power on the table.
+
+<Callout type="paper" title="The reduced precision revolution">
+The H100 supports a full range of numerical formats: FP64, TF32, BF16, FP16, FP8, INT8. **FP8** is the most radical: it doubles throughput compared to FP16, with virtually no precision loss thanks to dynamic scaling. In practice, this means you can train or serve a model **twice as fast** without sacrificing quality. This is what makes ever-larger models economically viable.
+</Callout>
+
+## HBM memory: the critical bottleneck
+
+### Why memory matters more than compute
+
+It might seem counterintuitive, but in deep learning, it's often **memory** that limits you, not compute power. Why? Because all your parameters, activations, gradients, and optimizer states must fit **simultaneously** in GPU memory.
+
+Concrete example: a 70-billion-parameter model in FP16 -- its weights alone weigh **140 GB**. The H100 has 80 GB of memory. It doesn't fit. So you have to spread the model across multiple GPUs, which complicates everything (inter-GPU communication, synchronization, etc.).
+
+### High Bandwidth Memory (HBM): stacked memory
+
+**HBM** (High Bandwidth Memory) is the technology that makes all of this possible. Unlike traditional RAM (GDDR, soldered around the processor), HBM is **stacked vertically** in layers, right next to the GPU. Imagine pancakes of memory stacked on top of each other: the data path is much shorter, so throughput explodes.
+
+The evolution is spectacular:
+- **HBM2** (A100): 80 GB, 2 TB/s bandwidth
+- **HBM3** (H100): 80 GB, 3.35 TB/s bandwidth
+- **HBM3e** (B200): 192 GB, 8 TB/s bandwidth
+
+Bandwidth **doubles with each generation**. And it's bandwidth, not TFLOPS, that determines your inference speed.
+
+### What this concretely means for LLM inference
+
+When an LLM generates text token by token, the GPU must re-read nearly all the weights for each token. Let's do the math: 140 GB of weights, 3.35 TB/s bandwidth on H100 = **~24 tokens/second** theoretical maximum. No matter if your GPU has 1,000 or 10,000 TFLOPS, it's the memory read speed that sets the ceiling.
+
+That's why two techniques are absolutely critical in production:
+- **Quantization**: reducing weights to INT8 or INT4 to divide their size by 2 or 4 (and therefore multiply throughput by the same factor)
+- **Batching**: processing multiple requests simultaneously to amortize the cost of reading weights across multiple users
+
+## The memory hierarchy: from fastest to slowest
+
+A GPU has multiple levels of memory, like drawers increasingly far from your desk. The closer it is, the faster it is, but the smaller it is:
+
+1. **Registers** (~20 TB/s): each thread's private memory, tiny but instant
+2. **Shared memory / L1** (~19 TB/s): shared within an SM, a few dozen KB
+3. **L2 cache** (~12 TB/s): shared across all SMs, a few MB
+4. **HBM** (~3.35 TB/s on H100): main memory, 80 GB
+5. **CPU RAM via PCIe/NVLink** (~64-900 GB/s): CPU-GPU transfers, the slowest
+
+Between top and bottom, there's a **100x** factor. A well-written algorithm keeps its data in the fast levels instead of fetching from HBM every operation.
+
+<Callout type="tip" title={"FlashAttention: the optimization that exploits memory hierarchy"}>
+FlashAttention reorganizes the attention computation to keep data in the SM's **shared memory** (SRAM), instead of making round trips to HBM. Result: **2-4x faster** and much less memory-hungry. If you're using Transformers in 2024+, FlashAttention is enabled by default in most frameworks. But understanding *why* it works (the memory hierarchy) will help you spot other optimization opportunities.
+</Callout>
+
+## SIMT: the GPU execution model
+
+One last important architectural concept. GPUs operate in **SIMT** (Single Instruction, Multiple Threads) mode: threads are grouped into **warps** of 32 that all execute the same instruction at the same time, but on different data. It's like a choir where everyone sings the same note, but each person holds a different sheet of music.
+
+The trap: if your code has an `if/else` and some threads in the warp take the `if` while others take the `else`, the GPU executes both branches **sequentially**. The inactive threads wait. This is **warp divergence**, and it can cut your performance in half.
+
+That's why deep learning operations are designed to be uniform: the same operation applies to every element of a tensor, without branching. This regularity is exactly what GPUs love.
+
+## Metrics for choosing a GPU
+
+When comparing GPUs for ML, here are the metrics to look at, in priority order:
+
+- **Tensor Core TFLOPS**: the raw power for matrix multiplications
+- **HBM capacity**: does your model fit in memory?
+- **HBM bandwidth**: your actual LLM inference speed
+- **Interconnect (NVLink)**: multi-GPU communication speed, critical for distributed training
+- **TDP** (Thermal Design Power): power consumption, which determines your datacenter cost
+
+The key concept here is **arithmetic intensity**: the ratio of compute performed to data read from memory. If your workload is **memory-bound** (like LLM inference), HBM bandwidth is your limit. If it's **compute-bound** (like training with large batches), it's the TFLOPS. For LLM inference, you're almost always memory-bound. Keep that in mind when choosing your hardware.

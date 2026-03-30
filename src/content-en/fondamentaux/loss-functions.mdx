@@ -1,0 +1,185 @@
+---
+title: "Loss Functions: The Signal That Guides Learning"
+description: "Understanding MSE, cross-entropy, triplet loss, and more. How to choose the right loss for your task."
+---
+
+## Introduction: The Loss is Your Objective
+
+The **loss function** (or cost function) is the single number that tells your model "how wrong you are." A high loss means the model is doing poorly, a low loss means it's doing good work. This is the number the optimizer tries to minimize at each training step.
+
+This choice is **crucial** because the loss literally defines what the model learns to optimize. Two different losses on the same data and the same architecture will produce two models with completely different behaviors.
+
+Let's take a concrete example: a loss that penalizes all errors uniformly (MAE) will produce a "balanced" model that doesn't get thrown off by extreme cases. A loss that crushes large errors (MSE) will produce a model obsessed with the hard cases, even at the cost of sacrificing some accuracy on the easy ones. Same data, same architecture, opposite behaviors.
+
+## MSE: For Predicting Numbers
+
+**Mean Squared Error**. For regression (predicting a continuous number).
+
+$$
+\text{MSE} = \frac{1}{n} \sum_{i=1}^{n} (\hat{y}_i - y_i)^2
+$$
+
+Example: you're predicting the price of a house.
+- House 1: you say $400k, it's $400k. Error = 0. Contribution to MSE = 0.
+- House 2: you say $500k, it's $450k. Error = $50k. Contribution = ($50k)^2 = 2.5 billion.
+- House 3: you say $405k, it's $400k. Error = $5k. Contribution = ($5k)^2 = 25 million.
+
+<ImageWithSource
+  src="/images/admin/img-1774018267973.png"
+  alt="Illustration of linear regression and mean squared error"
+  sourceUrl="https://encord.com/glossary/mean-square-error-mse/"
+  size="medium"
+/>
+
+### Why the Square?
+
+The square **disproportionately** penalizes large errors. An error of 10 contributes 100 times more to the loss than an error of 1 ($10^2 = 100$ vs $1^2 = 1$). This is a double-edged property.
+
+It's an **advantage** when large errors are catastrophic. If you're predicting a house price, an error of $100k is far more serious than an error of $5k, and the square reflects this reality by penalizing it 400 times more.
+
+It's a **disadvantage** when your data contains **outliers** (aberrant values). A single $10 million apartment in your dataset will completely dominate the MSE and force the model to sacrifice its accuracy on all other examples just to reduce that single extreme error.
+
+### Variant: MAE
+
+**Mean Absolute Error**:
+
+$$
+\text{MAE} = \frac{1}{n} \sum_{i=1}^{n} |\hat{y}_i - y_i|
+$$
+
+No squaring, the penalty is linear. An error of 10 is only worth 10 times an error of 1, not 100 times. It's much more robust to outliers: an aberrant value will have a proportional impact, not an explosive one.
+
+In practice, there's also the **Huber loss** (or Smooth L1), which combines the best of both worlds: it behaves like MSE for small errors (smooth gradient near zero) and like MAE for large ones (no explosion from outliers). It's an excellent default choice when you're not sure about the distribution of your errors.
+
+<ImageWithSource
+  src="/images/admin/img-1774018341811.png"
+  alt="Illustration of the MAE loss function"
+  sourceUrl="https://sefidian.com/2022/08/18/a-guide-on-regression-error-metrics-with-python-code/"
+  size="medium"
+/>
+
+## Cross-Entropy: For Classification
+
+### Binary Cross-Entropy (2 classes)
+
+For classifying between 2 categories (spam vs not spam, cat vs not cat).
+
+$$
+\text{BCE} = -\left[ y \cdot \log(\hat{y}) + (1 - y) \cdot \log(1 - \hat{y}) \right]
+$$
+
+Here, $y$ is the true class (0 or 1), and $\hat{y}$ is the probability predicted by the model (between 0 and 1, output of a sigmoid activation).
+
+The beauty of this formula: only the term corresponding to the true class "counts." If $y = 1$, the loss equals $-\log(\hat{y})$. If the model predicts $\hat{y} = 0.99$ (confident and correct), $-\log(0.99) = 0.01$, nearly zero. If the model predicts $\hat{y} = 0.01$ (confident and **wrong**), $-\log(0.01) = 4.6$, a huge penalty.
+
+**Why not MSE for classification?** With MSE and a sigmoid activation, when the model predicts 0.01 for a true value of 1, the gradient is proportional to $2 \times (0.01 - 1) \times \sigma'(...)$, and the sigmoid derivative is nearly zero in that region. The model is very far from the right answer but receives a tiny gradient --- it learns almost nothing.
+
+With cross-entropy, the gradient remains strong even when the model is confidently wrong. That's exactly what we want: brutally penalize the model when it's confident AND wrong.
+
+### Categorical Cross-Entropy (3+ classes)
+
+The natural extension of BCE for 3 or more classes (dog, cat, bird, etc.).
+
+$$
+\mathcal{L} = -\sum_{c=1}^{C} y_c \cdot \log(\hat{y}_c)
+$$
+
+The model produces a raw score (logit) for each class. A softmax converts these scores into probabilities that sum to 1. The loss only penalizes the probability assigned to the correct class: if the true class is "cat" and the model assigns it 95% probability, the loss is low. If it only assigns 5%, the loss is huge.
+
+<Callout type="info" title="Stable Implementation">
+Never combine softmax then log separately. Use `cross_entropy_with_logits` or `log_softmax`. It's mathematically equivalent but numerically more stable (avoids the log of tiny numbers).
+</Callout>
+
+## Contrastive Loss: Learning Similarity
+
+Sometimes you don't want the model to predict a class or a value. You want it to learn a **representation space**: similar things end up close together, different things end up far apart. This is the foundation of recognition and similarity search systems.
+
+Use cases:
+- Face recognition: embeddings of two photos of the same face should be close, even if lighting conditions change
+- Image similarity search: the query and relevant results should be close in the space
+- Text embeddings: two sentences that mean the same thing should be close
+
+$$
+\mathcal{L} = (1 - y) \cdot d^2 + y \cdot \max(0, m - d)^2
+$$
+
+Where $d$ is the **Euclidean distance between the embeddings of the two examples in the latent space** (the representation space learned by the model), $y$ equals 0 if the elements are from the same class and 1 otherwise, and $m$ is the **margin** --- the minimum distance you want to enforce between elements of different classes.
+
+The formula is asymmetric, and that's intentional:
+- **Similar pairs** ($y = 0$): the second term cancels out, leaving $d^2$. You directly minimize the distance between the two embeddings --- you pull them as close as possible.
+- **Different pairs** ($y = 1$): the first term cancels out, leaving $\max(0, m - d)^2$. You only penalize if the distance $d$ is less than the margin $m$. If the two embeddings are already at distance $d > m$, the $\max$ gives 0 and the loss is zero --- they're considered "far enough" and you stop pushing. No need to push them infinitely far apart, they just need to be distinct enough.
+
+## Triplet Loss: Training with Triplets
+
+Variation: take 3 examples: the **anchor**, a **positive** (same class), and a **negative** (different class).
+
+$$
+\mathcal{L} = \max\left(0,\ d(a, p) - d(a, n) + m\right)
+$$
+
+Where $d(a, p)$ is the distance between the anchor and the positive, $d(a, n)$ the distance between the anchor and the negative, and $m$ the safety margin.
+
+Forces the anchor to be closer to the positive than to the negative. If it already succeeds, loss = 0. If it fails, penalty.
+
+### The Challenge
+
+The choice of triplets is **crucial**. Triplets that are too easy (negative so far away it's easily detected) teach nothing.
+
+The good triplets are the hard negatives: negative examples that look very similar to the positive but don't belong to the same class. These are the ones that force the model to refine its representations.
+
+## Focal Loss: When a Class is Rare
+
+Classic problem: object detection. 99.9% of image regions contain nothing. A dumb model that predicts "nothing" everywhere achieves 99.9% accuracy.
+
+Useless.
+
+**Focal Loss** reduces the importance of cases that are **easy to classify correctly**:
+
+$$
+\mathcal{L} = -(1 - \hat{y})^\gamma \cdot \log(\hat{y})
+$$
+
+The modulation factor $(1 - \hat{y})^\gamma$ is the key. Here's why it works:
+- **When the model is confident and correct** ($\hat{y}$ close to 1): $(1 - \hat{y}) \approx 0$, so $(1 - \hat{y})^\gamma \approx 0$. The factor collapses and so does the loss. Concrete example: if $\hat{y} = 0.95$ and $\gamma = 2$, the factor equals $(0.05)^2 = 0.0025$, the loss is divided by 400 compared to standard cross-entropy.
+- **When the model is wrong** ($\hat{y}$ close to 0): $(1 - \hat{y}) \approx 1$, so $(1 - \hat{y})^\gamma \approx 1$. The loss stays at full strength, like a standard cross-entropy.
+- **The parameter $\gamma$** (typically 2) controls how aggressively this filtering works. $\gamma = 0$ gives standard cross-entropy. The higher $\gamma$ gets, the more aggressively the model ignores easy cases to focus on hard ones.
+
+Result: instead of drowning the learning signal under millions of trivial cases, the model concentrates its effort on the hard cases, the ones where it's actually wrong. It's like a teacher who stops asking questions the student already knows the answer to and focuses on their weak points.
+
+<Callout type="tip" title="Used Beyond Detection">
+Anywhere you have a massive class imbalance: fraud detection (99.9% legitimate), rare disease diagnosis, anomaly detection. Focal loss helps the model avoid becoming "lazy."
+</Callout>
+
+## InfoNCE: Modern Contrastive Learning
+
+Models like **CLIP** (Contrastive Language-Image Pre-training, which connects vision and text) and **SimCLR** (Simple Contrastive Learning of Representations, for self-supervised learning) use **InfoNCE** (Info Noise Contrastive Estimation).
+
+It's a cross-entropy applied to similarities between representations:
+
+$$
+\mathcal{L} = -\log \frac{\exp(\text{sim}(z_i, z_p) / \tau)}{\sum_{j} \exp(\text{sim}(z_i, z_j) / \tau)}
+$$
+
+Where $z_i$ is the representation (embedding) of the example being studied, $z_p$ is its **positive** (a similar example), $z_j$ iterates over all examples in the batch (positives and negatives), $\text{sim}$ is a similarity measure (typically cosine similarity), and $\tau$ is the **temperature**.
+
+The parameter $\tau$ (temperature) controls the "selectivity" of the distribution. With a low $\tau$, the softmax distribution becomes very peaked: only the most similar positive matters. With a high $\tau$, the distribution is smoother and the model learns more gently.
+
+The intuition is simple: it's a cross-entropy where the "classes" are the positive and negative pairs. The model learns to maximize similarity with the positive while minimizing similarity with all negatives in the batch simultaneously. Compared to triplet loss, InfoNCE is more stable because it uses all negatives in the batch in a single pass, giving a richer and less noisy learning signal.
+
+## Summary Table
+
+| Task | Loss to Use | Notes |
+|---|---|---|
+| Predict a continuous number | MSE, MAE, or Huber | MSE by default, MAE if outliers |
+| 2 classes | Binary cross-entropy | With sigmoid activation at output |
+| 3+ classes | Categorical cross-entropy | With softmax at output |
+| Learn embeddings | Contrastive, Triplet, InfoNCE | InfoNCE is modern and stable |
+| Very rare class (extreme imbalance) | Focal loss | Ignores easy cases |
+
+<Callout type="tip" title={"The Loss Choice Can Outperform the Architecture"}>
+A good loss allows even simple networks to compete with complex ones. A bad loss destroys the best network. This is an active area of research, especially in self-supervised learning.
+</Callout>
+
+## Why This Matters
+
+The loss function is the objective you formally declare to the model. It's literally the only signal it receives to improve. A bad loss choice, and the model optimizes the wrong thing: it performs well in training, but fails in production because it never learned what actually matters. Taking the time to choose the right loss for your task is often more decisive than searching for a better architecture.

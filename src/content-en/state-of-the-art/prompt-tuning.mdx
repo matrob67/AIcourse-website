@@ -1,0 +1,113 @@
+---
+title: "Prompt Tuning: Learned Soft Prompts"
+description: "Prompt tuning simplifies prefix tuning by adding trainable embeddings only at the model's input, offering a minimal PEFT method that proves competitive at scale."
+---
+
+
+
+## The Ultra-Simplified Version of Prefix Tuning
+
+Prefix tuning adds vectors at **every layer** of the Transformer. It's effective, but it complicates the implementation and multiplies the parameters. Prompt tuning asks a more radical question: what if you added these vectors **only at the beginning of the input** and let the model propagate them naturally through its layers?
+
+That's exactly it. Trainable vectors concatenated before your input text, period. The rest of the model is completely frozen.
+
+<ArxivLink id="2104.08691" title="The Power of Scale for Parameter-Efficient Prompt Tuning (Lester et al., 2021)" />
+
+<Callout type="info" title={"The Core Idea"}>
+You add $k$ "virtual tokens" at the beginning of the sequence. These tokens don't exist in the vocabulary: they're continuous vectors that the model learns through gradient descent. Everything else in the model is frozen. You train only these $k$ vectors.
+</Callout>
+
+## How It Works Concretely
+
+For a standard input $x = [x_1, x_2, \ldots, x_n]$, prompt tuning creates:
+
+$$x' = [p_1, p_2, \ldots, p_k, x_1, x_2, \ldots, x_n]$$
+
+The vectors $p_1 \ldots p_k$ have dimension $d$ (the model's embedding dimension). These are your **only** trainable parameters. The model treats these vectors exactly like real token embeddings, propagates them through all its layers, and generates its response conditioned on them.
+
+### A Negligible Number of Parameters: $k \times d$
+
+That's the whole calculation. For $d=4096$ and $k=20$ soft tokens:
+- **81,920 parameters** (~82K)
+- That's several orders of magnitude below LoRA
+- It fits in a file of a few hundred bytes
+
+### Initialization Matters a Lot
+
+How you initialize these vectors makes a real difference:
+- **Random**: uniform or Gaussian initialization. It works, but converges slowly.
+- **From real words**: initialize each soft token with the embedding of a task-relevant word. The model starts with a useful "hint."
+- **Label-aware**: use the embeddings of the task's labels (e.g., "positive," "negative" for sentiment analysis).
+
+<Callout type="tip" title={"Smart Initialization Speeds Everything Up"}>
+Initializing soft tokens with embeddings of relevant words (for example "positive" and "negative" for a sentiment task) significantly improves convergence, especially when you have little data. It's giving the model a good starting point rather than letting it search in the dark.
+</Callout>
+
+## The Key Discovery: The Scale Effect
+
+This is the result that made this paper famous. The authors observed that:
+
+**The larger the model, the closer prompt tuning gets to full fine-tuning.**
+
+On T5-XXL (11B parameters), 20 soft tokens are enough to match full fine-tuning on SuperGLUE, a demanding benchmark. On T5-Small (60M parameters), the gap is significant.
+
+Why? Because large models have internal representations so rich and expressive that simple "conditioning" via soft prompts is enough to steer them toward any task. It's like an expert chef: just give them a theme ("Japanese cuisine"), and they know what to do. A beginner needs a detailed recipe.
+
+<Callout type="paper" title={"The Scale Effect: A Fundamental Lesson"}>
+This result tells us something profound about large models: they don't need their weights modified to adapt. It's enough to "orient" them correctly. This is an emergent property of scale that has deep implications for how we think about LLM adaptation.
+</Callout>
+
+## Comparison with Other Methods
+
+| Method | Parameters | Layers Affected | Small Model | Large Model |
+|---|---|---|---|---|
+| Manual prompt | 0 | Input | Variable | Good |
+| Prompt tuning | $k \times d$ | Input only | Weak | Excellent |
+| Prefix tuning | $k \times d \times L \times 2$ | All | Medium | Good |
+| LoRA | $r \times (d+k) \times$ modules | Targeted | Good | Excellent |
+| Full fine-tuning | All | All | Excellent | Excellent |
+
+## The Concrete Advantages
+
+### 1. Extreme Compactness
+A soft prompt weighs a few KB. You can store **10,000 different tasks** on a regular disk without any problem. Impossible with LoRA (a few MB per task) or full fine-tuning (GB per copy).
+
+### 2. Zero Architectural Modification
+The model stays strictly intact. You concatenate the soft prompts to the input, and you're off. No added layers, no hooks, no modifications to the forward pass.
+
+### 3. Mixing and Composition
+You can combine multiple soft prompts: concatenate the "summary" one with the "formal style" one to get a formal summary. Or do a weighted average of multiple prompts for robustness.
+
+### 4. Robustness to Distribution Shifts
+Since the model weights don't move at all, the model better retains its general capabilities. There's less risk of catastrophic forgetting than with fine-tuning.
+
+## Limitations
+
+### Ineffective on Small Models
+Below 1 billion parameters, prompt tuning is clearly inferior to LoRA. Small models don't have rich enough representations for simple conditioning via soft prompts to suffice. In practice, aim for at least 3-7B for prompt tuning to be competitive.
+
+### Context Budget Consumed
+20 soft tokens might seem like little. But on a model with 2,048 tokens of context, that's 1% lost. On a modern model with 128K context, it's negligible. This problem is fading with newer architectures.
+
+<Callout type="warning" title="Zero Interpretability">
+Soft prompts don't correspond to any word in the vocabulary. You can't "read" what they encode. If your model behaves strangely, it's nearly impossible to diagnose whether the problem comes from the soft prompt or elsewhere. It's a black box inside the black box.
+</Callout>
+
+## Practical Use Cases
+
+### Massive Multi-Task Classification
+You have 100 classification tasks to serve with a single model. Each task has its own soft prompt of a few KB. The model in memory is shared. This is the dream scenario.
+
+### Per-User Personalization
+Each user can have their soft prompt learned from their past interactions, encoding their style, tone, and format preferences. Storage is negligible: 82K parameters per user.
+
+### Prompt Ensembling
+Train 5 independent soft prompts for the same task, then combine their predictions (or average the soft prompts) for better robustness. It's nearly free ensembling in terms of memory.
+
+## Place in the Modern Ecosystem
+
+Prompt tuning has been largely overshadowed by LoRA for most practical use cases. But its conceptual contribution is immense: it demonstrates that LLM adaptation can be done **entirely in the input space**, without touching the weights. This idea still influences research on LLM control and steering today.
+
+---
+
+**TL;DR**: Prompt tuning is the most minimalist PEFT method: a few vectors at the input, nothing else. On large models (10B+), it rivals full fine-tuning. If you have a 70B model and a thousand tasks to serve, try prompt tuning before bringing out the heavy artillery.

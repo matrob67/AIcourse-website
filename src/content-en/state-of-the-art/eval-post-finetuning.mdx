@@ -1,0 +1,122 @@
+---
+title: "Post Fine-Tuning Evaluation"
+description: "Practical methods for verifying that a fine-tuned model works well and hasn't forgotten its initial knowledge."
+---
+
+## The Problem: The Model Forgets Everything
+
+Imagine a brilliant surgeon who decides to specialize in cardiology. After six intensive months, they've become excellent in cardiology, but they've forgotten how to treat a fracture. That's exactly what happens with fine-tuning: by forcing a model to excel at a specific task, you risk **breaking its general capabilities**. This is called "catastrophic forgetting."
+
+Post fine-tuning evaluation is the model's complete health check. You don't just verify that it does its new task well: you verify that it hasn't lost anything along the way.
+
+<Callout type="warning" title="The Low Loss Trap">
+A training loss that decreases does NOT mean everything is fine. It's like a student who only crammed past exam papers: their score goes up on that specific exam, but they may not have understood anything else in the curriculum. You need to test on multiple fronts, not just the target task.
+</Callout>
+
+## The Three Pillars of Evaluation
+
+To properly evaluate a fine-tuned model, you need to check three dimensions. Ignoring any one of them means flying blind.
+
+### 1. The Target Task (Does It Work?)
+
+This is the obvious test: does your model do well what you trained it for?
+
+- **Classification**: accuracy, F1-score (especially for imbalanced classes)
+- **Text generation**: BERTScore (semantic similarity via BERT embeddings), ROUGE --- Recall-Oriented Understudy for Gisting Evaluation (n-gram overlap)
+- **Instruction following**: AlpacaEval (test on 805 varied instructions, judged by an LLM)
+- **Code**: HumanEval (the model must solve 164 functional programming problems)
+
+### 2. General Capabilities (Has It Forgotten Everything?)
+
+This is the critical test that many people forget. Has your model retained its general knowledge?
+
+- **Reasoning**: ARC (AI2 Reasoning Challenge, 160 physics and scientific reasoning questions)
+- **Knowledge**: MMLU (Massive Multitask Language Understanding, 15,500 questions covering 57 domains, from law to biology)
+- **Mathematics**: GSM8K (Grade School Math 8K, elementary-level math problems that test step-by-step reasoning)
+
+### 3. Safety and Behavior (Has It Gotten Weird?)
+
+Fine-tuning can inadvertently "misalign" a model, making it more toxic or less cautious:
+
+- **Toxicity**: RealToxicityPrompts (200 prompts designed to provoke problematic responses)
+- **Refusal**: does the model still refuse dangerous requests, or has fine-tuning eroded its guardrails?
+
+<Callout type="info" title={"The Golden Rule: Test on at Least 3 Dimensions"}>
+Test your target task (primary objective), a general capabilities benchmark (MMLU, ARC), and a safety test. That's the minimum to detect major problems before deployment. It takes a few hours, but it can save weeks of debugging in production.
+</Callout>
+
+## Automatic Judges (LLM-as-Judge)
+
+Having a human read 1,000 responses is slow and expensive. The alternative: use a **more powerful LLM as a judge**. GPT-5.4 can score whether your fine-tuned Mistral's response is good, relevant, and well-structured.
+
+Concretely, you give the judge the original prompt, your model's response, and ask it to rate on a scale (for example 1 to 10) with justification.
+
+**Advantages:**
+- Fast (thousands of evaluations in minutes)
+- Inexpensive compared to human annotators
+- Replicable (same judging prompt = consistent results)
+
+**Pitfalls to know:**
+- **Position bias**: the judge often prefers the first response when comparing two
+- **Verbosity bias**: long, verbose responses are favored, even if a concise answer is better
+- **Self-preference**: GPT-5.4 rates responses that resemble GPT-5.4's style higher
+
+<Callout type="tip" title="Best Practices for LLM-as-Judge">
+Use a judge more powerful than your model (GPT-5.4 to evaluate Mistral-7B). Shuffle the order of responses to neutralize position bias. Ask the judge to explain its reasoning before giving its score. And ideally, use two different judges and compare.
+</Callout>
+
+## Detecting Catastrophic Forgetting
+
+The most reliable method: compare the model's scores **before and after** fine-tuning on the same benchmarks.
+
+| Benchmark | Before | After | Change |
+|---|---|---|---|
+| Your task | 45% | 85% | +40% |
+| MMLU | 62% | 61% | -1% |
+| GSM8K | 55% | 54% | -1% |
+
+A 1-2% drop is normal and acceptable (the model "forgets" a tiny bit while specializing). Beyond a 5% drop on a general benchmark, that's a warning sign. At 10%+, there's a real problem.
+
+**Concrete warning signs:**
+- Significant drop on MMLU (loss of factual knowledge)
+- Text becoming incoherent over long passages (loss of coherence)
+- More toxic or offensive responses than before (alignment erosion)
+- New hallucinations that didn't exist in the base model
+
+## Practical Tools
+
+### lm-evaluation-harness (The Swiss Army Knife)
+
+This is the reference tool for automated evaluation. It supports dozens of benchmarks and produces comparable results:
+
+```bash
+lm_eval --model hf \
+    --model_args pretrained=./my_finetuned_model \
+    --tasks mmlu,gsm8k,hellaswag \
+    --batch_size 8
+```
+
+A single command to test on three benchmarks. Results are directly comparable with those published by other teams.
+
+### Custom Evaluation
+
+Standard benchmarks don't always cover your specific use case. Create your own test set:
+- **20-50 examples** that the model has never seen during training
+- **Edge cases**: unusual texts, trick questions, malformed inputs
+- **Phrasing variants**: the same question asked in three different ways
+
+This custom set is often the most revealing, because it tests exactly what you'll ask the model in production.
+
+<Callout type="warning" title="Watch Out for Data Contamination">
+If your training data contains benchmark evaluation questions, your results are misleading: the model is reciting instead of reasoning. Systematically verify there's no overlap between training and evaluation. For critical cases, use private benchmarks or dynamic benchmarks that change regularly.
+</Callout>
+
+## Recommended 5-Step Workflow
+
+1. **Quick test** (1h): a few manual examples, visual verification that the model responds correctly
+2. **Quick benchmark** (1-2h): AlpacaEval or MT-Bench for a first overall score
+3. **Full battery** (4-6h): lm-eval-harness on MMLU, GSM8K, HellaSwag, ARC
+4. **Human review** (2-4h): an expert reads 50-100 responses and rates subjective quality
+5. **Robustness tests** (1h): unusual texts, extreme lengths, unseen languages, adversarial prompts
+
+In total, it's a day of work to be confident in your model. It's a modest investment compared to the cost of deploying a broken model in production.

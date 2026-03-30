@@ -1,0 +1,150 @@
+---
+title: "Continual Pre-Training and Domain Adaptation"
+description: "Continual pre-training techniques for adapting LLMs to new domains: training strategies, catastrophic forgetting prevention, and efficient adaptation."
+---
+
+## The Idea: You Don't Need to Start from Scratch
+
+A generalist LLM trained on the entire internet has broad but often superficial knowledge in specialized domains. You want a model that excels in medicine, law, or finance? Two options:
+
+1. **Pre-train from scratch**: very expensive (100K+ GPU-hours, months of compute, millions of dollars)
+2. **Continual pre-training (CPT)**: take an existing model and continue training it on data from the target domain. 10-100x cheaper.
+
+The analogy is simple: rather than building a house from scratch, you renovate an existing house by adding an extension. The foundations (general language knowledge), the plumbing (grammar, syntax), the electricity (basic reasoning) are already in place. You just add the specialized rooms.
+
+## Motivations for CPT
+
+### Domain Adaptation
+
+A generalist model can answer medical questions, but with the depth of a Wikipedia article. CPT roots it in specialized literature, allowing it to master the jargon, nuances, and reasoning specific to the domain.
+
+Real examples with measurable gains:
+
+| Model | Domain | CPT Budget | Benchmark Gain |
+|--------|---------|-----------|-----------------|
+| Code LLaMA | Code | 500B tokens | +30% on HumanEval |
+| BioMistral | Biomedical | 100B tokens | +25% on MedQA |
+| SaulLM | Law | 200B tokens | +40% on legal benchmark |
+
+These gains are considerable: +40% on a benchmark is the difference between a model that answers randomly and one that's genuinely useful for professionals.
+
+### Knowledge Updates
+
+LLMs have a training cutoff date. Your training data stops in April 2024, but the world keeps turning: new laws, new discoveries, new events. CPT can inject recent data without retraining everything --- like a software update rather than a complete reinstallation.
+
+### Multilingual Adaptation
+
+A model trained primarily in English poorly understands French medical or Chinese legal text. CPT on data in the target language is often more effective than automatically translating English data, because it captures the idiomatic expressions and cultural conventions specific to each language.
+
+## Basic Strategy for CPT
+
+### Key Hyperparameters
+
+| Parameter | Value | Justification |
+|---|---|---|
+| Learning rate | 10-50% of initial LR | More conservative to preserve knowledge |
+| Warmup | Short (a few hundred iterations) | The model is already well initialized |
+| Scheduling | Cosine or WSD | WSD preferred for continuation flexibility |
+| Techniques | Mixed precision BF16, FSDP/ZeRO | Standard memory optimization |
+
+Why a lower LR? Because you're working on an already-trained model. Updates that are too aggressive risk overwriting existing knowledge. It's the difference between tuning a musical instrument (small fine rotations) and taking it apart to rebuild it.
+
+### The Secret: Mix with Original Data
+
+<Callout type="tip" title={"Replay Buffer: The Most Effective Forgetting Prevention"}>
+The most important CPT technique: **mix** the new domain data with a sample of the original training data.
+
+Typical ratio: **70-80% domain data + 20-30% general data.**
+
+Why? The general data continuously "remind" the model of its base knowledge. Without this reminder, the model specializes at the expense of everything else --- it's like learning a new language while forgetting the previous one. The replay buffer maintains the balance.
+</Callout>
+
+### Volume of Data Needed
+
+| Objective | Tokens | Proportion of Pre-Training |
+|----------|--------|-------------------------------|
+| Light adaptation | 10-50B | 0.5-2% |
+| Medium adaptation | 50-200B | 2-10% |
+| Deep adaptation | 200B+ | 10%+ |
+
+Concrete example: to adapt LLaMA 7B to the medical domain, CPT on 100B tokens of PubMed + medical books + clinical guidelines produces a substantial adaptation. That's about 5% of the original training budget, but the gains on medical benchmarks are 15-25%.
+
+
+
+## Catastrophic Forgetting: The Main Danger
+
+### What Exactly Is It?
+
+The model specializes in the new domain but **loses** its general knowledge. Domain benchmark = clear improvement. Generalist benchmark = concerning degradation. It's like a general practitioner who specializes so much in cardiology that they forget how to treat a cold.
+
+### Concrete Manifestations
+
+- Loss of performance on general benchmarks (MMLU, HellaSwag)
+- Degradation of instruction following (the model no longer understands basic requests)
+- Reduction in language diversity (the model always uses the same specialized vocabulary)
+- Regression on minority languages (the model "forgets" languages poorly represented in CPT data)
+
+<Callout type="warning" title={"The Silence of Forgetting"}>
+Catastrophic forgetting can be **silent and insidious**. You observe your domain benchmark improving day by day, and everything seems fine. But if you don't actively monitor general benchmarks, you risk discovering too late that the model has lost 10% on MMLU. Golden rule: always monitor both --- domain benchmarks AND general benchmarks, at every checkpoint.
+</Callout>
+
+### Prevention Techniques
+
+**1. Data replay**: mix with original data. This is the simplest and most effective technique. If you remember only one thing from this section, let it be this.
+
+**2. Reduced learning rate**: conservative updates preserve existing knowledge while allowing new learning.
+
+**3. Elastic Weight Consolidation (EWC)**: penalizes modifications to weights that are important for previous tasks. The idea: certain weights are "critical" for general knowledge --- protect them.
+
+**4. Progressive freezing**: freeze the first layers (which encode universal linguistic features) and fine-tune only the last layers (which encode specific knowledge).
+
+**5. LoRA/PEFT**: use parameter-efficient adapters that add new capabilities without modifying the base model. No risk of forgetting since the original weights remain intact.
+
+## Complete Pipeline: From CPT to Specialty
+
+1. **Continual pre-training (CPT)**: raw domain data (books, articles, documents) --- the model absorbs the domain's vocabulary and patterns
+2. **Domain instruction tuning**: specialized (question, answer) pairs --- the model learns to respond in the expected format
+3. **Alignment**: RLHF/DPO on domain preferences --- the model aligns with professional standards
+4. **Evaluation**: general benchmarks (MMLU, etc.) + domain-specific benchmarks --- verify everything works
+
+### Concrete Example: Medical Adaptation
+
+| Phase | Content | Volume/Result |
+|---|---|---|
+| **CPT** | PubMed Central, medical books, clinical guidelines | 100B tokens (50B + 30B + 20B) |
+| **Instruction tuning** | Medical QA (USMLE), clinical cases, diagnosis | 10-50B tokens |
+| **Alignment** | RLHF with healthcare professional preferences | --- |
+| **Results** | MedQA / MedMCQA / MMLU | +15-20% / +12-18% / -2% (acceptable forgetting) |
+
+The -2% on MMLU is an acceptable trade-off: you lose very little in general knowledge for massive gains in medicine.
+
+<Callout type="paper" title="Empirical Results">
+Well-configured CPT-adapted models show 10-20% gains on domain-specific benchmarks while preserving 95%+ of general performance (when CPT includes a replay buffer). Without replay, general losses can reach 10-15%.
+</Callout>
+
+## Optimal Configuration
+
+### Recommended Hyperparameters
+
+- **Learning rate**: 1/10 to 1/5 of the original maximum training LR
+- **Warmup**: 1-5% of total steps
+- **Replay**: 20-30% of general data in each batch
+- **Monitoring**: evaluation on general + domain benchmarks at each checkpoint
+
+### Important Consideration: The Tokenizer
+
+<Callout type="warning" title="Vocabulary Extension">
+If the domain contains many specialized terms poorly covered by the original tokenizer (chemical names, rare medical terms, legal symbols), these terms will be split into inefficient sub-tokens. For example, "acetaminophen" could be tokenized into 4-5 sub-tokens instead of 1.
+
+Two options: extend the vocabulary (which requires initializing and training embeddings for new tokens, adding complexity), or accept sub-optimal tokenization and compensate with more data.
+</Callout>
+
+### Frequent Checkpointing
+
+Save the model regularly (every 1-5% of training). If you detect degradation on general benchmarks, you can roll back to an earlier checkpoint and adjust hyperparameters (reduce LR, increase replay). Without frequent checkpoints, degradation detected late can cost days of lost computation.
+
+## Summary
+
+Continual pre-training is the pragmatic and economical path for adapting LLMs to new domains without the cost of full pre-training (10-100x cheaper). The three keys to success: **replaying original data** to prevent catastrophic forgetting, a **reduced learning rate** for conservative updates, and **continuous monitoring** of both general and domain-specific benchmarks.
+
+It has become the standard method in the industry for creating specialized models, and empirical results show it's remarkably effective when done right.

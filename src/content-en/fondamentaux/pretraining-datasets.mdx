@@ -1,0 +1,119 @@
+---
+title: "Pre-training Datasets"
+description: "Common Crawl, The Pile, RedPajama, FineWeb: the massive datasets used to train LLMs and data mixing strategies."
+---
+
+## The Problem: Where Do You Find Enough Text to Learn?
+
+To pre-train a modern LLM (Large Language Model), you need amounts of text that defy comprehension. A model like LLaMA-3 was trained on **15 trillion tokens** -- roughly 11 trillion words (the average ratio being about 1.3 tokens per word). To give a sense of scale: if you read 1,000 words per minute, 24/7, it would take you 28,000 years to read that much.
+
+Where does all this text come from? And more importantly, how do you ensure it's high quality?
+
+
+
+## Common Crawl: A Photocopy of the Internet
+
+**Common Crawl** is a nonprofit organization that has been "photographing" the web since 2008. It sends bots to crawl billions of web pages, downloads the content, and makes it all freely available. Each month brings a new crawl of roughly 3 billion web pages, or 300 TB of raw data.
+
+It's the number one source for nearly all major training datasets. But here's the problem: the raw Internet is a disaster.
+
+<Callout type="warning" title={"The raw Internet is 80% garbage"}>
+Of the billions of crawled pages, the vast majority is: SEO spam, duplicates (the same article republished 500 times), poorly extracted HTML, ads, pornographic content, troll forums... After filtering, you typically keep 10 to 20% of the original crawl. The rest is discarded.
+</Callout>
+
+### The Cleaning Pipeline
+
+Turning Common Crawl into usable data is a colossal engineering effort:
+
+1. **Text extraction**: strip out HTML, JavaScript, navigation menus -- keep only readable text
+2. **Language detection**: sort by language to avoid mixing French, Arabic, and Japanese in the same document
+3. **Deduplication**: a technique called MinHash (a probabilistic hashing method) detects near-identical copies and keeps only one
+4. **Quality filtering**: simple heuristics (ratio of valid words, punctuation, sentence length) eliminate noise
+5. **Perplexity filtering**: a small pre-trained language model scores each text -- if the text is incoherent, it gets a poor score and is eliminated
+
+## The Major Datasets: A History of the Field
+
+### C4 -- The First Major Cleanup (Google, 2019)
+
+Google created **C4** (Colossal Clean Crawled Corpus) to train T5. The team applied aggressive filtering to Common Crawl: 750 GB of clean English text. Revolutionary at the time, now considered fairly basic in terms of quality.
+
+### The Pile -- Diversity as Strategy (EleutherAI, 2020)
+
+The open-source team EleutherAI understood something crucial: training only on web text produces a model that excels on web text... and nothing else. **The Pile** mixes 22 different sources:
+
+- Filtered Common Crawl (the web)
+- PubMed Central (biomedical articles)
+- ArXiv (scientific research)
+- GitHub (source code)
+- FreeLaw (American legal texts)
+- StackExchange (technical Q&A)
+- Wikipedia + Project Gutenberg (encyclopedia and classic books)
+
+<Callout type="tip" title="Why Diversity Is Crucial">
+A model trained only on web text knows how to talk like the web. It will be poor at code, scientific reasoning, and legal logic. Mixing very different sources produces a more versatile model that's often better across the board. The Pile validated this intuition and the entire industry followed suit.
+</Callout>
+
+### RedPajama -- Reproducing LLaMA in Open Source (2023)
+
+When Meta released LLaMA without publishing its training data, the open-source community wanted to reconstruct the dataset. **RedPajama** approximately reproduces LLaMA's recipe with 1.2 trillion tokens:
+
+| Source | Volume | Proportion |
+|---|---|---|
+| Filtered Common Crawl | 878 billion tokens | 73% |
+| C4 | 175 billion | 15% |
+| GitHub | 59 billion | 5% |
+| ArXiv | 28 billion | 2% |
+| Wikipedia | 24 billion | 2% |
+| Books | 26 billion | 2% |
+| StackExchange | 20 billion | 2% |
+
+### FineWeb -- The State of the Art (HuggingFace, 2024)
+
+**FineWeb** represents the best we can do today in web data filtering. HuggingFace applied an ultra-careful quality pipeline to 96 Common Crawl snapshots, yielding 15 trillion tokens of English text.
+
+The key innovation: **FineWeb-Edu**, a subset of 1.3 trillion tokens selected for their educational value. A classifier trained to rate the educational quality of text reviewed billions of documents and retained the best ones.
+
+<Callout type="paper" title="Quality Beats Quantity">
+HuggingFace demonstrated that a model trained on FineWeb-Edu (1.3 trillion high-quality tokens) often outperforms a model trained on a dataset 10 times larger but less well filtered. Less but better is a central lesson in the data domain.
+</Callout>
+
+## The Mix: How to Blend Sources
+
+Having quality data isn't enough. You need to decide in what **proportions** to mix the different sources. This "data mix" has a huge impact on what the model will be able to do.
+
+### The Typical Recipe
+
+- **Web (filtered Common Crawl)**: 60-80% -- the base, diverse and abundant
+- **Code (GitHub)**: 5-15% -- improves logical reasoning, even for non-code tasks
+- **Science (ArXiv, PubMed)**: 3-8% -- strengthens formal reasoning
+- **Books**: 3-5% -- long, well-structured texts that help with long-range coherence
+- **Wikipedia**: 2-5% -- dense and reliable factual knowledge
+
+### Upsampling: Seeing Good Texts Multiple Times
+
+The best sources are often the smallest. Wikipedia has 24 billion tokens -- tiny compared to Common Crawl's 878 billion. The solution: make it go through **3 to 5 passes** during training (you "upsample" it).
+
+<Callout type="warning" title="Repetition Has Its Limits">
+Beyond 4 to 8 repetitions of the same corpus, performance degrades. The model starts memorizing verbatim rather than generalizing. This is a serious problem: high-quality textual data is a finite resource.
+</Callout>
+
+## Ethical Concerns: The Industry's Great Discomfort
+
+### Copyright
+
+Many datasets contain books, news articles, and licensed code. Lawsuits are ongoing against OpenAI, Meta, and others. The dataset **Books3** (which included pirated books) was removed from The Pile following legal action. The question of the legality of training on copyrighted data remains unresolved.
+
+### Bias
+
+The web reflects society's biases -- and sometimes amplifies them. Models trained on this data reproduce stereotypes related to gender, ethnicity, and class. Filtering mitigates some problems, but no cleaning pipeline fundamentally solves the issue: biased data produces biased models.
+
+### Personal Data
+
+Names, addresses, phone numbers -- they're everywhere on the web. Filtering efforts try to remove them, but it's an impossible task to perform perfectly on trillions of tokens.
+
+
+## The Future Trend: Synthetic Data
+
+Researchers are starting to talk about a **data wall**: we're going to run out of high-quality human text. The solution being explored today is **synthetic data** -- text generated by existing LLMs to train the next generation.
+
+HuggingFace's **Cosmopedia** project, for example, generates synthetic textbooks at large scale. But watch out for **model collapse**: if models train on their own output cumulatively, their errors and limitations amplify from generation to generation -- like photocopies of photocopies that become increasingly blurry.

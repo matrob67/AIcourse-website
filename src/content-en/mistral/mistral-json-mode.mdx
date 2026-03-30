@@ -1,0 +1,139 @@
+---
+title: "JSON Mode and Structured Output"
+description: "Generating structured outputs with Mistral: json_object mode, json_schema, guaranteed format, and integration into data pipelines."
+---
+
+
+
+## JSON Mode: Forcing the AI to Speak Data, Not Prose
+
+You ask Mistral to extract information from an email. It responds with 3 paragraphs of explanations, then some JSON with a missing comma. Your code crashes. `JSON.parse()` screams. And this happens 500 times a day in production.
+
+JSON mode solves this problem at its root. It's a mechanism that forces the model to produce ONLY valid JSON. No excuses, no free-text explanations, just clean, structured data that your code can consume directly.
+
+### The Chaos of Unstructured Output
+
+By default, an LLM generates free-form text. That's its job. But in production, when that LLM is a cog in an automated processing chain, free-form text becomes a nightmare.
+
+**Broken JSON.** Missing commas, unclosed quotes, forgotten colons. Example: `{"name": "Alice", "age" 30}`. Your parser crashes, your pipeline stops, your monitoring explodes with alerts.
+
+**Unpredictable structure.** One request returns 5 fields, the next returns 10, with different names. Impossible to trust the format when it changes from one call to the next.
+
+**Parasite text.** The model wraps the JSON in text: "Here are the extracted data: ```json {...}```". Your code has to use regex or string splitting to extract the useful JSON. Fragile, ugly, and guaranteed to break eventually.
+
+**Missing fields.** Fields you expected are simply not there. Null, undefined, KeyError, crash.
+
+<Callout type="info" title={"In Production, This Is Non-Negotiable"}>
+In production, LLMs are cogs in an automated machine. If one cog returns poorly formatted data, the entire chain breaks. You can't tolerate "it works 95% of the time." You need 100%. That's exactly what JSON mode guarantees.
+</Callout>
+
+### json_object Mode: "JSON, Guaranteed"
+
+This is the simplest mode. You ask for JSON, Mistral gives you JSON. Period.
+
+```json
+{
+  "response_format": { "type": "json_object" }
+}
+```
+
+**What's guaranteed:**
+- The result is syntactically valid JSON. `JSON.parse()` will never crash.
+- No parasite text around it (no "Here are your data:")
+- The model follows the structure you describe in the prompt
+
+**The limitations:**
+- The exact schema isn't enforced: you ask for "name" and "age," but the model may add other fields or omit some
+- Types aren't guaranteed: "age" might be a string instead of a number
+- The structure can vary slightly from one call to the next
+
+Think of it as a minimal contract: "It'll be valid JSON," but with no guarantee on the precise content.
+
+<Callout type="tip" title="Your Prompt Is Your Informal Schema">
+With json_object, the result quality depends entirely on your prompt. Include a concrete example: "Return a JSON like this: `{\"name\": \"Alice\", \"age\": 30}`". The model will reproduce this pattern. Be explicit about expected types (number, string, boolean), required fields, and date formats.
+</Callout>
+
+### json_schema Mode: "Here's the Blueprint, Follow It to the Letter"
+
+This is the advanced mode. You pass a complete JSON Schema (the exact specification of what you expect), and Mistral is CONSTRAINED to follow it.
+
+```json
+{
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "extraction_result",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "age": { "type": "integer" },
+          "email": { "type": "string", "format": "email" }
+        },
+        "required": ["name", "age"]
+      }
+    }
+  }
+}
+```
+
+**What's guaranteed:**
+- The output RESPECTS THE SCHEMA. No deviations, no improvisation.
+- Fields marked `required` are ALWAYS present.
+- Types are respected: "age" will be an integer, not a string.
+- `enum` constraints (choice from a list) are respected.
+- Nested objects are in the right place with the right structure.
+
+It's the difference between saying "make me a cake" (json_object) and giving the exact recipe with proportions (json_schema).
+
+### How Mistral Forces the Format: Constrained Decoding
+
+How does Mistral guarantee that the output conforms to the schema? Through **constrained decoding**.
+
+Imagine you're dictating a letter and at each word, someone tells you "the allowed words here are: X, Y, Z." You can't say anything else. Constrained decoding does exactly that: at each generated token, the system checks which tokens are valid according to the current state of the JSON.
+
+Concrete example: the model just generated `"age":`. The schema says "age" is an integer. The only allowed tokens are therefore digits. The token "twenty-five"? Blocked. The token "true"? Blocked. The token "3"? Allowed.
+
+Technically, it's a finite state machine (FSM) that tracks your position in the JSON schema and filters valid tokens at each generation step. It's smart post-processing: the model itself isn't modified, you just add a filter on its output.
+
+<Callout type="paper" title="Constrained Decoding: Not Black Magic">
+Open-source libraries like Outlines and Guidance implement this technique. Mistral uses an FSM that tracks your position in the schema and validates each generated token. The model doesn't change: it's the decoding layer that's constrained. Simple in principle, devastatingly effective in practice.
+</Callout>
+
+### Concrete Use Cases
+
+**Information extraction.** You have 1,000 emails. Mistral needs to extract for each one: sender, date, amount (if it's an invoice), category. With json_schema, the format is guaranteed for all 1,000 emails. Zero parsing errors, zero exceptions, zero manual intervention.
+
+**Product classification.** A user posts a vague product description. Mistral must return: category, subcategory, estimated price range, color. Structured JSON, typed fields, no improvisation. Your database swallows it without a hiccup.
+
+**Format conversion.** CSV to JSON. Email to support ticket. Scanned paper form to database. JSON mode guarantees that the output is compatible with the next system in your pipeline, whatever it may be.
+
+**ETL (Extract-Transform-Load) pipelines.** Your pipeline takes raw data, transforms it via Mistral, and loads it into a database. If Mistral produces invalid JSON, the entire pipeline stalls. JSON mode = zero interruptions.
+
+**API returning JSON.** Your backend uses Mistral to generate a response for a client. The client expects valid JSON conforming to your API spec. JSON mode is a promise kept on every call.
+
+### Golden Rules for Using It Well
+
+**Use json_schema whenever possible.** If you know the expected structure (which is almost always the case in production), json_schema is always better than json_object. Stricter, more predictable, zero surprises.
+
+**Keep schemas simple.** A schema with 10 levels of nesting and complex union types will slow down generation and increase the risk of degraded results. Flat schemas or 2-3 levels deep work best.
+
+**Add descriptions to your fields.** In your schema, the "description" property helps Mistral understand what to put in each field. A field named "cat" with description "main product category" gives a much better result than "cat" alone.
+
+**Handle optionals in code.** If a field is optional in your schema, add a default value in your client-side code. Don't rely on Mistral to guess what "optional" means for your business logic.
+
+<Callout type="warning" title="The Format Is Guaranteed, Not the Content">
+JSON mode guarantees that the output is syntactically valid and conforms to the schema. But the data can be wrong or made up. Mistral can return perfect JSON with an age of "9999" or a name that doesn't exist. Format validation doesn't replace content validation. Always verify that the data makes sense for your use case.
+</Callout>
+
+### Quick Comparison
+
+| | Free text | json_object | json_schema |
+|---|---|---|---|
+| Valid JSON | No | Yes | Yes |
+| Predictable structure | No | No | Yes |
+| Guaranteed types | No | No | Yes |
+| Required fields | No | No | Yes |
+| Speed | Fast | Fast | Normal |
+
+**In summary:** in production, use json_schema. It's your safety net. No more parsing errors, no more "why is this field missing," no more broken pipelines at 3 AM. Just clean, valid JSON that conforms to your expectations.

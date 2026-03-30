@@ -1,0 +1,113 @@
+---
+title: "GPTQ: Optimal Compression of Large Models"
+description: "The method that made it possible to run 175 billion parameters on a single GPU."
+---
+
+## The GPTQ Revolution
+
+In 2022, the IST Austria team presented GPTQ: a method to compress a model **without retraining it**, in just a few hours. Before GPTQ, nobody thought it was possible to quantize GPT-3 (175B parameters) to 4 bits without destroying quality. Suddenly, you could run this behemoth on a single A100 GPU with 80 GB. Unprecedented.
+
+<ArxivLink id="2210.17323" title="GPTQ: Accurate Post-Training Quantization (Frantar et al., 2022)" />
+
+## The Brilliant Idea
+
+The naive quantization method is to round each weight independently. Imagine an orchestra of 100 musicians: if you ask each one to round their note individually, the overall result sounds off. GPTQ does the opposite: it quantizes weights **one by one** and, at each step, **corrects the remaining weights** to compensate for the introduced error.
+
+To know which weights to protect and how to compensate, GPTQ uses the **Hessian matrix** — a mathematical tool that measures the sensitivity of results to each weight. It's a heat map that says: "this weight here, if you move it even slightly, the model's output changes a lot; this other one, you can shake it around and nothing changes."
+
+$$\text{Error} = \| \text{Original output} - \text{Quantized output} \|^2$$
+
+The goal is to minimize this global error by using the Hessian structure to guide the compensations.
+
+## How It Works (Simplified)
+
+### Step 1: Measure Importance
+
+You pass 128-256 text examples through the model to compute the **Hessian matrix** for each layer. It tells you, for each weight: "if you change this one, here's the impact on the output." It's like surveying the ground before building: you know where the soil is fragile.
+
+### Step 2: Quantize Intelligently
+
+For each layer, you process columns in **blocks of 128**:
+1. Quantize the weights in the current block (round to INT4 levels)
+2. Calculate the error this introduces on the output
+3. **Compensate for this error** by adjusting the not-yet-quantized weights, using the **inverse Hessian** — the Hessian measures the curvature of the loss: it tells us which weights are "sensitive" (a small change greatly affects the loss) and which are "robust." Its inverse tells us how to adjust neighboring weights to compensate for the quantization error
+
+The analogy: imagine you're painting a fresco and your palette is limited to 16 colors. As you paint each section, you adjust the tones of neighboring sections so that the final result remains harmonious. That's exactly what GPTQ does: a cascading compensation.
+
+<Callout type="paper" title={"The key innovation"}>
+GPTQ quantizes in **blocks** of 128 columns, not weight by weight (like the old OBQ). This is what reduces complexity from "days" to "a few hours": a 175B model can be quantized in 4 hours on a single GPU.
+</Callout>
+
+## Important Parameters
+
+### Number of Bits
+- **4 bits**: the de facto standard (excellent size/quality tradeoff)
+- **3 bits**: possible but costly in quality, expect ~10% degradation
+- **8 bits**: little interest since simple INT8 quantization (without GPTQ) already works well
+
+### Group Size (group_size)
+- **128**: the recognized sweet spot (default value everywhere)
+- **32**: slightly more precise but ~10% larger (more scaling parameters)
+- **-1**: per-channel quantization (no groups), rarely justified
+
+<Callout type="tip" title={"128 is magic"}>
+A group_size of 128 offers the best tradeoff between quality and size. In practice, the difference with 32 is minimal, but the storage savings are real. Don't change this value without measuring a concrete gain on your benchmarks.
+</Callout>
+
+### Calibration Dataset
+- C4 or Wikitext-2 are the standard datasets
+- 128-256 examples of 2000 tokens are enough
+- Good news: the dataset choice barely affects the final result (GPTQ is robust on this point)
+
+## In Practice
+
+```python
+from auto_gptq import AutoGPTQForCausalLM
+
+model = AutoGPTQForCausalLM.from_pretrained(
+    "mistralai/Mistral-7B",
+    quantize_config=BaseQuantizeConfig(
+        bits=4,
+        group_size=128,
+    ),
+)
+model.quantize(calibration_dataset)
+model.save_quantized("mistral-7b-gptq")
+```
+
+In reality, you'll probably never need to quantize yourself. Thousands of GPTQ models are already available on Hugging Face, ready to download and use. Look for the `-GPTQ` suffix in the model name.
+
+## Real Results
+
+On Mistral-7B (perplexity test — lower is better):
+
+| Format | Perplexity | Size |
+|---|---|---|
+| FP16 | 5.25 | 14.5 GB |
+| GPTQ 4-bit | 5.41 | 4.1 GB |
+| GPTQ 3-bit | 5.98 | 3.2 GB |
+
+The loss at 4 bits is minimal (~3%), while the model is **3.5x smaller**. At 3 bits, the degradation becomes noticeable (~14%), making this format less attractive except under extreme memory constraints.
+
+### Inference Speed
+
+GPTQ alone doesn't guarantee speed: you need **specialized CUDA kernels** to decompress INT4 to FP16 on the fly. ExLlama v2 and Marlin are the two most performant kernels, capable of achieving **3x the throughput** of naive dequantization.
+
+<Callout type="info" title="GPTQ = GPU only">
+GPTQ is optimized exclusively for NVIDIA GPUs. If you're targeting CPU or Apple Silicon, use the GGUF format (llama.cpp) instead. The two formats are complementary depending on your target hardware.
+</Callout>
+
+## GPTQ vs AWQ vs GGUF Comparison
+
+| Aspect | GPTQ | AWQ | GGUF |
+|---|---|---|---|
+| Quantization time | Hours | Minutes | Minutes |
+| 4-bit quality | Very good | Excellent | Good |
+| GPU inference | Excellent | Excellent | Good |
+| CPU inference | No | No | Excellent |
+
+GPTQ was the pioneer that launched the post-training quantization revolution. AWQ has surpassed it for new quantizations thanks to better quality and faster quantization. But thousands of GPTQ models remain available and popular on Hugging Face.
+
+<Callout type="warning" title="The kernel is crucial">
+A GPTQ model without a good inference kernel can be **slower** than the original FP16 model. Verify that your serving framework (vLLM, TGI) supports ExLlama v2 or Marlin before deploying.
+</Callout>

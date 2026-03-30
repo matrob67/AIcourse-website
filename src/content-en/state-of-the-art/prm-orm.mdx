@@ -1,0 +1,170 @@
+---
+title: "PRM vs ORM: Rewarding Reasoning"
+description: "PRMs (Process Reward Models) evaluate each reasoning step, while ORMs (Outcome Reward Models) evaluate only the final answer. Comparison and implications."
+---
+
+
+
+## The Fundamental Problem: How Do You Judge Reasoning?
+
+You're training a model via reinforcement learning to solve math problems. The model proposes a solution. How do you tell it "good job, keep it up" or "that's wrong, do better"? That's the **reward model** question, and there are two radically opposed philosophies:
+
+1. **Judge the outcome**: is the final answer correct? Reward the entire reasoning as a block.
+2. **Judge each step**: is each reasoning step correct? Reward what's good, penalize what's off.
+
+This is the distinction between ORM (Outcome Reward Model) and PRM (Process Reward Model). And this choice has profound consequences.
+
+<ArxivLink id="2305.20050" title={"Let's Verify Step by Step (Lightman et al., 2023)"} />
+
+<Callout type="info" title={"The Math Teacher Analogy"}>
+An **ORM** is a teacher who only looks at the final answer on the paper. If it's 42, it's right. If it's 43, it's wrong. Regardless of the reasoning.
+
+A **PRM** is a teacher who grades every line of the work, notes in the margin "good approach here," "sign error there." The student gets precise feedback on **where** they did well and **where** they went wrong.
+
+Which of the two students improves faster?
+</Callout>
+
+## ORM: Judging Only the Outcome
+
+### How It Works
+
+You present the model with the question, the complete reasoning (treated as a black box), and the final answer. The ORM simply responds: "correct answer ($r=1$) or incorrect ($r=0$)"?
+
+That's it. No feedback on intermediate steps.
+
+### Advantages
+
+- **Simplicity**: you just need to verify if the final answer is right or wrong
+- **Easy data**: no need to annotate each step, just the answer
+- **Universality**: works on any type of reasoning, even when steps are hard to delimit
+
+### The Major Problem: Reward Hacking
+
+A model can arrive at the right answer by pure **luck** or through completely wrong reasoning, and the ORM rewards it anyway.
+
+> **Problem:** $3x = 15$, find $x$
+> **Reasoning:** "Hmm... I'll guess... 5?"
+> **Answer:** 5
+> **ORM:** "Correct!" (even though the model understood nothing)
+
+The ORM rewarded luck, not skill. Over the long term, the model can learn misleading shortcuts rather than real reasoning.
+
+The other problem is the **sparse signal**: a single bit of information (correct/incorrect) for a 10-step reasoning. The model knows "something went wrong," but not **where** in the reasoning chain.
+
+## PRM: Judging Each Step
+
+### How It Works
+
+Each reasoning step is evaluated independently:
+
+> **Problem:** $2x + 3 = 11$, find $x$
+> - **Step 1:** $2x + 3 = 11$ &check; (equation correctly stated)
+> - **Step 2:** $2x = 11 - 3 = 8$ &check; (subtraction correct)
+> - **Step 3:** $x = 8 / 2 = 4$ &check; (division correct)
+> - **Answer:** $x = 4$ &check;
+
+It's a **dense signal**: the model knows exactly which step is good and which one is problematic.
+
+### The Cost of Annotation
+
+That's the price to pay: each step must be annotated by an expert who judges whether it's correct. For their foundational paper, OpenAI mobilized **qualified mathematicians** to annotate approximately 800K reasoning steps. This isn't the kind of work you outsource to non-specialized annotators.
+
+### The Decisive Advantage
+
+The PRM identifies and penalizes incorrect reasoning **even when it arrives at the right answer by chance**:
+
+> **Problem:** $3x = 15$, find $x$
+> - **Wrong step:** "I divide 15 by 4, which gives 3.75" &cross;
+> - **Correction:** "Oh no, I divide 15 by 3, which gives 5" &check;
+> - **Answer:** 5 &check;
+>
+> The ORM says "well done" for the final answer. The PRM says "careful, your first step was wrong" and penalizes that bad habit.
+
+### Empirical Results
+
+Lightman et al.'s paper (OpenAI) on the MATH benchmark:
+
+| Method | Solved (best-of-100) |
+|---|---|
+| ORM | 72.4% |
+| PRM | 78.2% |
+
+The PRM finds **5.8 extra points** of solutions by eliminating false positives, those solutions that land on the right answer through wrong reasoning.
+
+<Callout type="paper" title="The Paper That Changed the Rules">
+Lightman et al. demonstrated that a per-step reward signal produces significantly better RL than rewards only on the final answer. The dense signal (feedback at each step) systematically outperforms the sparse signal (feedback only at the end). This result has oriented all subsequent research on reasoning.
+</Callout>
+
+## Direct Comparison
+
+| Aspect | ORM | PRM |
+|---|---|---|
+| Granularity | Final answer only | Each step |
+| Training signal | Sparse (1 single signal) | Dense (multiple signals) |
+| Data needed | Right/wrong answers | Step-by-step annotations |
+| Annotation cost | Low | Very high |
+| Selection quality | Good | Better |
+| Error detection | Localization impossible | Precise localization |
+| Vulnerable to reward hacking | Yes | Much less |
+
+## Practical Use Cases
+
+### Best-of-N Guided by PRM
+
+```python
+solutions = [model.generate(problem) for _ in range(100)]
+scores = [prm.score_steps(problem, sol) for sol in solutions]
+best = solutions[argmax(min_step_score(scores))]
+```
+
+You generate 100 solutions, and the best one is the one where **all steps** are judged correct by the PRM. An ORM would simply choose the solution with the best overall score, potentially missing lucky reasoning.
+
+### MCTS Guided by PRM
+
+In a tree search, each node represents a reasoning step. The PRM evaluates each node independently. Branches with well-scored steps are explored more deeply. This is the natural synergy between PRM and MCTS.
+
+### RL with PRM as Reward
+
+Instead of giving a signal only at the end of reasoning, each step receives PRM feedback during RL training. The model learns **where** it does well and **where** it makes mistakes, not just **whether** the final answer is correct.
+
+<Callout type="tip" title={"When the PRM Is Worth the Investment"}>
+The PRM shines on domains where steps are **clearly delimited and verifiable**: math, code, formal proofs.
+
+For fuzzy reasoning (literary analysis, philosophical argumentation), splitting into steps is ambiguous and annotation is subjective. In these cases, the ORM remains more pragmatic.
+</Callout>
+
+## Hybrid Approaches and Automation
+
+### ORM + Light Verification
+
+A pragmatic compromise: the ORM evaluates the overall score, and a lightweight verifier (code execution, symbolic computation) checks individual steps when possible. Less perfect than a true PRM, but much cheaper.
+
+### Automatic PRM (Without Human Annotators)
+
+Human annotation doesn't scale. The alternative:
+
+1. Generate many solutions via CoT
+2. Verify the final answer automatically
+3. Use heuristics to estimate each step's quality (Monte Carlo estimation: a step is "good" if reasoning paths that pass through it often lead to the correct answer)
+
+It's less precise than an expert-annotated PRM, but it's feasible at the scale of millions of examples.
+
+<Callout type="warning" title={"Annotation Quality Is Decisive"}>
+A PRM is only as good as its annotations. Poorly trained annotators or vague criteria produce an unreliable PRM that can be worse than a simple ORM.
+
+OpenAI used qualified mathematicians for their PRM. The quality of the human expertise behind the annotations makes all the difference.
+</Callout>
+
+## Why PRM Is Essential for Scaling
+
+Want to do tree search (MCTS) on reasoning? **The PRM is essential** for guiding exploration efficiently.
+
+The ORM only gives a signal at the tree's leaf (the final answer). To navigate the tree, you need to evaluate intermediate nodes, and only the PRM can do that. Without a signal on the branches, MCTS explores blindly.
+
+This is why the PRM is a foundational building block of test-time compute scaling. As search methods become more sophisticated, the need for a fine and precise reward signal becomes critical.
+
+## Perspective
+
+The PRM embodies a shift in philosophy: instead of rewarding only the destination (the right answer), you reward the **path** (the right reasoning). It's a better learning signal, and it produces models that truly reason rather than guess.
+
+As automatic verifiers improve (formal proofs, code execution, symbolic tools), the PRM's scope of application expands beyond math into science, engineering, and planning.

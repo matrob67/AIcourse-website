@@ -1,0 +1,194 @@
+---
+title: "GRPO & oDPO: Beyond PPO for Alignment"
+description: "GRPO eliminates PPO's critic model by comparing responses against each other. oDPO makes DPO online by generating preference pairs on the fly."
+---
+
+## Why Look for Alternatives to PPO?
+
+PPO works. It's the algorithm that produced ChatGPT, Claude, and most aligned LLMs. But it has a considerable operational cost.
+
+Recall what PPO (Proximal Policy Optimization) requires (detailed in the RLHF section):
+- **4 models in memory** simultaneously: the model being trained (policy), its frozen copy (reference), the reward model, and the critic model
+- **A critic model** that must be trained separately --- an entire neural network whose sole role is to estimate "how much total reward will this beginning of a response earn"
+- **Clipping, KL coefficients, hyperparameters** everywhere --- PPO is notoriously difficult to stabilize
+
+The natural question: can you keep RL's power (the model generates its responses and learns from its mistakes) while eliminating the complexity?
+
+Two recent algorithms answer yes: **GRPO** and **oDPO**.
+
+---
+
+## GRPO: Group Relative Policy Optimization
+
+### The Central Idea
+
+GRPO starts from a simple observation: **why train a critic model to estimate a response's quality, when you can directly compare responses against each other?**
+
+Instead of asking the critic "how much is this response worth?", GRPO generates a **group** of responses to the same prompt and compares them. The best are reinforced, the worst are penalized. No need for a separate model to estimate an "absolute value" --- relative comparison is enough.
+
+It's like grading exams: instead of a complex absolute grading rubric, you rank the papers against each other.
+
+### How It Works, Step by Step
+
+For each training prompt:
+
+**Step 1 --- Generate a group of responses.** The current model produces $G$ different responses to the same prompt (typically 8 to 64). A sufficient sampling temperature is used to get diversity.
+
+**Step 2 --- Evaluate each response.** A score $r_i$ is assigned to each response. This score can come from a classic reward model or, even better, from an automatic verifier (see the RLVR section). In math for example: $r_i = 1$ if the answer is correct, $r_i = 0$ otherwise.
+
+**Step 3 --- Normalize within the group.** Compute the mean $\mu$ and standard deviation $\sigma$ of the scores in the group, then each response's advantage:
+
+$$A_i = \frac{r_i - \mu}{\sigma}$$
+
+If $A_i > 0$, the response is better than the group average --- reinforce it. If $A_i < 0$, it's worse --- penalize it. This is the **group baseline**: each response is judged relative to the others, not in absolute terms.
+
+**Step 4 --- Update the model.** Apply a policy gradient update weighted by these normalized advantages.
+
+### The Formula Decoded
+
+The complete GRPO loss:
+
+$$\mathcal{L}_{\text{GRPO}} = -\frac{1}{G} \sum_{i=1}^{G} \left[ \min\left( \frac{\pi_\theta(y_i|x)}{\pi_{\text{old}}(y_i|x)} A_i, \; \text{clip}\left(\frac{\pi_\theta(y_i|x)}{\pi_{\text{old}}(y_i|x)}, 1-\varepsilon, 1+\varepsilon \right) A_i \right) - \beta \cdot D_{KL}(\pi_\theta \| \pi_{\text{ref}}) \right]$$
+
+Let's decode each piece:
+
+- $\frac{\pi_\theta(y_i|x)}{\pi_{\text{old}}(y_i|x)}$ --- the **importance ratio**: how much has the probability of this response changed since the last update. If the ratio is very different from 1, the model has moved a lot.
+
+- $\text{clip}(\cdot, 1-\varepsilon, 1+\varepsilon)$ --- the **clipping** (identical to PPO): we prevent the ratio from straying too far from 1. Typically $\varepsilon = 0.2$, so the ratio is bounded between 0.8 and 1.2. This prevents overly brutal updates that would destabilize the model.
+
+- $\min(\cdot, \cdot)$ --- we take the **minimum** of both terms (clipped and unclipped). This is PPO's conservative mechanism: we never take the most optimistic update, always the most cautious.
+
+- $A_i$ --- the **normalized advantage** computed in step 3. This is where GRPO differs from PPO: this advantage comes from the group, not from a critic model.
+
+- $\beta \cdot D_{KL}(\pi_\theta \| \pi_{\text{ref}})$ --- the **KL penalty** relative to the reference model (the frozen copy). As in PPO, it prevents the model from straying too far from its starting point. $\beta$ controls the strength of this constraint.
+
+<Callout type="info" title={"What Really Changes Compared to PPO"}>
+The formula is nearly identical to PPO! The only difference is how $A_i$ is computed: PPO uses a separately trained critic model to estimate the advantage, GRPO uses the group mean. By eliminating the critic, you remove an entire model from the training loop --- less memory, less code, fewer bugs.
+</Callout>
+
+### Why It Works Better Than PPO in Practice
+
+**Less memory.** PPO: 4 models. GRPO: 3 models (policy + reference + reward model, or just 2 if you use a verifier instead of a reward model). For a 70B model, that's tens of GB of VRAM saved.
+
+**More stable.** PPO's critic model is itself a neural network that must be trained, and its estimation errors propagate into the policy model's updates. GRPO computes the baseline directly from the actual scores --- no approximation error.
+
+**Simpler to implement.** The reference implementation of GRPO in TRL (Hugging Face's library) fits in a few dozen lines. A complete PPO implementation with critic model, GAE, and all hyperparameters easily takes 10x more.
+
+**Scalable.** The larger $G$ (the group size), the more accurate the baseline. It's a very simple compute vs quality trade-off to adjust.
+
+### GRPO + RLVR: The Winning Combination
+
+GRPO shines particularly when combined with RLVR (Reinforcement Learning with Verifiable Rewards) --- this is exactly what DeepSeek did to train R1:
+
+1. You pose a math problem to the model
+2. GRPO generates 16 different responses
+3. An automatic verifier gives $r_i = 1$ (correct) or $r_i = 0$ (incorrect)
+4. Correct responses are reinforced, incorrect ones are penalized
+
+No reward model, no critic model, no human annotators. Just a model, a verifier, and GRPO. This simplicity is what allowed the open-source community to reproduce DeepSeek-R1's results in just a few weeks.
+
+<Callout type="paper" title={"Who Uses GRPO?"}>
+- **DeepSeek-R1**: the most publicized use, for mathematical reasoning and code
+- **Qwen 2.5**: Alibaba uses GRPO for aligning its models
+- **Open-source community**: thanks to TRL and OpenRLHF, GRPO has become the default RL algorithm for R1 reproduction projects
+- **Trend**: GRPO is progressively replacing PPO as the reference RL algorithm for LLM training
+</Callout>
+
+---
+
+## oDPO: Making DPO Online
+
+### The Problem with Classic DPO
+
+DPO (Direct Preference Optimization) was a revolution: it eliminates RL entirely, training directly on preference pairs (preferred response vs rejected response). But DPO has a structural flaw.
+
+DPO is **offline**: you collect a dataset of preference pairs *before* training, then train the model on this fixed dataset. The problem?
+
+**The model evolves, but its training data stays frozen.**
+
+At the start of training, the dataset pairs are informative: they show errors the model actually makes. But as the model improves, these pairs become trivial --- the model already knows the preferred response is better. It's not learning much anymore.
+
+It's like a student who keeps solving beginner-level exercises when they've already become an expert: they get 100% but no longer progress.
+
+### The oDPO Solution: Fresh Pairs at Every Step
+
+**oDPO** (online DPO) solves this problem by generating preference pairs **on the fly**, from the current model's responses.
+
+### oDPO Pipeline, Step by Step
+
+**Step 1 --- Sample prompts.** Draw a batch of prompts from the training dataset.
+
+**Step 2 --- Generate responses.** For each prompt, the *current* model (the one being trained) generates $N$ different responses. This is the crucial difference from offline DPO: the responses come from the model in its current state, not from a pre-collected dataset.
+
+**Step 3 --- Score the responses.** A reward model (or automatic verifier) assigns a score to each response.
+
+**Step 4 --- Form the pairs.** For each prompt, take the response with the best score --- **chosen** (preferred response), and the one with the worst score --- **rejected** (rejected response). You now have a fresh preference pair that reflects the errors the model is making *right now*.
+
+**Step 5 --- Apply the DPO loss.** Use exactly the same loss as classic DPO on these fresh pairs:
+
+$$\mathcal{L}_{\text{DPO}} = -\log \sigma\left(\beta \left[\log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right]\right)$$
+
+The formula is identical to standard DPO. What changes is that $y_w$ and $y_l$ are generated by the current model instead of coming from a fixed dataset.
+
+**Step 6 --- Update the weights** and repeat.
+
+<Callout type="info" title={"Why Fresh Pairs Make the Difference"}>
+With oDPO, preference pairs are always **at the model's current level**. The model never re-encounters errors it has already corrected --- it's always confronted with its *current* mistakes. It's a training curriculum that automatically adapts to the student's level.
+</Callout>
+
+### oDPO vs Offline DPO: When to Choose What?
+
+**Offline DPO** remains relevant when:
+- You have an excellent human preference dataset (e.g., Anthropic HH, UltraFeedback)
+- Your compute resources are limited --- offline DPO doesn't need to generate responses at every step
+- Human annotation quality is superior to what an automatic reward model could provide
+
+**oDPO** is preferable when:
+- You have a good reward model or automatic verifier
+- You want to maximize final performance --- oDPO generally achieves higher scores than offline DPO on benchmarks
+- The existing preference dataset is small or of average quality
+
+---
+
+## GRPO vs oDPO: What's the Difference?
+
+Both algorithms generate responses on the fly (they're both "online"), but they differ in how they use those responses:
+
+| | **GRPO** | **oDPO** |
+|---|---|---|
+| **Loss type** | Policy gradient (RL) | DPO loss (contrastive) |
+| **How are responses used?** | Each response individually, weighted by its advantage $A_i$ | As pairs (chosen vs rejected) |
+| **Number of responses used** | All $G$ responses contribute | Only the 2 extremes (best and worst) |
+| **Information exploited** | The complete ranking of the group | Only "which is better, which is worse" |
+| **KL term** | Explicit in the loss | Implicit via the reference model |
+
+<Callout type="tip" title={"Intuition: GRPO Uses More Information"}>
+If you generate 16 responses, GRPO uses all 16 scores to compute advantages --- every response contributes to the update. oDPO keeps only 2 (the best and worst) and ignores the other 14. In theory, GRPO is therefore more *sample-efficient*. In practice, the performance difference is often modest.
+</Callout>
+
+---
+
+## Summary Table: PPO vs GRPO vs DPO vs oDPO
+
+| | **PPO** | **GRPO** | **Offline DPO** | **oDPO** |
+|---|---|---|---|---|
+| **Models in memory** | 4 (policy, ref, reward, critic) | 2-3 (policy, ref, reward/verifier) | 2 (policy, ref) | 3 (policy, ref, reward) |
+| **Online generation** | Yes | Yes | No (fixed dataset) | Yes |
+| **Required data** | Prompts + reward model | Prompts + reward model/verifier | Pre-collected (chosen, rejected) pairs | Prompts + reward model/verifier |
+| **Implementation complexity** | Very high | Moderate | Low | Moderate |
+| **Stability** | Hard to stabilize | Stable | Very stable | Stable |
+| **Who uses it** | OpenAI (historical) | DeepSeek, Qwen | Meta (Llama), Mistral | Research, open-source projects |
+
+## In Practice: When to Choose What?
+
+- **GRPO** --- when you have an **automatic verifier** (math, code) or a good reward model, and you want to train reasoning. It's the default choice for reproducing DeepSeek-R1 type results.
+
+- **oDPO** --- when you want the **simplicity of DPO** but with better performance thanks to fresh data. A good compromise if you have a reward model but no exact verifier.
+
+- **Offline DPO** --- when you have an **excellent human preference dataset** and limited resources. Remains the simplest to implement.
+
+- **PPO** --- in practice, increasingly less used for LLMs. Its complexity is no longer justified now that simpler alternatives exist.
+
+<Callout type="tip" title={"The Underlying Trend"}>
+The ecosystem is converging toward simpler algorithms that eliminate PPO's superfluous components while keeping its power. GRPO dominates for reasoning (math/code), oDPO and its variants for general alignment. PPO with its 4 models and dozens of hyperparameters is gradually becoming a historical relic --- important to understand, but rarely the first choice in 2025.
+</Callout>

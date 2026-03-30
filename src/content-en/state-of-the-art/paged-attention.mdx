@@ -1,0 +1,145 @@
+---
+title: "PagedAttention and vLLM: intelligent memory"
+description: "Borrowing a 60-year-old trick from Unix to multiply LLM efficiency by 4."
+---
+
+## The memory waste problem
+
+When you deploy an LLM in production, each user request needs memory space to store its **KV cache** (the computed attention keys and values). The problem: you don't know in advance how many tokens the response will be. 50? 500? 2000?
+
+Naive systems pre-allocate a **contiguous** block of memory for the maximum possible length of each request. It's like reserving a 20-seat table at a restaurant for every customer, even if most come alone. Result: **60 to 80% of GPU memory is wasted** in empty reserved but never used space.
+
+
+
+<Callout type="info" title="A 60-year-old idea">
+This memory fragmentation problem was solved by operating systems in the 1960s with **paged virtual memory**. Instead of allocating contiguous blocks of variable size, you divide memory into small fixed-size **pages** that can be placed anywhere. PagedAttention applies exactly this same idea to the KV cache of LLMs.
+</Callout>
+
+<ArxivLink id="2309.06180" title="Efficient Memory Management for Large Language Model Serving with PagedAttention (Kwon et al., 2023)" />
+
+## PagedAttention: the principle
+
+### The paging model
+
+The KV cache is divided into **blocks (pages)** of fixed size, typically 16 tokens each. Each request only occupies the blocks it actually needs, and these blocks can be scattered anywhere in GPU memory:
+
+- **Request A** (120 tokens): Block 5, Block 12, Block 3
+- **Request B** (30 tokens): Block 7, Block 1
+- **Request C** (200 tokens): Block 9, Block 4, Block 15, Block 2
+
+Each request has a **page table** that maps logical positions (tokens 0-15 in block 0, tokens 16-31 in block 1...) to physical blocks in memory. Blocks don't need to be contiguous: the page table handles the translation.
+
+### On-demand allocation
+
+- A new block is only allocated when the previous block is **full** (all 16 slots occupied)
+- When a request finishes, its blocks are **immediately freed** and reusable for other requests
+- Waste is limited to the last partially filled block: less than 4% on average
+
+### The modified attention kernel
+
+The attention operation must be adapted to read keys and values from potentially scattered blocks in memory. A **block table** stored on GPU indicates where to find each logical block. Thanks to the fixed block size (16 tokens), memory reads within each block remain efficient and coalesced.
+
+## Concrete results
+
+PagedAttention reduces KV cache waste from **60-80% to less than 4%**. In practice, this means:
+
+- **2 to 4 times more simultaneous requests** with the same amount of VRAM
+- **Proportional reduction in inference costs** (same performance, fewer GPUs)
+- **Stable and predictable memory usage** even with highly variable response lengths
+
+## vLLM: the framework that started it all
+
+vLLM is the open-source framework created by the authors of PagedAttention. It has become the **de facto standard** for LLM serving in production thanks to its efficiency and simplicity of use.
+
+### Main features
+
+- **PagedAttention** for optimal memory management
+- **Continuous batching** for dynamic request scheduling
+- **Speculative decoding** integrated for faster generation
+- **Tensor parallelism** and **pipeline parallelism** for multi-GPU
+- OpenAI-compatible API (drop-in replacement)
+
+### Getting started in 3 lines
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="mistralai/Mistral-7B-v0.1")
+outputs = llm.generate(["Explain gravity"],
+                       SamplingParams(max_tokens=256))
+```
+
+### Server mode
+
+```bash
+vllm serve mistralai/Mistral-7B-v0.1 \
+    --host 0.0.0.0 --port 8000 \
+    --tensor-parallel-size 2
+```
+
+This launches a server with an OpenAI-compatible REST API. You can replace your OpenAI API calls with calls to this local server without changing your client code.
+
+## Advanced optimizations
+
+### Prefix Caching
+
+When multiple requests share the **same prefix** (an identical system prompt, common few-shot examples, shared RAG context), the KV cache blocks corresponding to that prefix are **shared** across all requests:
+
+- **System prompt** (computed once, shared)
+  - Request 1: specific blocks
+  - Request 2: specific blocks
+  - Request 3: specific blocks
+
+Instead of recomputing and storing the system prompt's KV cache for each request, you compute it once and reuse it. The savings are massive on RAG systems where the shared context is often much longer than the response.
+
+### Copy-on-Write
+
+For beam search or multiple sampling (generating N different responses for the same prompt), sequences initially share the same KV cache blocks. A block is only duplicated when a sequence diverges and needs to modify that block. It's the same mechanism operating systems use for process memory management.
+
+<Callout type="tip" title="RAG + Prefix Caching = optimal combo">
+If you use a long identical RAG context for 100 requests, prefix caching avoids recomputing and storing its KV cache 100 times. For a 4000-token RAG context with a 7B model, that saves about 200 GB of GPU memory and thousands of TFLOP of computation.
+</Callout>
+
+## Performance benchmarks
+
+### Real results (A100 80 GB, Mistral-7B)
+
+| Metric | Without PagedAttention | With PagedAttention |
+|---|---|---|
+| Max concurrent requests | ~40 | ~120 |
+| Throughput (tokens/s) | 1200 | 3500 |
+| Wasted VRAM | ~50% | ~3% |
+| Latency stability | Variable | Stable |
+
+PagedAttention multiplies throughput by roughly 3x, primarily because you can serve 3 times more simultaneous requests with the same memory.
+
+### Serving framework comparison
+
+| Framework | Technology | Relative throughput |
+|---|---|---|
+| HF Transformers | Baseline | 1x |
+| vLLM | PagedAttention | 8-15x |
+| TGI | FlashAttention | 6-12x |
+| SGLang | RadixAttention | 8-15x |
+
+vLLM and SGLang offer comparable performance. SGLang uses an improved version of the PagedAttention concept.
+
+## Evolution: RadixAttention (SGLang)
+
+**RadixAttention** generalizes PagedAttention by organizing prefixes in a **Radix tree** (trie). The advantages:
+
+- More efficient prefix matching (search in O(prefix length) instead of O(number of requests))
+- Better handling of heterogeneous workloads with partially shared prefixes
+- Finer sharing than simple prefix caching: two requests that share 80% of their context benefit from sharing, even if the remaining 20% differs
+
+## Limitations to know
+
+Even with PagedAttention, GPU VRAM remains finite. Beyond a certain load, the system must **swap**: move KV caches to CPU RAM to make room. This swapping degrades performance by about 50% for affected requests. You need to monitor block fragmentation and properly size the system to avoid this situation.
+
+<Callout type="warning" title="PagedAttention doesn't work miracles">
+PagedAttention multiplies memory efficiency by 3-4x, but it's a finite resource. Beyond maximum capacity, the system swaps and becomes very slow. Size your infrastructure based on expected load, not theoretical maximum capacity.
+</Callout>
+
+## Industry impact
+
+PagedAttention has **fundamentally transformed the economics of LLM serving**. Multiplying throughput by 3-4x proportionally reduces the cost per inference token. It's one of those system innovations that changes nothing about the model itself but makes its production deployment economically viable at scale. Virtually all LLM serving systems use it today.

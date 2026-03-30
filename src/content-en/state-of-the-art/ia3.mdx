@@ -1,0 +1,113 @@
+---
+title: "IA3: Infused Adapter by Inhibiting and Amplifying"
+description: "IA3 (Infused Adapter by Inhibiting and Amplifying Inner Activations) is an ultra-lightweight PEFT method that learns scaling vectors to modulate the model's internal activations."
+---
+
+## The Most Minimalist PEFT Possible
+
+When people talk about PEFT methods (Parameter-Efficient Fine-Tuning, i.e., fine-tuning with a minimum of parameters), they often think of LoRA and its low-rank matrices. But IA3 pushes minimalism even further. No new layers. No matrices. Just **vectors** that multiply the model's internal activations. It's like turning volume knobs on the different dimensions of the model, instead of rewiring the entire circuit.
+
+<ArxivLink id="2205.05638" title="Few-Shot Parameter-Efficient Fine-Tuning is Better and Cheaper than In-Context Learning (Liu et al., 2022)" />
+
+<Callout type="info" title="The IA3 Principle in One Sentence">
+IA3 learns three vectors per Transformer layer: one for the keys ($l_k$), one for the values ($l_v$) of attention, and one for the feed-forward network ($l_{ff}$). These vectors perform element-wise scaling on the activations. Nothing more.
+</Callout>
+
+## The Idea: Intelligently Multiplying Activations
+
+### Attention Scaling
+
+In each attention layer, IA3 intervenes surgically:
+- `K' = lk . K` (key scaling)
+- `V' = lv . V` (value scaling)
+
+The vectors $l_k$ and $l_v$ have dimension $d_{model}$. Each component of the vector multiplies the corresponding dimension of the keys or values. It's like putting a color filter in front of an image: some "colors" (dimensions) are amplified, others are attenuated.
+
+### FFN Scaling
+
+For the feed-forward network, IA3 applies the same principle to the intermediate activations:
+
+$$\text{FFN}(x) = (l_{ff} \odot \text{activation}(W_1 x)) \times W_2$$
+
+The vector $l_{ff}$ modulates the activations just before the second projection. It decides which FFN neurons "count" for your task.
+
+### Initialization: Starting from Identity
+
+All vectors start initialized to **1** (a vector of ones). At startup, the model therefore behaves exactly like the original model, without any modification. Training then progressively adjusts these values. It's elegant: you start from the working model and gently guide it toward the target task.
+
+## The Numbers: Ridiculously Compact
+
+Let's do the math for LLaMA-7B (L=32 layers, d=4096, $d_{ff}$=11008):
+- Per layer: $l_k$ (4096) + $l_v$ (4096) + $l_{ff}$ (11008) = 19,200 parameters
+- Total: 32 x 19,200 = **614,400 parameters**
+- That's **0.009%** of the model
+- About 10x fewer than LoRA with r=8
+
+We're talking about less than one megabyte of parameters to adapt a 7-billion-parameter model. It's absurdly lightweight. And yet, in certain scenarios, it works remarkably well.
+
+<Callout type="paper" title="T-Few: The Few-Shot Triumph">
+The paper shows that in few-shot settings (only 5 to 32 examples), IA3 outperforms both full fine-tuning AND in-context learning. The explanation is intuitive: with 0.009% trainable parameters, the risk of overfitting is virtually zero. It's a massive natural regularizer. When you only have 10 examples, that's exactly what you need.
+</Callout>
+
+## Why Scaling Works: Inhibition and Amplification
+
+The name IA3 tells the story. The learned vectors act as a selection mechanism with three regimes. When a vector component takes a value close to **0**, it "turns off" the corresponding dimension: the model learns that this feature is just noise for the target task. Conversely, a value **greater than 1** reinforces the associated dimension, putting the spotlight on the most relevant features. Finally, values that remain **close to 1** leave the dimension unchanged, preserving the original model's behavior.
+
+You can think of this as **learned feature selection**. Instead of transforming representations (like LoRA), IA3 chooses which ones to keep and which ones to attenuate. Think of it like an audio mixer: you don't change the instruments, you adjust the volume of each track.
+
+### The Analogy with Attention
+
+Standard attention answers "which tokens are important?" IA3 answers a different question: "which **dimensions of the representations** are important for my task?" It's a form of attention over the feature space rather than over the sequence.
+
+## Comparison: Who Weighs How Much?
+
+| Method | Parameters (7B) | Type | Added Latency |
+|---|---|---|---|
+| IA3 | ~600K (0.009%) | Scaling | None |
+| Prompt tuning | ~80K (0.001%) | Soft prompts | Minimal |
+| LoRA r=8 | ~6M (0.09%) | Low-rank | None (fusion) |
+| Adapters | ~20M (0.3%) | Modules | Significant |
+| Full tuning | 7B (100%) | All weights | None |
+
+<Callout type="tip" title="When to Use IA3?">
+IA3 shines in extreme scenarios: **few-shot learning** (very few examples), ultra-limited storage, or when you have thousands of micro-tasks with a handful of examples each. Imagine 10,000 clients, each with 10 examples of their preferences: storing 10,000 LoRA adapters would be costly, but 10,000 IA3 vectors? A few hundred MB total.
+</Callout>
+
+## Honest Limitations
+
+### Limited Expressiveness
+
+Scaling is a very simple operation: an element-wise multiplication. For deep adaptations like a complete domain change (medical to legal) or learning a new language, IA3 simply doesn't have enough "ammunition." It can steer the model, but not transform it.
+
+### Complex Tasks
+
+For instruction tuning, NER (Named Entity Recognition) on a new domain, or any task requiring learning new associations, LoRA beats IA3 systematically. IA3's ~600K parameters aren't enough to encode complex transformations of representations.
+
+<Callout type="warning" title="Don't Confuse with LayerNorm">
+IA3 scales attention activations (K, V) and FFN activations. This is fundamentally different from scaling LayerNorm parameters ($\gamma$ and $\beta$). LayerNorm normalizes distributions, IA3 modulates features. The confusion is common, but the mechanisms and effects are distinct.
+</Callout>
+
+## Implementation: A Few Lines Are Enough
+
+```python
+from peft import IA3Config, get_peft_model
+
+config = IA3Config(
+    target_modules=["k_proj", "v_proj", "down_proj"],
+    feedforward_modules=["down_proj"],
+)
+
+model = get_peft_model(base_model, config)
+model.print_trainable_parameters()
+# trainable params: ~600K || all params: 6.7B || trainable%: 0.009%
+```
+
+A few lines of code. A few hundred KB of parameters to save. Integration into Hugging Face's PEFT library makes experimentation trivial.
+
+## Place in the Ecosystem
+
+In practice, most practitioners prefer LoRA, which offers a better expressiveness/efficiency trade-off. IA3 remains primarily used in research for few-shot learning and as a proof of concept. But it teaches a profound lesson: **tiny** and **targeted** modifications to internal activations can be enough to adapt a massive model. This changes our understanding of how LLMs encode and use information.
+
+---
+
+**Insight**: IA3 proves that adapting a 7-billion-parameter model doesn't necessarily require millions of extra parameters. Sometimes, knowing which dimensions to amplify and which ones to turn off is better than adding entire matrices.

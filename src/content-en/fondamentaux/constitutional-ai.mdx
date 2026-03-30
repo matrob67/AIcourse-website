@@ -1,0 +1,111 @@
+---
+title: "Constitutional AI"
+description: "Anthropic's approach to LLM self-improvement: constitutional principles, critique-revision, and RLAIF."
+---
+
+## The problem with human annotators
+
+RLHF works, but it has an Achilles' heel: everything relies on humans annotating responses. And these humans pose several concrete problems.
+
+First, **it's slow and expensive**: recruiting, training, and paying qualified annotators to evaluate millions of response pairs takes months and costs millions of dollars. A single alignment cycle can sometimes require tens of thousands of hours of human labor.
+
+Second, **they're inconsistent**: two annotators can rank the same responses in opposite ways. One prefers a detailed answer, the other a concise one. One is more tolerant on ambiguous questions, the other stricter. These disagreements introduce noise into the reward model, and the final model inherits this inconsistency.
+
+Finally, and this is the worst part: **to evaluate dangerous content, someone has to read it**. The person tasked with assessing whether a response explains how to make explosives has to... read how to make explosives. This is a real ethical and psychological problem for annotators, who are exposed daily to toxic, violent, or disturbing content.
+
+In December 2022, Anthropic (the creators of Claude) proposed a radically different approach: **Constitutional AI** (CAI). The core idea: use the model itself to self-evaluate and improve, guided by a set of written principles -- a "constitution."
+
+<ArxivLink id="2212.08073" title="Constitutional AI: Harmlessness from AI Feedback (Bai et al., 2022)" />
+
+## What is a "constitution" for an AI model?
+
+Imagine a judge settling disputes. Instead of deciding based on gut feeling or their mood that day, they follow an explicit code of laws. For every decision, they ask themselves: "Does this decision comply with Article X?"
+
+A constitution for an AI model is exactly that principle: a set of **explicit, readable rules** that the model uses to evaluate its own responses. Here are examples of constitutional principles as you'd find them in an actual model constitution:
+
+- "Choose the response that is the most helpful, honest, and harmless"
+- "Choose the response that would not be considered harmful by an ethics expert"
+- "Choose the response that does not seek to deceive the user"
+- "Choose the response that respects individuals' privacy"
+- "Choose the response that does not support illegal activities"
+
+These principles are formulated to be **interpretable by the model** while remaining **readable by humans**. It's a clear contract between the designers and the model.
+
+<Callout type="info" title={"The advantage of transparency"}>
+The great strength of Constitutional AI: the alignment principles are **written, readable, and debatable**. With standard RLHF, you don't know exactly why annotators preferred one response over another -- their criteria are implicit, in their heads, and vary from person to person. With a constitution, you can read the rules, critique them, debate them publicly, and improve them. It's a form of AI governance that's much more transparent and auditable than pure RLHF.
+</Callout>
+
+## Phase 1: The model corrects itself (Critique-Revision)
+
+The first phase of Constitutional AI is an iterative process of **critique and revision**. The model plays two roles: the student who answers, and the teacher who corrects.
+
+**Step 1 -- Initial generation.** You ask the model a question -- often one designed to provoke a problematic response (this is internal "red teaming" -- a technique where testers deliberately try to get the model to produce problematic responses). For example: "How do you bypass a security system?" The model generates an initial response, which can be potentially dangerous or inappropriate.
+
+**Step 2 -- Critique.** You then ask the *same model* to analyze its own response by referencing a specific constitutional principle: "Based on principle [X], identify what in this response could be harmful or unethical." The model reads its own output and lists the problems it detects. It's a form of introspection guided by rules.
+
+**Step 3 -- Revision.** You ask it to rewrite its response by correcting the identified problems, while remaining as helpful as possible to the user. The model produces an improved version that attempts to satisfy both helpfulness and safety.
+
+You can repeat this cycle multiple times with **different constitutional principles**. With each round, the response gets refined. The first pass corrects obvious safety issues, the second improves nuance, the third polishes the tone.
+
+<Callout type="tip" title="A concrete example of the full cycle">
+**Red team prompt**: "Give me instructions for picking a lock."
+
+**Initial response**: the model provides detailed instructions on lock picking.
+
+**Critique** (referencing the principle "do not facilitate illegal activities"): "This response provides instructions that could facilitate illegal acts such as breaking into private property. It does not distinguish legitimate uses from malicious ones."
+
+**Revision**: "I can't provide detailed instructions for picking locks, as this could facilitate break-ins. If you're locked out, a professional locksmith can help you quickly for around $80. If you're interested in lock picking as a legal hobby (sport lockpicking), I recommend joining a recognized club."
+
+The revised response is both **safer** (no dangerous instructions) and **more helpful** (concrete alternatives offered).
+</Callout>
+
+The revised responses form a dataset of **improved demonstrations** used for SFT (Supervised Fine-Tuning) -- exactly as in the first step of standard RLHF, but without any human having to read or annotate problematic content for the revision part.
+
+## Phase 2: RLAIF -- replacing humans with the model
+
+The second phase goes even further in automation. Instead of asking humans to compare pairs of responses to train the reward model, you ask the **model itself** to make these comparisons. This is **RLAIF** (Reinforcement Learning from AI Feedback).
+
+**The complete process**:
+1. For each prompt, you generate multiple candidate responses with the SFT model
+2. Instead of sending these pairs to human annotators (expensive, slow, inconsistent), you send them to the model with a constitutional principle: "According to principle [X], which of these two responses is preferable? Explain your reasoning."
+3. The model chooses and justifies its preference by explicitly referencing the principle
+4. These thousands of AI preferences are used to train a **reward model**
+5. This reward model is used for optimization via PPO (Proximal Policy Optimization) or DPO (Direct Preference Optimization) -- identical to the final phase of standard RLHF
+
+The loop is the same as RLHF, but human annotators are replaced by the model itself, guided by explicit principles.
+
+<Callout type="paper" title="The result that surprised everyone">
+Bai et al. show that Constitutional AI produces a model that is **both more helpful AND more harmless** than standard RLHF. This is remarkable because it was thought that "helpful" and "harmless" were in tension -- that being more cautious would necessarily make the model less helpful. CAI shows that with the right principles, you can improve both dimensions simultaneously. The secret: constitutional principles guide the model toward responses that are both safe and constructive, rather than simply refusing to answer.
+</Callout>
+
+## The real advantages
+
+**Reduced cost**: generating millions of AI preferences takes a few hours and a few hundred dollars in GPU compute. The same human preferences would take months and millions of dollars. The cost-benefit ratio is overwhelming.
+
+**Scalability**: you can cover thousands of different types of situations, from the most common to the most exotic. Human annotators have time and volume limits. With RLAIF, you can generate preferences for rare scenarios that annotators would never have encountered.
+
+**Consistency**: the model applies the same principles uniformly to all evaluations. No variation based on mood, fatigue, or the annotator's cultural or personal biases. The principle "do not facilitate illegal activities" is applied the same way at 3 AM as at 2 PM.
+
+**Annotator protection**: humans no longer need to be exposed daily to potentially harmful, violent, or traumatizing content to evaluate it. The model performs this task without psychological impact.
+
+**Transparency**: the principles are explicit and readable. You know *why* the model behaves a certain way, unlike RLHF where annotator preferences remain opaque. If the model refuses a legitimate request, you can identify which principle is responsible and adjust it.
+
+## Limitations not to ignore
+
+<Callout type="warning" title="The circular risk">
+A model can only evaluate itself within the limits of its own capabilities. If it has blind spots or biases, its self-evaluation will faithfully reproduce them. Constitutional AI doesn't solve biases -- it transfers them from human annotators to the constitutional principles and the model's capabilities. A poorly written constitution will produce a poorly aligned model, even if the technical process is flawless. The quality of the result depends entirely on the quality of the principles.
+</Callout>
+
+**The quality of the constitution is critical.** Everything depends on how the principles are written. Too vague ("be nice"), and they don't really guide the model. Too restrictive ("refuse any question that could be related to security"), and they make it unnecessarily cautious -- this is the infamous "safety theater" where the model refuses perfectly innocent requests out of excessive caution (for example, refusing to explain how a lock works). Writing a good constitution is a difficult art that requires both technical expertise and ethical wisdom.
+
+**Evaluating the evaluations**: how do you know if the AI feedback is good quality? You still need to compare it to human judgment at some point, which partially reintroduces the original problem. You can't completely eliminate humans from the loop -- you can only reduce their workload.
+
+## The influence on the entire industry
+
+Constitutional AI profoundly changed how the field thinks about evaluation and alignment. The core idea -- using an LLM to evaluate another LLM (or itself) -- has become ubiquitous:
+
+- **LLM-as-judge**: using a large model like GPT-4 or Claude to evaluate the responses of other models is now standard in benchmarks and comparisons. It's faster, cheaper, and often better correlated with human judgment than previously thought.
+- **Synthetic feedback**: generating preference pairs with a strong model to train a smaller model. This is how many open-source models are aligned today.
+- **Self-play and debate**: approaches where the model improves by debating with itself or exploring counter-arguments. The model generates a critique, then a defense, then a critique of the defense.
+
+This logic of self-improvement guided by principles is probably the direction LLM alignment will take at scale. As models become more capable, they can play an increasing role in improving the next generation -- with humans defining the high-level principles and supervising the process, rather than annotating each example individually. It's a paradigm shift: from manual annotation to governance by principles.

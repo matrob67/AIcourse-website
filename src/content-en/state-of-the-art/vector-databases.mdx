@@ -1,0 +1,118 @@
+---
+title: "Vector Databases: Comparison"
+description: "Overview of vector databases for RAG: Chroma, Qdrant, Weaviate, Pinecone, Milvus, pgvector. Architecture, indexing, and selection criteria."
+---
+
+
+
+## Why a Vector Database?
+
+You have a million embeddings stored. A user asks a question. Comparing their question to **every** embedding one by one (exhaustive search) is a million operations. Feasible for a prototype, unsustainable in production with thousands of queries per second.
+
+**Vector databases** solve this with **smart indexes**. Instead of scanning all vectors, they use data structures that find the K nearest neighbors in $O(\log N)$ operations instead of $O(N)$. The price: it's **approximate** -- you potentially miss a few good results -- but in practice, the best indexes achieve 95-99% recall, which is more than sufficient.
+
+<Callout type="info" title="The Vector Challenge">
+Comparing two vectors is trivial (a dot product, a few multiplications). But **finding the K most similar among N billion** vectors: that's a serious algorithmic problem. ANN (Approximate Nearest Neighbors) algorithms like HNSW and IVF make this possible in sub-linear time.
+</Callout>
+
+## Indexing Algorithms
+
+### HNSW (Hierarchical Navigable Small World)
+Imagine a social network with multiple levels. At the highest level, you have a few "super-connectors" who know everyone. You start with them, then descend toward increasingly local connections. That's exactly HNSW: a **multi-level graph** traversed hierarchically.
+
+- Complexity: O(log N)
+- Recall: excellent (>99% when well-configured)
+- Downside: the entire graph must fit in RAM
+- Ideal for: corpora under 100M vectors, when search quality is paramount
+
+### IVF (Inverted File)
+You partition the space into clusters (via k-means). At search time, you identify the clusters closest to the query and only search within those. It's like looking for a book in a library: instead of scanning every shelf, you go directly to the right section.
+
+- Complexity: O(N/K) where K = number of clusters explored
+- Memory: moderate (no graph needed in RAM)
+- Ideal for: massive corpora with tight memory budgets
+
+### Product Quantization (PQ)
+Compresses the vectors themselves by splitting them into quantized subspaces. 10 to 50x size reduction. Often combined with IVF (IVF-PQ) for maximum scalability: compact index AND fast search. The tradeoff is a loss of precision in computed distances.
+
+## Popular Vector Databases
+
+### Chroma
+**Type**: in-process (Python library, no separate server).
+**Index**: HNSW.
+**Strengths**: ultra-simple (literally 2 lines of code), perfect for learning and prototyping.
+**Limitations**: not built for production, not distributed, no reliable persistence.
+
+```python
+import chromadb
+client = chromadb.Client()
+collection = client.create_collection("docs")
+collection.add(documents=["text 1"], ids=["1"])
+results = collection.query(query_texts=["my question"], n_results=3)
+```
+
+Chroma is the SQLite of vector databases: perfect to get started, to be replaced when things get serious.
+
+### Qdrant
+**Type**: dedicated server (written in Rust, so fast and reliable).
+**Index**: HNSW with optimized metadata filtering.
+**Strengths**: excellent performance, powerful metadata filters (by date, category, etc.), rich and well-documented API.
+**Limitations**: more complex configuration than Chroma.
+**License**: Apache 2.0 (fully open-source).
+
+The solid choice for self-hosted production, especially if you need advanced metadata filters.
+
+### Weaviate
+**Type**: dedicated server (Go).
+**Index**: HNSW + natively integrated BM25 hybrid search.
+**Strengths**: hybrid search (dense + sparse) in the same database, built-in vectorization modules.
+**Limitations**: high memory consumption.
+
+The right choice if you want to combine semantic search and keyword search without managing two separate systems.
+
+### Pinecone
+**Type**: serverless SaaS (fully cloud).
+**Strengths**: zero operations, automatic scaling, guaranteed high availability.
+**Limitations**: total vendor lock-in, not open-source, costs that climb with volume.
+
+Ideal for small teams without DevOps expertise who want quick results.
+
+### Milvus / Zilliz
+**Type**: distributed (self-hosted server or managed cloud).
+**Index**: HNSW, IVF-PQ, DiskANN (for corpora of several billion vectors).
+**Strengths**: massive horizontal scalability, support for multiple index types.
+**Limitations**: complex to deploy and maintain when self-hosted.
+
+The choice for extreme volumes (billions of vectors).
+
+### pgvector
+**Type**: PostgreSQL extension.
+**Index**: IVF, HNSW.
+**Strengths**: integrates into your existing PostgreSQL, no new infrastructure.
+**Limitations**: lower performance than dedicated solutions at large volumes.
+
+The pragmatic choice if you already have PostgreSQL and a modest vector search need.
+
+<Callout type="tip" title="The Decision in 3 Questions">
+1. **How many vectors?** Under 100M → Chroma/Qdrant. Over 100M → Milvus/Pinecone.
+2. **Do you have DevOps?** No → Pinecone (zero ops). Yes → Qdrant/Milvus (full control).
+3. **Budget?** Tight → Chroma/pgvector (free). Flexible → Pinecone (convenience) or Qdrant (performance).
+</Callout>
+
+## Sizing
+
+Approximate memory for an HNSW index:
+
+$$\text{Memory} \approx 4 \times N \times d \times 4 \text{ bytes}$$
+
+Where $N$ = number of vectors and $d$ = dimensions.
+
+Concrete example: 1M vectors of 768 dimensions = ~3 GB of raw data + ~12 GB of HNSW index = **15 GB** of RAM needed. Plan for a 2x factor for growth and internal operations.
+
+## Common Pitfalls
+
+<Callout type="warning" title="Watch Out for Parameters">
+HNSW parameters (`ef_construction`, `M`) affect the speed/quality tradeoff. A poorly configured index can drop to 80% recall, meaning 20% of the best results are silently missed. Test and measure recall on a reference dataset.
+</Callout>
+
+Most projects **over-optimize** the choice of vector database when the real leverage is elsewhere. For under a million documents, any correctly configured solution does the job. Invest instead in the quality of your **embeddings** (better model) and **chunking** (better splitting). That's where the quality of your RAG is truly determined.

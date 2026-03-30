@@ -1,0 +1,164 @@
+---
+title: "Normalization: BatchNorm, LayerNorm, GroupNorm"
+description: "Why normalize activations? BatchNorm for CNNs, LayerNorm for Transformers, and when to use each."
+---
+
+## Introduction: the chaos of dancing distributions
+
+During the training of a neural network, the weights change **constantly** at each iteration. This means that the **inputs to each layer** also change: their mean, their variance, their entire distribution shifts over time.
+
+This phenomenon is called **internal covariate shift**. The problem: each layer must constantly adapt to a moving distribution. It's like trying to aim at a target that moves every second -- you spend your time adjusting instead of making progress.
+
+Concretely, without normalization, activation values can drift toward extreme zones (very large or very small), creating unstable gradients. Activations saturate the non-linear functions (like tanh or sigmoid), gradients vanish, and training slows down drastically.
+
+**Normalization** stabilizes all of this by forcing activations to stay within a consistent distribution (mean close to 0, variance close to 1). Layers can then focus on learning useful representations, instead of wasting time compensating for drifts.
+
+<Callout type="info" title="The scientific debate">
+Why does normalization really work? It's surprisingly controversial. The original explanation (reducing internal covariate shift) has been questioned by subsequent work. Some researchers think normalization "smooths" the optimization landscape (loss landscape), making gradients more predictable and training more stable. Others point to an implicit regularizing effect. Regardless of the exact theoretical reason: empirically, normalization works incredibly well and has become indispensable.
+</Callout>
+
+## BatchNorm: normalizing over the batch
+
+<ArxivLink id="1502.03167" title="Batch Normalization: Accelerating Deep Network Training" />
+
+BatchNorm (Ioffe and Szegedy, 2015) is the normalization technique that started it all. The idea: for each **feature** (channel), compute the mean and variance over **all examples in the batch**, then normalize.
+
+Concrete example: you have a batch of 64 images passing through a convolutional layer with 128 channels. For channel 42, BatchNorm computes the mean and variance of channel 42 across all 64 images, then normalizes all values of that channel. Result: 128 pairs (mean, variance), one per channel.
+
+**The 4-step process**:
+
+1. Compute the batch mean: $\mu = \frac{1}{N} \sum_{i=1}^{N} x_i$ for each channel
+2. Compute the variance: $\sigma^2 = \frac{1}{N} \sum_{i=1}^{N} (x_i - \mu)^2$
+3. Normalize: $\hat{x} = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}}$ (the $\epsilon$ is a small number to avoid division by zero)
+4. Scale and shift: $y = \gamma \, \hat{x} + \beta$
+
+Step 4 is subtle and important. The parameters $\gamma$ (scale) and $\beta$ (shift) are **learned during training**. Why? Because forcing all activations to have mean 0 and variance 1 could hurt the network's expressiveness. These parameters allow the network to "undo" the normalization partially if it's useful for a given layer. In theory, if $\gamma = \sigma$ and $\beta = \mu$, you recover the original values.
+
+### At inference
+
+At inference, you often process a single image (batch size 1). No batch = no batch statistics. BatchNorm solves this by maintaining **running statistics** (exponential moving averages) accumulated during training. These statistics are then used as constants at inference, making the behavior completely deterministic.
+
+This is a frequent source of bugs: if you forget to set the model to `eval()` mode before inference, BatchNorm continues computing batch statistics instead of using the running statistics. The results will be different and often inconsistent.
+
+<Callout type="tip" title="BatchNorm changed deep learning's life">
+Before BatchNorm, training a deep network required meticulous tuning of the learning rate and weight initialization. BatchNorm allows a learning rate **5 to 10 times higher** (faster convergence), reduces sensitivity to initialization, and provides a mild **regularizing** effect (the noise from mini-batch statistics acts as a form of dropout). It's thanks to BatchNorm that we could reliably train truly deep networks (50, 100, 150 layers).
+</Callout>
+
+**Key limitations**:
+- **Batch dependency**: with a batch that's too small (size 2 or 4), the statistics are very noisy and unrepresentative. The model suffers.
+- **Variable-length sequences**: for RNNs processing sequences of different lengths, computing batch statistics is problematic (later positions don't have the same number of examples)
+- **Distributed training**: synchronizing batch statistics across multiple GPUs adds complexity and latency
+- **Different train/eval behavior**: training mode and inference mode are not identical, which can cause surprises
+
+## LayerNorm: normalizing over features
+
+<ArxivLink id="1607.06450" title="Layer Normalization" />
+
+LayerNorm (Ba, Kiros, and Hinton, 2016) takes the opposite approach from BatchNorm: instead of normalizing each feature across the entire batch, it normalizes **all features of a single example**, independently of other examples in the batch.
+
+Concrete example: same situation, 64 images, 128 channels. For image 17, LayerNorm computes the mean and variance across the 128 channels of that image. Result: 64 pairs (mean, variance), one per image.
+
+For each example $i$:
+
+$$
+\mu_i = \frac{1}{D} \sum_{j=1}^{D} x_{ij}
+$$
+
+$$
+\sigma_i^2 = \frac{1}{D} \sum_{j=1}^{D} (x_{ij} - \mu_i)^2
+$$
+
+$$
+\hat{x} = \frac{x - \mu_i}{\sqrt{\sigma_i^2 + \epsilon}}
+$$
+
+$$
+y = \gamma \, \hat{x} + \beta
+$$
+
+The **fundamental difference** from BatchNorm: LayerNorm is **identical** during training and inference. No running statistics, no different behavior depending on the mode. This is a major simplification that eliminates an entire class of bugs.
+
+**Why LayerNorm is the natural choice for Transformers**:
+- **Batch-independent**: works with any batch size, even batch = 1
+- **Stable for sequences**: each token is normalized independently, no issues with variable lengths
+- **Deterministic**: same behavior during training and inference
+- **Parallelizable**: no synchronization needed between batch examples
+
+<Callout type="warning" title="LayerNorm is the Transformer standard">
+All major Transformers (BERT, GPT, T5, LLaMA, etc.) use LayerNorm. Generally in **Pre-LN** configuration: normalization is applied **before** the attention and feedforward layers, not after. This Pre-LN configuration stabilizes the training of very deep networks much better than Post-LN (see the Pre-norm vs Post-norm page for details).
+</Callout>
+
+## GroupNorm: the intelligent compromise
+
+GroupNorm (Wu and He, 2018) sits between BatchNorm and LayerNorm. The idea: divide the channels into **groups** and normalize within each group, independently of the batch.
+
+Example: 128 channels, we create 32 groups of 4 channels. For each image, each group of 4 channels is normalized separately. This gives a finer normalization than LayerNorm (which treats all channels together) but without BatchNorm's batch dependency.
+
+**Interesting extreme cases**:
+- **1 single group** = all channels together = LayerNorm
+- **As many groups as channels** = each channel normalized alone = InstanceNorm (used in style transfer)
+
+GroupNorm is particularly useful in **computer vision** when the batch is small. If you're training a U-Net for high-resolution medical image segmentation, your GPU memory might only allow a batch of 2 or 4 images. BatchNorm would be catastrophic with so few examples, but GroupNorm works perfectly because it doesn't depend on batch size.
+
+That's why diffusion models for image generation (Stable Diffusion, DALL-E) often use GroupNorm in their U-Net backbone.
+
+## RMSNorm: LayerNorm but faster
+
+RMSNorm (Zhang and Sennrich, 2019) is a simplification of LayerNorm that **removes the recentering** (mean subtraction):
+
+$$
+\hat{x} = \frac{x}{\text{RMS}(x)}
+$$
+
+$$
+\text{RMS}(x) = \sqrt{\frac{1}{D} \sum_{i=1}^{D} x_i^2}
+$$
+
+$$
+y = \gamma \, \hat{x}
+$$
+
+The only operation is a normalization by the **magnitude** (the root mean square) of the vector. No mean computation, no subtraction, no $\beta$ parameter.
+
+**Why remove the mean?** Empirical studies have shown that recentering (subtracting the mean) doesn't always provide a performance gain, but it **costs computation**: it requires two passes over the data (one for the mean, one for the variance) instead of a single one (just the RMS). RMSNorm is approximately **10-15% faster** than LayerNorm, a significant gain when you multiply by billions of parameters and thousands of iterations.
+
+<Callout type="tip" title="RMSNorm: the new LLM standard">
+LLaMA, Mistral, Gemma, Qwen, and most recent LLMs use RMSNorm instead of LayerNorm. At the scale of models with 70 billion parameters trained on thousands of GPUs for weeks, every percentage of efficiency gain translates to **millions of dollars** in savings. RMSNorm delivers the same performance as LayerNorm for less cost.
+</Callout>
+
+## Comparison table
+
+| Technique | Normalizes over | Depends on batch | Primary use case |
+|---|---|---|---|
+| BatchNorm | The entire batch (per feature) | Yes | CNN, classic vision |
+| LayerNorm | Features (per sample) | No | Transformers, RNN |
+| GroupNorm | Groups of features | No | Vision with small batches, U-Nets |
+| RMSNorm | Features (magnitude only) | No | Modern LLMs, large Transformers |
+
+## Where to place normalization?
+
+The **placement** of normalization in the architecture is just as important as the choice of technique. Two main options exist in Transformers:
+
+### Post-norm (after the main layer)
+
+This is the formulation from the original Transformer paper (2017): normalize **after** the skip connection. Simple conceptually, but unstable for deep networks because the residual path isn't "protected" by the normalization.
+
+### Pre-norm (before the main layer)
+
+Normalize **before** the sub-layer (attention or feedforward). The gradient flows more directly via the skip connection. Much more stable for deep networks. **Has become the standard** for all modern LLMs. See the dedicated Pre-norm vs Post-norm page for an in-depth analysis.
+
+## Practical guide: which choice to make?
+
+| Architecture | Recommended technique | Why |
+|---|---|---|
+| Classic CNN (ResNet, VGG, EfficientNet) | BatchNorm | Validated by years of practice, sufficiently large batches |
+| Transformer (NLP, vision) | LayerNorm in Pre-LN | Proven standard, stable |
+| Small batches in vision (segmentation, detection) | GroupNorm (G=32) | No batch dependency |
+| Large-scale LLM (70B+) | RMSNorm in Pre-LN | Maximum efficiency at scale |
+| Style transfer / artistic generation | InstanceNorm | Normalizes each channel/image separately |
+
+## Why this matters
+
+Normalization seems trivial -- it's "just" putting values back to a good scale. But in practice, it's **what makes training modern deep networks possible**. Without normalization, networks of more than 10-20 layers diverge or converge so slowly that it's unusable. With the right normalization in the right place, you can train networks of 100+ layers without issues.
+
+Knowing which variant to use and where to place it is a fundamental skill in deep learning. It's often the first thing to check when training isn't converging: is the normalization correct? Is it in the right place? Is the train/eval mode properly handled?

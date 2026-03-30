@@ -1,0 +1,139 @@
+---
+title: "Data Parallelism: Distributing Across Multiple GPUs (The Basics)"
+description: "Data Parallelism and DDP: replicate the model on 8 GPUs, split the data, aggregate gradients. The simplest way to parallelize."
+---
+
+## The ultra-simple idea
+
+**Data Parallelism** is the most intuitive approach to training faster: copy the entire model to each GPU, give each one a different piece of the data batch, and combine the gradients at the end. Each GPU sees different examples, but they all converge toward the same model.
+
+It's like having 8 students each reading a different chapter of a book, then sharing their notes. At the end, everyone has the same understanding, but the work was done 8 times faster.
+
+## Classic: nn.DataParallel (obsolete)
+
+The old PyTorch API, `nn.DataParallel`, used a single Python process with a "master" GPU:
+
+1. The **master** scatters the data to GPUs 1, 2, 3...
+2. Each GPU does its forward/backward locally
+3. The **master** gathers the outputs and reduces the gradients
+
+**Fundamental problem**: Python's GIL (Global Interpreter Lock) prevents true parallelism, and the master GPU becomes a bottleneck since all traffic passes through it. Memory is also imbalanced: the master consumes more than the others.
+
+<Callout type="warning" title="Forget DataParallel">
+`nn.DataParallel` is obsolete and inefficient. The memory imbalance and master GPU bottleneck make this approach 30-50% slower than DDP. Always use DDP, even for quick experiments.
+</Callout>
+
+## DDP (Distributed Data Parallel): the real solution
+
+**DDP** launches an **independent** Python process per GPU. No more GIL, no more master. Each process is autonomous and communicates peer-to-peer.
+
+Architecture:
+- Process 0 on GPU 0
+- Process 1 on GPU 1
+- ...
+- Process 7 on GPU 7
+
+Each process performs its forward and backward locally with its own data, then an `all-reduce` synchronizes the gradients across all GPUs. After synchronization, each GPU has exactly the same gradients and performs the same weight update. The models therefore stay perfectly synchronized.
+
+### Gradient all-reduce
+
+DDP's key operation is the all-reduce: combine gradients from all GPUs and distribute the identical result to all. The efficient algorithm for this is the **Ring All-Reduce**:
+
+1. Gradients are divided into chunks (one per GPU)
+2. **Reduce-scatter**: chunks circulate in a virtual ring, each GPU progressively accumulates its chunk
+3. **All-gather**: accumulated chunks are distributed to all
+
+Complexity: `2(P-1)/P * M` where M is the total gradient size. The elegance of this formula is that the `(P-1)/P` term approaches 1 as you add GPUs. Communication is nearly constant regardless of the number of GPUs!
+
+<Callout type="info" title="Ring efficiency">
+With 8 GPUs, Ring All-Reduce communicates approximately 2M of data (where M = gradient size). With 100 GPUs? Still approximately 2M. The communication volume per GPU is practically independent of the number of GPUs. That's what makes DDP so scalable.
+</Callout>
+
+## Overlap communication and computation
+
+DDP doesn't naively synchronize after the entire backward. Thanks to **PyTorch hooks**, as soon as a gradient is computed for a layer, its all-reduce begins immediately in the background. While the backward continues computing gradients for earlier layers, the gradients for deeper layers are already being synchronized.
+
+This overlap is the key to DDP performance. To maximize this effect, gradients are grouped into **buckets** (typically 25 MB): we wait until the bucket is full before launching the all-reduce, which amortizes the overhead of each communication.
+
+## DDP configuration in practice
+
+### Key parameters
+
+| Param | Description | Typical |
+|-------|-----------|---------|
+| `world_size` | Total number of processes | 8, 16, 64 |
+| `rank` | Unique ID (0 to world_size-1) | 0-7 |
+| `local_rank` | ID on the local node | 0-7 (on an 8-GPU node) |
+| `backend` | Communication tech | "nccl" for NVIDIA |
+| `bucket_size_mb` | Bucket size | 25 MB |
+
+### Backends
+- **NCCL**: optimized for NVIDIA GPUs, exploits NVLink and InfiniBand. This is the one you want 99% of the time.
+- **Gloo**: multi-purpose, also works on CPU. Slower but useful for debugging.
+- **MPI**: the classic HPC choice, rarely used for deep learning.
+
+### Launching DDP
+
+```bash
+torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 \
+  --master_addr=host0 train.py
+```
+
+`torchrun` automatically handles environment variables (RANK, LOCAL_RANK, WORLD_SIZE) and launches processes. It's the standard and recommended way.
+
+<Callout type="tip" title="Always use torchrun">
+`torchrun` automates all the distributed launch boilerplate. Never launch processes manually with homemade scripts: you'll waste time debugging synchronization issues.
+</Callout>
+
+## Learning rate scaling
+
+With P GPUs and a micro-batch size B per GPU, the effective batch is `P * B`. Gradients are averaged over more examples, so they're "smoother." To compensate, you need to adjust the learning rate.
+
+The standard rule is **linear learning rate scaling**:
+
+$$lr_{\text{effective}} = lr_{\text{base}} \times P$$
+
+If you had `lr=0.001` with 1 GPU, with 8 GPUs use `lr=0.008`. Additionally, extend the **warmup** (hundreds of iterations instead of tens) to stabilize the start of training with this higher learning rate.
+
+### Scaling efficiency
+
+$$\text{Efficiency} = \frac{\text{Throughput}(P \text{ GPUs})}{P \times \text{Throughput}(1 \text{ GPU})}$$
+
+The ideal would be 100% (perfect linear scaling), but that's rare in practice due to communication overhead.
+
+<Callout type="info" title="Real-world efficiency">
+Within a node with NVLink: 95-99% efficiency. The link is so fast that communication is nearly invisible.
+Between nodes via InfiniBand: 85-95%, depending on model and batch size. The larger the model (more gradients to synchronize), the worse the compute/communication ratio gets.
+</Callout>
+
+## Major limitation: memory
+
+DDP **replicates** the entire model on each GPU. That's its strength (simplicity) but also its limit. Let's take the example of LLaMA 2 7B in mixed precision:
+
+| Component | Memory |
+|-----------|---------|
+| FP16 weights | 14 GB |
+| FP32 master weights | 28 GB |
+| Adam optimizer states (momentum + variance) | 28 GB |
+| Gradients | 14 GB |
+| **Total** | **~84 GB per GPU** |
+
+An A100 80GB? That doesn't even fit, and we haven't counted activations yet! For 13B+ models, DDP alone is simply impossible.
+
+### Solutions: ZeRO and FSDP
+
+This is where ZeRO (DeepSpeed) and FSDP (PyTorch) come in. Instead of replicating states on each GPU, they **partition** them: each GPU only stores a fraction of the weights, gradients, and optimizer states. The memory reduction is drastic (divided by the number of GPUs).
+
+<Callout type="warning" title="When DDP is no longer enough">
+As soon as the total of weights + optimizer + gradients + activations doesn't fit on a single GPU, pure DDP no longer works. You need to complement it with ZeRO/FSDP (memory partitioning) or Tensor Parallelism (layer partitioning).
+</Callout>
+
+## Conclusion
+
+DDP is the foundation of all distributed training. **Simple to set up, efficient within a node**, and it scales remarkably well thanks to Ring All-Reduce. It's always the first technique to try.
+
+For models that don't fit in memory or for large-scale multi-node, DDP stacks with other techniques (ZeRO, FSDP, Tensor Parallelism). But DDP remains the base building block on which everything else rests.
+
+<Callout type="info" title="Summary">
+Data Parallelism via DDP: replicates the model, splits the data, synchronizes gradients via Ring All-Reduce with near-linear scaling. It's the mandatory starting point for all LLM distributed training.
+</Callout>

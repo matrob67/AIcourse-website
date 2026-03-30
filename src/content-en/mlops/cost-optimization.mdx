@@ -1,0 +1,121 @@
+---
+title: "LLM Cost Optimization: Caching, Routing, Batching"
+description: "LLMs are expensive. Cut your bill by 50-70%: semantic caching, intelligent routing, batching."
+---
+
+## LLMs can silently drain your budget
+
+GPT-5.4 and Claude Sonnet 4.6 cost in the range of a few dollars per million input tokens (2026 update). Gemini 3.1 Pro is particularly competitive at $2/M input tokens. Per unit, that seems trivial. But for a high-traffic application (10,000 requests per day with long prompts), the bill climbs to tens of thousands of dollars per month.
+
+**The real problem**: many teams don't estimate it correctly upfront. A prototype costing $500/month can explode to $50,000/month when traffic takes off. Startups have shut down because of an unsustainable LLM bill. Cost optimization isn't a "nice-to-have," it's a matter of survival.
+
+<Callout type="info" title="The three cost levers">
+Three things determine your bill: (1) the number of input tokens (the size of your prompts and contexts), (2) the number of output tokens (the length of responses), and (3) the model chosen (GPT-5.4 vs GPT-5.4 Nano = 10x+ price difference). Optimizing each of these levers independently can reduce the bill by 50-70%.
+</Callout>
+
+## Caching: don't pay twice for the same answer
+
+### Exact caching: the lowest-hanging fruit
+
+If a user asks **exactly the same query** as a previous user, return the cached response. Zero API calls, zero cost, near-zero latency.
+
+**Real impact**: depends heavily on your application. A FAQ chatbot with standardized questions sees 30-50% cache hits. A free-form conversational assistant, more like 3-5%. Even 5% is free money.
+
+### Semantic caching: intelligence beyond word-for-word matching
+
+Exact matching misses a lot of duplicates. "What's the weather in Paris?" and "Paris weather today?" are semantically identical but textually different. Semantic caching solves this:
+
+1. Convert each query into an embedding (semantic vector)
+2. Compare with previous queries via cosine similarity
+3. If similarity exceeds a threshold (e.g., 0.95), return the cached response
+4. Otherwise, call the LLM and cache the new query/response pair
+
+**Tools**: GPTCache (dedicated), Redis with vector extensions, FAISS for embedding storage.
+
+<Callout type="tip" title="The similarity threshold: a delicate tuning">
+A threshold that's too low (0.80) returns incorrect responses for queries that seem close but aren't. A threshold that's too high (0.99) matches almost nothing. Start at 0.95, measure the cache hit rate, and collect user feedback to adjust. The right threshold is the one that maximizes hits without degrading perceived quality.
+</Callout>
+
+### Provider-side prompt caching: massive savings
+
+Anthropic and OpenAI offer caching at the API level:
+
+- **Anthropic Prompt Caching**: system prompt and context tokens that repeat between requests cost **90% less** when cached server-side. For a RAG application where the system prompt is identical for every request, this is a massive reduction.
+- **OpenAI Cached Tokens**: long prefixes that repeat (system prompt, few-shot examples) receive a 50% discount
+
+This is particularly effective for RAG and agent patterns, where the system prompt and base context are identical from one request to the next.
+
+## Intelligent routing: don't pay premium prices for a simple question
+
+### The fundamental insight
+
+Not all queries need the most powerful (and most expensive) model. "What is the capital of France?" can be handled by a model at $0.10/M tokens. "Analyze the legal implications of this 20-page contract" requires a model at $10/M tokens. Sending the first query to the expensive model is throwing money out the window.
+
+### Routing strategies
+
+**By estimated complexity**: a small classifier (fine-tuned or heuristic-based) estimates whether the query is simple or complex. Simple -> budget model (GPT-5.4 Nano, Gemini Flash). Complex -> premium model (GPT-5.4, Claude Sonnet 4.6).
+
+**By domain**: code query -> specialized code model. Medical question -> medical model. General conversation -> generalist. Each specialized model can be smaller and cheaper while being better in its domain.
+
+**Cascade**: send to the budget model first. If its response seems unreliable (low confidence), escalate to the premium model. The majority of queries are handled at low cost.
+
+<Callout type="paper" title="The math of the cascade">
+In practice, 60-80% of a typical application's queries can be handled correctly by a small model. Only 20-40% require the premium model. If the budget model costs 10x less, the total cost drops by 50-70% with minimal quality degradation overall.
+</Callout>
+
+### How to evaluate the small model's confidence
+
+To decide whether the small model is sufficient or you need to escalate:
+
+- **Log-probabilities**: high probabilities indicate the model is confident in its response. Below a threshold, escalate.
+- **External verifier**: a second (small and fast) model validates the first one's response. If validation fails, escalate.
+- **Simple heuristics**: does the response contain uncertainty markers ("I'm not sure," "it's possible that")? Is it abnormally short or long?
+
+## Prompt optimization: fewer tokens = lower costs
+
+### Reducing input context
+
+- **Summarize RAG documents**: instead of passing 5 full documents in the prompt, pass targeted summaries. The information-to-token ratio is much better.
+- **Aggressively select**: only take the 2-3 most relevant documents, not the top 10. The quality of the top 2 is often sufficient.
+- **Optimized system prompt**: eliminate redundant instructions, superfluous examples, excessive formatting. Every token in the system prompt is billed on every request.
+- **Minimal few-shot**: use the minimum number of examples needed. Often 1-2 examples suffice where people put 5.
+
+### Reducing output
+
+- **Limited max_tokens**: if you expect a 200-token response, don't let the model generate 2,000 by default
+- **Structured output**: a compact JSON is more economical than a free-text response
+- **Conciseness instructions**: "Answer in 2-3 sentences maximum" reduces verbosity and costs
+
+## Batching and budget APIs
+
+### Batch API: 50% off for non-urgent work
+
+- **OpenAI Batch API**: submit a batch of requests and get results within 24 hours. 50% discount on the standard price. Perfect for dataset evaluation, data preprocessing, or any task that doesn't require an immediate response.
+- **Anthropic Batch API**: same principle with reduced rates for batch processing
+
+### Self-hosting: profitable beyond a certain volume
+
+For a volume of 1-5 million tokens per day, self-hosting an open-source model (Llama 4, Mistral) on your own GPUs can be cheaper than APIs. A server with 2x A100 costs ~$3/hour and can serve millions of tokens per hour.
+
+<Callout type="warning" title="The hidden cost of self-hosting">
+The per-token cost is lower than APIs, but the **TCO** (Total Cost of Ownership) includes: GPU rental, infrastructure maintenance, monitoring, security updates, dedicated DevOps expertise. For a small team without infrastructure expertise, the total cost can exceed APIs. Do the full calculation before diving in.
+</Callout>
+
+## Cost monitoring: paranoia is warranted
+
+### Essential metrics to track
+
+- **Cost per request**: broken down by input/output tokens and model used
+- **Cost per user**: identify heavy users and abusive usage patterns
+- **Cache hit rate**: percentage of requests served from cache. If it's low, your cache is misconfigured.
+- **Routing distribution**: query split between models. If 90% goes to the expensive model, your routing needs work.
+- **Cost per business outcome**: relate LLM cost to generated revenue. This is the metric that truly matters.
+
+### Automatic alerts
+
+- **Budgets per team/project**: with notifications at 50%, 80%, and 100% of budget
+- **Consumption anomalies**: a sudden 5x spike in typical volume = probably a bug (infinite loop, endlessly growing prompt)
+- **Trends**: extrapolate future costs from current trends. Better to anticipate than react.
+- **Unit cost**: if the average cost per request increases without reason, investigate immediately
+
+Be paranoid about LLM costs. A bug that multiplies context size by 10 (a document injected in a loop, a conversation history that never truncates) multiplies your bill by 10. And it can go unnoticed for weeks if you're not monitoring.

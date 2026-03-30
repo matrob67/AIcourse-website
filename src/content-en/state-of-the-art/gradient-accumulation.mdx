@@ -1,0 +1,140 @@
+---
+title: "Gradient Accumulation and Effective Batch Size"
+description: "Understanding gradient accumulation, a technique for simulating large batch sizes on limited hardware, and its impact on LLM training dynamics."
+---
+
+## The Problem: You Want a 4M Token Batch but the GPU Can Handle 32K
+
+Scaling laws for LLMs say you need **millions of tokens per batch** for stable and efficient training. But the GPU can only process a few tens of thousands of tokens at a time (for example, a micro-batch of 4 sequences of 4K tokens = 16K tokens).
+
+The math is simple: you need a batch of 4M tokens, the GPU handles 16K. Not enough memory to load everything at once. What do you do?
+
+**Gradient Accumulation** is the answer: instead of updating weights after each micro-batch, you **accumulate** gradients from multiple micro-batches, then do a single update. The model mathematically sees a large batch, but the GPU only processes small chunks at a time.
+
+It's like filling a pool with a bucket: you can't fill it in one trip, but with enough round trips, the result is the same.
+
+## How It Works
+
+The algorithm is disarmingly simple:
+
+1. Initialize gradients to zero
+2. For each micro-batch $i = 1$ to $A$:
+   - Forward pass
+   - Backward pass: gradients **add up** to existing gradients (no `zero_grad` here)
+3. Divide accumulated gradients by $A$ (to get the average)
+4. `optimizer.step()` (weight update)
+5. `optimizer.zero_grad()` (reset for the next cycle)
+
+That's it. No magic, no approximation.
+
+### Effective Batch Size
+
+$$\text{Effective batch} = \text{micro-batch size} \times \text{accumulation steps} \times \text{GPUs in DP}$$
+
+Let's take a concrete example:
+- Micro-batch: 2 sequences = 8K tokens
+- Accumulation: 16 steps
+- Data Parallelism: 64 GPUs
+- **Effective batch: 2 x 16 x 64 = 2048 sequences = 8M tokens**
+
+You get the equivalent of an 8M token batch, but at any given moment the GPU is only processing 2 sequences. The memory needed is that of 2 sequences, not 2048.
+
+<Callout type="info" title="Mathematical equivalence">
+Accumulated gradients are mathematically **identical** to those from a single batch of size 2x16x64. This isn't an approximation: the average of gradients from N small batches is exactly the same as the gradient of a single large batch (up to batch normalization effects, but LLMs almost never use BatchNorm).
+</Callout>
+
+
+
+## Why Are Large Batches Necessary?
+
+### Reason 1: Distributed compute efficiency
+
+With a small batch on 64 GPUs, each GPU does very little compute before needing to synchronize its gradients (all-reduce). Network communication time dominates. With a large batch, each GPU computes longer before synchronization: the compute/communication ratio improves drastically.
+
+### Reason 2: Gradient estimation stability
+
+To train an LLM, you need each estimated gradient to be a good approximation of the true gradient. With only 16K tokens, the estimate is very noisy: one micro-batch can have a gradient pointing in a completely different direction from the next. With 4M tokens, the estimate stabilizes. Typical batches for LLMs range from **1M to 60M tokens**.
+
+### Reason 3: The critical batch size
+
+<Callout type="paper" title="Critical batch size">
+The **critical batch size** (CBS) is the size beyond which doubling the batch no longer significantly reduces the number of iterations needed. For LLMs, the CBS isn't fixed: it **increases** during training (the loss decreases, examples become "harder" to distinguish). That's why batch size ramp-up schedules are common: you start with a small batch and gradually increase it.
+</Callout>
+
+## PyTorch Implementation
+
+Super simple to implement:
+
+```python
+for i in range(num_accumulation_steps):
+    loss = model(batch[i])
+    loss.backward()  # Gradients accumulate
+
+loss = loss / num_accumulation_steps
+optimizer.step()
+optimizer.zero_grad()
+```
+
+Gradients accumulate automatically in PyTorch if you don't call `zero_grad()` between backward passes. It's the default behavior.
+
+## With DDP/FSDP: Optimizing Synchronization
+
+<Callout type="tip" title="The no_sync() context: a crucial optimization">
+In DDP (Distributed Data Parallel), each call to `backward()` automatically launches an all-reduce to synchronize gradients between GPUs. With 16 accumulation steps, that's 16 all-reduces, of which 15 are unnecessary (you only need to synchronize at the last step).
+
+Solution: use the `no_sync()` context for the first 15 steps. Only the last backward launches the all-reduce. Result: network communication is reduced by a factor of 16. On a multi-node cluster, this gain is considerable.
+</Callout>
+
+```python
+for i in range(num_accumulation_steps):
+    loss = model(batch[i])
+    if i < num_accumulation_steps - 1:
+        with model.no_sync():
+            loss.backward()
+    else:
+        loss.backward()
+
+optimizer.step()
+```
+
+## Impact on Learning Rate
+
+With a larger batch, each estimated gradient is "smoother" (less noisy). To compensate and maintain the same training dynamics, the learning rate must increase proportionally. This is the **linear scaling rule**:
+
+$$lr_{\text{new}} = lr_{\text{base}} \times \frac{\text{new\_batch\_size}}{\text{reference\_batch\_size}}$$
+
+Concrete example:
+- Reference batch: 1M tokens, lr=1e-4
+- New batch: 8M tokens
+- New lr: 1e-4 x (8M / 1M) = 8e-4
+
+Caution: a higher learning rate makes the beginning of training more unstable. You therefore need to extend the **warmup** phase (gradually increase lr from zero) to let the optimizer calibrate itself.
+
+<Callout type="warning" title="A batch that's too large hurts generalization">
+Beyond a certain threshold, increasing the batch becomes counter-productive. The noise in a small batch's gradients acts as a natural regularizer (it prevents the model from over-optimizing in one direction). A batch that's too large suppresses this noise, which can hurt generalization. Additionally, for a fixed training token budget, a larger batch means fewer iterations (fewer weight updates), which can also be detrimental.
+</Callout>
+
+## Typical Configuration for a 7B Model
+
+| Parameter | Value |
+|-----------|--------|
+| Micro-batch | 2 sequences (8K tokens) |
+| Accumulation steps | 16 |
+| GPUs (DP) | 64 |
+| Effective batch | 2048 sequences |
+| Tokens per batch | 8M |
+| Learning rate | 1e-4 to 3e-4 |
+
+This configuration gives a stable effective batch with a good compute/communication ratio on an 8-node DGX cluster.
+
+## Interaction with Pipeline Parallelism
+
+In Pipeline Parallelism (PP), micro-batches traverse the pipeline sequentially, creating a "bubble" where some GPUs are idle. Gradient accumulation helps fill this bubble: the more micro-batches, the more efficiently the pipeline is used.
+
+With M micro-batches and G GPUs in the pipeline, the fraction of wasted time (the bubble) is: `(G - 1) / (M + G - 1)`. With 8 GPUs and 16 accumulation steps: bubble = 7/23 = 30%. Not negligible, but acceptable. With 32 steps: 7/39 = 18%, much better.
+
+## Summary
+
+Gradient accumulation is used in **100% of LLM trainings**. It's the mechanism that decouples the effective batch from available GPU memory. Combined with Data Parallelism and scaling laws, it's what enables reaching the millions of tokens per batch indispensable for stable training.
+
+It's also one of the techniques with the best effort/impact ratio: a few lines of code for a fundamental transformation of training capacity.

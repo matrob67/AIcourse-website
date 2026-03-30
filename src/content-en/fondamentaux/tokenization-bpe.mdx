@@ -1,0 +1,236 @@
+---
+title: "Tokenization: BPE (Byte Pair Encoding)"
+description: "How to transform text into sequences of numbers: the BPE algorithm explained simply."
+---
+
+## The Story: From Text to Numbers
+
+Neural networks only understand numbers. You read "Hello world". Your brain understands language.
+
+A language model sees: [15234, 18203, 91028]. Numbers.
+
+How do you convert "Hello world" into numbers in a way the model can understand? That's the role of **tokenization** (i.e., splitting text into elementary units).
+
+This invisible step is **critical**. Bad tokenization = model goes haywire, high costs, poor performance. Good tokenization = everything works.
+
+Example: if "Hello" becomes 5 tokens instead of 1, your context shrinks by 80%. Catastrophe.
+
+## The Bad Solutions (and Why They Fail)
+
+<ImageWithSource
+  src="/images/admin/img-1774199691879.png"
+  alt="Comparison of character vs word tokenization"
+  source="Bing"
+  sourceUrl="https://img-blog.csdnimg.cn/20200808053913377.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0pheV9UYW5n,size_1,color_FFFFFF,t_70#pic_center"
+  caption="The image illustrates the difference between character-based and word-based models for tokenization. It shows how the same word can be decomposed differently depending on the chosen approach."
+  size="large"
+/>
+
+### Approach 1: Word-level Tokenization
+
+Split on spaces. "The cat sleeps" = 3 tokens.
+
+**Huge problems**:
+
+1. **Infinite vocabulary**: there are infinitely many words. "Antidisestablishmentarianism", "supercalifragilisticexpialidocious", proper nouns, slang, neologisms. Impossible to store them all.
+
+2. **Unknown words**: any word outside the vocabulary becomes `[UNK]` (unknown). The info disappears. The model just sees noise.
+
+3. **No morphological understanding**: "eat", "eating", "eaten" are 3 different tokens. The model doesn't see the common root "eat-".
+
+Concrete example: a model trained on 50k English words encounters "antidisestablishmentarianism" (rare). [UNK]. Information lost.
+
+### Approach 2: Character-level Tokenization
+
+Each letter = 1 token. "chat" = 4 tokens (c, h, a, t).
+
+Advantage: small vocabulary (26 letters + accents + punctuation = ~50-100 tokens).
+
+Problem: "Hello world" = 11 tokens instead of 2. Sequences explode. The model becomes very slow, and attention becomes O(11^2) instead of O(2^2).
+
+### The Compromise: Subwords
+
+Between these two extremes, there's a **sweet spot**:
+
+Intermediate vocabulary (32k-100k tokens). Frequent words = 1 token. Rare words = multiple coherent sub-tokens.
+
+"antidisestablishmentarianism" -> ["anti", "dis", "establish", "ment", "arian", "ism"]
+
+Each piece is understandable. The model generalizes. No unknown words.
+
+<Callout type="info" title="The dilemma">
+Too much vocabulary = huge embedding matrix, sparse, inefficient.
+Too little = long sequences, slow attention, unknown words.
+Subwords = the elegant and universally used compromise.
+</Callout>
+
+## BPE: Byte Pair Encoding
+
+<ImageWithSource
+  src="/images/admin/img-1774199572624.png"
+  alt="Byte Pair Encoding (BPE) diagram"
+  sourceUrl="https://miro.medium.com/v2/resize:fit:1024/1*Yf-6gR4pka9ge3xjitVyMA.png"
+  caption="This diagram illustrates the principle of Byte Pair Encoding (BPE), a tokenization method used in natural language processing. It shows how frequent character pairs are progressively replaced by single tokens to optimize text representation."
+  size="small"
+/>
+
+**BPE** (Byte Pair Encoding) is **the dominant algorithm**. Invented in 2016 (Sennrich et al.), used by GPT-2, GPT-3, GPT-4, and virtually all popular LLMs (Large Language Models).
+
+### The Core Idea: Merge Frequent Pairs
+
+The algorithm is elegantly simple:
+
+1. Start with all characters in the corpus as tokens
+2. Count adjacent pairs (a,b), (b,c), etc.
+3. The most frequent pair becomes a new token
+4. Replace all occurrences
+5. Repeat until reaching the desired vocabulary size
+
+Concrete example:
+
+**Initial corpus**: "bas bas bas hug hug pug bug" -- Vocabulary: `{b, a, s, h, u, g}`
+
+**Iteration 1**:
+- Pair (b, a) appears 4 times, pair (a, s) appears 4 times, pair (h, u) appears 3 times
+- -> Merge (a, s): create token "as"
+
+**Iteration 2**:
+- Pair (b, as) appears 3 times, pair (h, u) appears 3 times
+- -> Merge (b, as): create token "bas"
+
+... continue until 50k or 100k tokens
+
+### The Detailed Algorithm
+
+**Phase 1: Initialization**
+
+You start with a text corpus. Represent each word as a sequence of characters with a special end-of-word symbol:
+
+| Word | Character sequence |
+|---|---|
+| "the" | [t, h, e, &lt;/w&gt;] |
+| "cat" | [c, a, t, &lt;/w&gt;] |
+| "sleeps" | [s, l, e, e, p, s, &lt;/w&gt;] |
+
+**Phase 2: Training (once)**
+
+Count all adjacent pairs and merge the most frequent ones:
+
+**Round 1**: Pair (c, a) in "cat" = frequent -> create token "ca" -- corpus becomes: [t, h, e], [ca, t], [s, l, e, e, p, s]
+
+**Round 2**: Pair (ca, t) = frequent -> create token "cat" -- corpus becomes: [t, h, e], [cat], [s, l, e, e, p, s]
+
+... continue until 50k merges
+
+Result: an ordered list of 50k merges (a merge strategy).
+
+**Phase 3: Inference (used afterwards)**
+
+When you have new text "cat":
+1. Decompose into characters: [c, a, t]
+2. Apply merges in the trained order
+3. [c, a] -> [ca], [ca, t] -> [cat], etc.
+4. Final result: [cat]
+
+A common word = 1-2 tokens. An unknown word = several tokens. Perfect.
+
+<Callout type="tip" title="Training vs inference">
+**Training**: analyze a corpus to find common merges (done once, offline).
+**Inference**: apply the merge list to new text (done every time, online).
+Same algorithm, two different roles.
+</Callout>
+
+### Real Example: "unconstitutionally"
+
+Take this long and rare English word.
+
+English training corpus: BPE discovers that "un-" (prefix), "-tion" (suffix), "-ally" (suffix) are frequent. The word decomposes intelligently:
+
+"unconstitutionally" -> **["un", "constitu", "tion", "ally"]**
+
+Each piece is meaningful. The model learns:
+- "un-" = negation prefix (un, unknown, unable, ...)
+- "-tion" = nominal suffix (action, nation, ...)
+- "-ally" = adverbial suffix (ally, finally, ...)
+
+Result: the model generalizes. Understanding "un-" in "unconstitutional" helps it understand "unable", even if it has never seen that word.
+
+This is the magic of BPE: **automatic** morphological decomposition, without supervision.
+
+## Vocabulary Size: The Big Trade-off
+
+The **single parameter** of BPE is the final vocabulary size (50k? 100k?).
+
+| Vocabulary | Example | Sequence length | Memory | Generalization |
+|---|---|---|---|---|
+| 8k | Very small | Long | Small | Excellent |
+| 32k-50k | Standard | Medium | Medium | Good |
+| 100k+ | Large | Short | Huge | Medium |
+
+**Why does large vocabulary = short sequence?** It's counter-intuitive at first. The analogy: count in base 2 vs base 10. In base 2 (2 symbols), `42` is written `101010` -- 6 digits. In base 10 (10 symbols), `42` -- 2 digits. The larger the "symbol vocabulary", the fewer you need to represent the same information.
+
+Same logic for tokens: with an 8k vocabulary, `"tokenize"` breaks down into `["to", "ken", "ize"]` = 3 tokens. With a 100k vocabulary, `"tokenize"` is probably a single token = 1 token. Large vocab -> each token encodes more text -> fewer tokens per sentence -> shorter sequences.
+
+**Sizes in real models**:
+- GPT-2: 50k tokens
+- GPT-4 (tiktoken): 100k tokens
+- LLaMA: 32k tokens
+
+The choice depends on the corpus, languages, and computational budget.
+
+<Callout type="info" title="The trade-off">
+Vocab 2x bigger = embedding 2x bigger = more memory and compute. BUT shorter sequences = fewer tokens to process, less O(n^2) attention. The benefit can offset in the right conditions.
+</Callout>
+
+## Byte-level BPE: The Trick for Universality
+
+**Important variant**: BPE can start from Unicode characters (language-sensitive), or from **bytes** (256 universal values).
+
+Byte-level BPE = starting from the 256 bytes of the UTF-8 representation.
+
+Result: **any human text**, in any language, any encoding, can be tokenized. Zero unknown `[UNK]` tokens.
+
+Chinese "你好"? Tokenize.
+Arabic "السلام عليكم"? Tokenize.
+Emojis "🚀"? Tokenize.
+Python code `def foo():`? Tokenize.
+
+Used by GPT-2, GPT-3, GPT-4, LLaMA. The universal solution.
+
+## Limits of BPE (Honestly)
+
+BPE is excellent, but not perfect:
+
+**1. Deterministic but suboptimal**
+A single tokenization strategy per word. But maybe a different split would be better? BPE never explores it. It's just the greedy choice: at each step, merge the most frequent pair without ever going back.
+
+**2. Dependent on the training corpus**
+A tokenizer trained on 99% English and 1% French tokenizes French poorly. The French word can become 2 to 3 times more tokens. Your context shrinks.
+
+**3. Not probabilistic**
+BPE gives one and only one split. No alternatives. No uncertainty. The Unigram algorithm (an alternative) assigns probabilities to multiple splits.
+
+<Callout type="tip" title="Real-world debugging">
+When your model goes haywire in weird ways, check the tokenization **first**. Use the OpenAI or Hugging Face playgrounds. That's often where the invisible bugs hide: a rare word tokenizes badly, blows up your context, and the model gets confused.
+</Callout>
+
+## Why This Matters
+
+Tokenization is **invisible but omnipresent**. It affects:
+- Your context length (a rare word = multiple tokens = reduced context)
+- The model's arithmetic (numbers are tokenized inconsistently)
+- Performance in non-English languages (2 to 3 times more tokens)
+- Mysterious bugs (a poorly tokenized word = the model collapses)
+
+Understanding BPE helps you understand why your model behaves strangely. It's often the tokenization.
+
+## Key Takeaways
+
+1. **The problem**: how to encode text as numbers?
+2. **The naive approaches**: by words (infinite vocab) or characters (long sequences)
+3. **The solution**: subwords via BPE
+4. **The algorithm**: iteratively merge the most frequent pairs
+5. **Byte-level BPE**: zero unknown tokens, works for all languages
+6. **Vocabulary size**: 32k-100k, critical parameter
+7. **The limits**: deterministic, corpus-dependent, not probabilistic
+8. **The reality**: tokenization is the #1 source of invisible errors

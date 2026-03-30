@@ -1,0 +1,176 @@
+---
+title: "Model serving: deploying an LLM in production"
+description: "vLLM, TGI, and inference optimization techniques for serving an LLM with low latency and high throughput in production."
+---
+
+## What is model serving?
+
+Training an LLM is half the work. The other half is making it **accessible**: turning a 14 GB weight file into an API capable of responding to hundreds of simultaneous users, with acceptable latency and controlled costs.
+
+Model serving is exactly that: deploying a model behind an **API endpoint** (typically HTTP/REST or gRPC) that receives text requests and returns generated responses. Simple in appearance, in practice it's a formidable engineering problem.
+
+### The four fundamental challenges
+
+- **Latency**: the time between sending the request and the first token appearing (TTFT, Time To First Token). The user wants to see text appear in under 500ms, not wait 5 seconds staring at a blank screen.
+- **Throughput**: the number of requests processed per second. A service that responds quickly but can only handle 2 simultaneous requests won't hold up in production.
+- **Cost**: GPUs are expensive (an A100 costs ~$2/hour on the cloud). Every percentage of wasted GPU utilization translates directly into lost money.
+- **Memory**: a 7B model in FP16 takes ~14 GB of VRAM. Add the KV cache (the attention key/value cache that stores intermediate computations for each in-progress request) and activations, and a single 80 GB GPU fills up fast.
+
+<Callout type="info" title={"The impossible triangle"}>
+You simultaneously want low latency, high throughput, and minimal cost. Impossible to optimize all three without trade-offs. Serving frameworks offer different balances depending on your priorities.
+</Callout>
+
+### Naive serving vs optimized serving
+
+Naive serving is `model.generate()` in a Flask loop: one request at a time, raw memory allocation, no batching. For a prototype, it works. In production with 100 users, the GPU runs at 5% of its capacity while 99 requests wait in the queue.
+
+Specialized frameworks (vLLM, TGI, Triton, TensorRT-LLM) solve this problem by combining several optimizations: intelligent memory management, continuous batching, optimized attention kernels, and multi-GPU parallelism. Let's look at the two most popular ones.
+
+## vLLM: the open-source standard
+
+vLLM, developed at UC Berkeley, has established itself as the most widely used serving framework. Its popularity rests on two major innovations: **PagedAttention** and **continuous batching**.
+
+### PagedAttention: OS-style memory
+
+The central problem of LLM serving is the **KV cache**. Each in-progress request stores the attention keys and values of all its previous tokens. A classic serving setup pre-allocates a contiguous memory block for the maximum possible length of each request. It's like reserving a 500-space parking lot for every car that enters, even if most only use a dozen spots.
+
+PagedAttention borrows a 60-year-old idea from operating systems: **paged virtual memory**. Instead of one large contiguous block, the KV cache is split into small fixed-size **pages** (typically 16 tokens). Each request only consumes the pages it needs, and these pages can be scattered anywhere in GPU memory. A page table maps logical positions to physical blocks.
+
+Result: memory waste drops from 60-80% to less than 4%. In practice, this means **2 to 4 times more simultaneous requests** on the same GPU.
+
+<Callout type="tip" title={"Prefix caching"}>
+PagedAttention bonus: if 50 users query the same system prompt, the KV cache for that common prefix is computed once and shared across all requests. That's **prefix caching**, and it drastically reduces latency and memory consumption for use cases with a long system prompt.
+</Callout>
+
+### Continuous batching: never leave the GPU idle
+
+Static batching (grouping N requests and waiting for them all to finish) massively wastes the GPU. If one request generates 500 tokens and the others 50, the GPU computes empty padding 90% of the time.
+
+vLLM's continuous batching works **at each generation step**: as soon as a request finishes (its end token is generated), its slot is immediately freed and a new request from the queue takes its place. The GPU always stays busy at full capacity.
+
+It's the difference between a restaurant that waits for the whole table to finish before serving the next one, and a restaurant that serves dessert to one customer while taking the next one's order.
+
+### Deploying vLLM in practice
+
+```bash
+# Launch an OpenAI-compatible server in one command
+vllm serve mistralai/Mistral-7B-v0.1 \
+    --host 0.0.0.0 --port 8000 \
+    --tensor-parallel-size 2 \
+    --enable-prefix-caching \
+    --max-model-len 32768
+```
+
+```python
+# Client side: exactly the same API as OpenAI
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
+response = client.chat.completions.create(
+    model="mistralai/Mistral-7B-v0.1",
+    messages=[{"role": "user", "content": "Explain model serving"}],
+    stream=True  # token-by-token streaming
+)
+```
+
+The API is **drop-in OpenAI compatible**: you can replace your OpenAI API calls with calls to your vLLM server without changing a single line of client code.
+
+## TGI: Text Generation Inference by Hugging Face
+
+TGI is Hugging Face's official serving server, written in **Rust** for performance and reliability. Its positioning: the shortest path between a model on the Hub and a production API.
+
+### TGI's strengths
+
+- **Instant deployment**: a single Docker command is enough to launch any model from the Hugging Face Hub.
+- **Tensor parallelism** (splitting the model across multiple GPUs for large models) integrated and automatic.
+- **Quantization**: native support for GPTQ, AWQ, EETQ, and bitsandbytes to reduce memory footprint.
+- **Streaming**: token-by-token generation via Server-Sent Events, for a fluid user experience.
+- **Watermarking**: insertion of statistical watermarks in generated text, allowing post-hoc detection of whether a text was produced by your model.
+
+```bash
+# Docker deployment in one command
+docker run --gpus all -p 8080:80 \
+    ghcr.io/huggingface/text-generation-inference:latest \
+    --model-id mistralai/Mistral-7B-v0.1 \
+    --num-shard 2 \
+    --quantize awq
+```
+
+### When to choose TGI vs vLLM?
+
+| Criterion | TGI | vLLM |
+|---|---|---|
+| First deployment | Simpler (Docker, zero config) | More initial configuration |
+| Raw throughput | Good | Better (more mature PagedAttention) |
+| Ecosystem | Native Hugging Face | Agnostic |
+| Community | Large, but more enterprise | Very large, very active |
+| Advanced features | Watermarking, guidance | Speculative decoding, prefix caching |
+
+<Callout type="tip" title={"Practical advice"}>
+Start with TGI if you want a quick deployment within the Hugging Face ecosystem. Migrate to vLLM when throughput becomes critical or when you need advanced features like prefix caching or integrated speculative decoding.
+</Callout>
+
+## Inference optimization techniques
+
+Beyond framework choice, several fundamental techniques accelerate LLM inference. Some are integrated directly into serving frameworks.
+
+### KV Cache
+
+The KV cache is the mechanism that avoids recomputing attention keys and values for all previous tokens at each new generated token. Without KV cache, generating the 100th token would require recomputing attention on the 99 previous tokens from scratch. With KV cache, you only compute attention for the new token against the already-stored keys/values.
+
+It's such a fundamental optimization that all serving frameworks implement it by default. The challenge isn't using it, but **managing its memory efficiently** (that's exactly what PagedAttention does).
+
+### Speculative decoding: fast draft, parallel verification
+
+The principle is simple and elegant: a **small, fast model** (draft model, e.g., 0.5B parameters) proposes K candidate tokens. Then the **large model** (e.g., 70B) verifies these K tokens in **a single parallel pass**.
+
+Why does it work? Because LLM token generation is **memory-bound** (limited by memory bandwidth, not compute power). Verifying 5 tokens in parallel costs virtually the same as verifying a single one, because in both cases you load the same model weights from memory.
+
+The acceptance-rejection scheme mathematically guarantees that the final output follows **exactly** the large model's distribution. No quality degradation.
+
+Typical gains: **1.5x to 3x** speedup depending on the proximity between the small and large model. The best acceptance rate is achieved with models from the same family (e.g., Mistral-0.5B to verify with Mistral-7B).
+
+### Continuous batching in detail
+
+Continuous batching (also called **iteration-level scheduling**) treats each generation step independently:
+
+1. At each step, the scheduler checks which requests have finished (end token generated).
+2. Freed slots are immediately filled by new requests from the queue.
+3. Prefill (initial prompt processing) of new requests can be interleaved with decode (token-by-token generation) of in-progress requests.
+
+This approach eliminates the "padding waste" of static batching and keeps the GPU at maximum utilization. It's the most impactful technique in terms of throughput, and all modern frameworks implement it.
+
+### Flash Attention for inference
+
+Flash Attention (developed by Tri Dao) restructures the attention computation to minimize transfers between the GPU's fast memory (SRAM) and slow memory (HBM). Instead of materializing the full attention matrix in memory (which grows quadratically with sequence length), Flash Attention computes attention **by blocks** directly in SRAM.
+
+For inference, Flash Attention reduces attention step latency by **2 to 4x** and enables processing long contexts (32K, 128K tokens) that would otherwise be impossible due to memory constraints. Both vLLM and TGI use Flash Attention by default.
+
+<Callout type="info" title={"Flash Attention and PagedAttention"}>
+These two techniques are complementary. PagedAttention optimizes **memory allocation** of the KV cache (where to store the data). Flash Attention optimizes **the computation** of attention itself (how to process the data efficiently). Modern frameworks combine both.
+</Callout>
+
+## Serving framework comparison table
+
+| Feature | vLLM | TGI | Triton | TensorRT-LLM |
+|---|---|---|---|---|
+| **Throughput** | Excellent | Good | Good | Excellent |
+| **Ease of use** | Simple (CLI/Python) | Very simple (Docker) | Complex (protobuf config) | Complex (compilation) |
+| **Quantization** | AWQ, GPTQ, FP8 | AWQ, GPTQ, EETQ, BnB | Via backend | FP8, INT8, INT4 native |
+| **Multi-GPU** | Tensor + pipeline parallelism | Tensor parallelism | Multi-model, multi-backend | Tensor + pipeline parallelism |
+| **Ideal for** | High-performance LLM serving | Quick Hugging Face deployment | Multi-model ML ecosystem | Maximum NVIDIA performance |
+| **OpenAI-compatible API** | Yes | Yes | Not native | Yes (via Triton) |
+| **Speculative decoding** | Yes | No | Via backend | Yes |
+| **Prefix caching** | Yes | Partial | No | Yes |
+| **Community** | Very active, open-source | Large, Hugging Face | NVIDIA enterprise | NVIDIA enterprise |
+
+### Which framework to choose?
+
+- **vLLM**: the default choice for most LLM deployments. Best performance/simplicity trade-off, large open-source community, and rapid innovation (new features every week).
+- **TGI**: ideal for a quick first deployment, especially if you already use the Hugging Face ecosystem. One Docker command and you're in production.
+- **Triton**: when you need to serve a **complete ecosystem** of heterogeneous models (LLM + embeddings + classifiers + vision) on the same infrastructure. Requires a dedicated MLOps team.
+- **TensorRT-LLM**: when every millisecond counts and you're on NVIDIA GPUs. Maximum performance, but model compilation is complex and flexibility is reduced.
+
+<Callout type="info" title={"In summary"}>
+Model serving transforms a static weight file into a production service capable of handling hundreds of users. Modern frameworks combine PagedAttention (efficient memory), continuous batching (GPU always busy), Flash Attention (fast computation), and speculative decoding (accelerated generation) to achieve performance 10 to 20 times higher than naive serving.
+</Callout>

@@ -1,0 +1,168 @@
+---
+title: "Advanced Metrics: ROC, AUC, Calibration"
+description: "Going beyond simple metrics. ROC curves, AUC, and checking whether your probabilities are real."
+---
+
+## Introduction: Going Beyond Binary
+
+Accuracy, precision, recall: these metrics evaluate a **binary decision** (0 or 1) at a fixed threshold, typically 0.5. If the model's score exceeds 0.5, you predict "positive", otherwise "negative".
+
+But your model doesn't just produce 0 or 1. It produces a **continuous probability** between 0 and 1. A patient with a score of 0.51 and another with 0.99 are both "positive" at the 0.5 threshold, but the model's confidence is radically different. Advanced metrics exploit this richness of information. They evaluate the quality of the probabilities themselves, not just the final decision.
+
+Why is this crucial? Because the choice of threshold is arbitrary. And because in production, you often want to use probabilities directly (sorting cases by urgency, calibrating an alert system, etc.) rather than making a crude binary cutoff.
+
+
+
+## The Confusion Matrix: Seeing the Structure of Errors
+
+The **confusion matrix** is the basic tool for visualizing how a model makes mistakes. It crosses the true classes (rows) with the predictions (columns).
+
+For 2 classes (spam/not spam), it's a 2x2 matrix with our four friends: TP, FP, TN, FN.
+
+
+
+For K classes, it's a KxK matrix. The **diagonal** shows correct predictions. Everything **off-diagonal** represents errors, and the position tells you exactly what confusion the model is making.
+
+<Callout type="tip" title="Reading the confusion matrix">
+Rows are the true classes, columns are the predictions. In handwritten digit recognition, you often see that 4 is confused with 9, and 3 with 8 (visually similar). The matrix shows you these patterns of systematic errors, which no scalar metric can do. It's often the first tool to look at before choosing your metrics.
+</Callout>
+
+**Useful derived metrics**:
+- **Specificity** = TN / (TN + FP): among all true negatives, how many are correctly identified? It's the "recall of negatives".
+- **False Positive Rate (FPR)** = FP / (FP + TN) = 1 - Specificity: the proportion of negatives incorrectly labeled as positive. It's the false alarm rate, essential for the ROC curve.
+
+## The ROC Curve: Seeing the Entire Trade-off at Once
+
+The **ROC** curve (Receiver Operating Characteristic) is a powerful tool that shows your model's performance **at all possible thresholds** simultaneously. It plots **recall** (also called TPR, True Positive Rate, Y-axis) against the **False Positive Rate** (FPR, X-axis), by varying the decision threshold from 0 to 1.
+
+**How to build it intuitively**:
+
+- **Threshold = 1**: the model never predicts "positive" (too demanding). TPR = 0, FPR = 0. This is the point (0, 0) at the bottom left.
+- **Threshold = 0**: the model always predicts "positive" (no requirements). TPR = 1, FPR = 1. This is the point (1, 1) at the top right.
+- By progressively lowering the threshold from 1 to 0, you trace the complete curve.
+- **Perfect model**: the curve passes through the corner (0, 1) -- perfect recall with zero false positives. That's the dream.
+- **Random model**: the diagonal from (0, 0) to (1, 1). The model does no better than chance.
+
+
+<Callout type="info" title="How to interpret visually">
+The faster the curve "rises" toward the upper left corner, the better the model. It means you can achieve good recall while keeping a low false positive rate. If the curve hugs the diagonal, the model is random. If it goes below the diagonal, the model is worse than random: flip your predictions and you'll have a good model.
+</Callout>
+
+## AUC: Summarizing the ROC in a Single Number
+
+The **AUC** (Area Under the Curve) is the area under the ROC curve. It's a scalar between 0 and 1 that summarizes the model's overall discriminative ability.
+
+- **AUC = 1.0**: perfect model. There exists a threshold that perfectly separates the classes.
+- **AUC = 0.5**: random model. No better than flipping a coin.
+- **AUC = 0.0**: inverted model. It systematically gets it wrong (flip your predictions and you get AUC = 1.0).
+
+**Probabilistic interpretation** (very elegant): AUC represents the probability that a randomly chosen positive example receives a higher score than a randomly chosen negative example. An AUC of 0.9 means that in 90% of cases, a true positive will be ranked before a true negative. It's a concrete way to think about ranking quality.
+
+**Advantages of AUC**:
+- Threshold-independent: evaluates ranking quality, not a binary decision
+- Relatively robust to imbalanced classes
+- Makes it easy to compare models against each other
+
+**Important limitation**:
+AUC gives equal weight to all regions of the graph. But in practice, an FPR of 0.8 (80% false alarms) is never acceptable. You only care about the left part of the curve (low FPR). AUC can therefore mask important differences in the region that actually matters.
+
+## Precision-Recall Curve: For Rare Classes
+
+When a class is very rare (bank fraud: 0.1% of transactions, rare diseases), the ROC curve can be **misleading**. Why? Because the number of true negatives is so enormous that even many false positives barely move the FPR. The ROC curve looks excellent while the model is producing tons of false alerts.
+
+The **Precision-Recall** curve is designed for these situations. It plots **precision** (Y-axis) against **recall** (X-axis) by varying the threshold.
+
+The **AUC-PR** summarizes this curve. Key difference: a random model has an AUC-PR equal to the **proportion of positives** in the data (for example 0.001 if 0.1% fraud), and not 0.5 as with ROC. This makes it much more discriminating and informative for very rare classes.
+
+<Callout type="warning" title="ROC vs Precision-Recall: the right choice">
+**Balanced classes** (50/50 or close)? The ROC curve and standard AUC work well.
+**Very rare class** and you want to detect it (fraud, rare disease)? Use the Precision-Recall curve and AUC-PR. It's the only way to get an honest view of your performance.
+</Callout>
+
+## Calibration: Are Your Probabilities Real?
+
+Your model produces a score between 0 and 1, which we naturally interpret as a "probability of being positive". But is it really a reliable probability?
+
+A model is **well calibrated** if when it says "80% chance of being positive", then among all cases where it gives a score around 0.8, exactly 80% are actually positive. The probabilities faithfully reflect reality.
+
+**Concrete example**:
+- Your model gives a score of 0.8 for 100 patients
+- 80 are actually sick -> model is **well calibrated** at this confidence level
+- Only 50 are sick -> model is **overconfident** (it says 80% but it's actually 50%)
+- 95 are sick -> model is **underconfident** (it says 80% but it's actually 95%)
+
+Why is calibration important? Imagine a doctor using your model: "the patient has a 90% risk of cancer". If the model is poorly calibrated and 90% actually means 40%, the medical decisions made will be absurd. In production, probabilities guide human decisions. If they lie, so do the decisions.
+
+<Callout type="info" title="Neural networks are generally overconfident">
+This is a well-documented phenomenon: deep networks tend to produce extreme scores (close to 0 or 1) even when the actual uncertainty is high. They predict "99% sure" but are only right 85% of the time. Deep architectures, BatchNorm, and overtraining amplify this problem. Checking and correcting calibration is essential before any production deployment.
+</Callout>
+
+## Reliability Diagram: Visualizing Calibration
+
+To concretely see if your model is well calibrated, you build a **reliability diagram**. You group predictions by confidence levels (0-0.1, 0.1-0.2, ..., 0.9-1.0) and plot the true positivity rate for each group against the group's average confidence.
+
+
+
+A perfectly calibrated model gives a **diagonal line**: confidence of 0.3 -> 30% true positives, confidence of 0.7 -> 70% true positives, etc.
+
+If the points are **above** the diagonal, the model is underconfident (reality is better than what it thinks).
+If the points are **below**, the model is overconfident (it promises more than it delivers). This is the most common case with neural networks.
+
+## Brier Score: Calibration in a Single Number
+
+The **Brier score** condenses calibration quality into a single scalar value:
+
+$$
+\text{Brier} = \frac{1}{N} \sum_{i=1}^{N} (p_i - y_i)^2
+$$
+
+It's essentially the MSE (Mean Squared Error) applied to probabilities: you measure the gap between the predicted probability $p_i$ and the actual outcome $y_i$ (0 or 1) for each example. The **lower** the Brier score, the better. A score of 0 = perfect calibration. The Brier score captures both discrimination (does the model separate the classes well?) and calibration (are the probabilities correct?).
+
+## Post-hoc Recalibration: Fixing Without Retraining
+
+Good news: if your model is poorly calibrated, you can fix it **after the fact**, without touching the model itself. You keep its raw predictions and learn a transformation that adjusts the probabilities.
+
+### Temperature Scaling
+
+The simplest method and often sufficient. You introduce a single parameter T (the "temperature"):
+
+$$
+p_{\text{calibrated}} = \text{softmax}\!\left(\frac{\text{logits}}{T}\right)
+$$
+
+When T > 1, the probabilities are "softened": a score of 0.99 drops toward 0.85, reducing overconfidence. T = 1 changes nothing. T < 1 makes probabilities more extreme (useful if the model is underconfident).
+
+You optimize T on a separate validation set. A single parameter to learn, so virtually no risk of overfitting. This is the recommended default method.
+
+### Platt Scaling
+
+You learn a sigmoid transformation between the logits and the true class: $p = \sigma(a \cdot \text{logit} + b)$. Two parameters (a and b) instead of just one, so more flexible than temperature scaling. Useful when the relationship between the logit and the true probability isn't simply a matter of scale.
+
+### Isotonic Regression
+
+A non-parametric and very flexible approach. You learn an arbitrary monotonic function that transforms raw scores into calibrated probabilities, without imposing any functional form. More powerful but requires more validation data to avoid overfitting.
+
+## Summary of Tools
+
+| Tool | What it measures | When to use it |
+|---|---|---|
+| Confusion matrix | Error patterns by class | Always, first |
+| ROC curve / AUC | Overall discrimination | Balanced classes |
+| PR curve / AUC-PR | Discrimination on rare class | Imbalanced classes |
+| Reliability diagram | Probability quality | When probabilities guide decisions (healthcare, finance) |
+| Brier score | Calibration + discrimination | Scalar metric for probability quality |
+
+## Complete Evaluation: The Checklist
+
+For a truly rigorous evaluation of a classification model, follow these steps in order:
+
+1. **Confusion matrix**: visually understand the structure of errors. Which classes are confused? Is there a pattern?
+2. **ROC or PR curve**: evaluate performance at different thresholds, not just 0.5. Identify the optimal threshold for your use case.
+3. **Calibration**: verify that probabilities are reliable, especially if they guide human decisions.
+4. **Scalar metrics** (AUC, F1, Brier): to objectively compare models against each other and do model selection.
+
+Graphs (matrix, curves) let you **understand** the real strengths and weaknesses of the model. Scalars (AUC, F1) let you **compare** objectively. Both are necessary.
+
+## Why This Matters
+
+A good evaluation forces you to go beyond appearances. An AUC of 0.95 looks excellent. But if your model is massively overconfident, the probabilities it produces are unusable in production. An F1 of 0.90 is impressive, but if the PR (Precision-Recall) curve shows that performance collapses on the rarest cases --- the ones that matter most --- you have a problem. Evaluate properly, with the right tools, and you'll avoid nasty surprises in production.

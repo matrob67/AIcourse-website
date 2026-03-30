@@ -1,0 +1,116 @@
+---
+title: "In-context Learning"
+description: "How LLMs learn new patterns from examples in the prompt, explanatory theories, limitations, and the role of induction heads."
+---
+
+## Learning Without Modifying the Brain
+
+Imagine someone who doesn't speak Japanese. You show them five Japanese sentences with their English translations. And against all odds, they're able to translate a sixth one -- without ever studying Japanese, without courses, without a dictionary. How is this possible? Because this person is an experienced polyglot who has already learned 20 languages: they didn't learn Japanese from 5 examples, they *recognized* the translation pattern and applied their existing skills.
+
+This is exactly what large language models (LLMs) do with **in-context learning** (ICL). You show them a few examples in the prompt, and they "pick up" the pattern and apply it to new cases. The most remarkable part: this happens **without any modification to the model's weights**. No backpropagation, no gradients, no additional training. The model is exactly the same before and after -- only the context changes.
+
+
+
+> **ICL prompt example:**
+>
+> French -> English
+> chat -> cat
+> maison -> house
+> voiture -> ???
+
+The model responds "car." It has "learned" the translation task from three examples -- solely during inference.
+
+## The Discovery That Changed Everything: GPT-3 in 2020
+
+Before 2020, adapting an NLP (Natural Language Processing) model to a new task always meant the same thing: fine-tuning, i.e., modifying the model's weights on a specialized dataset. It was slow (hours to days), expensive (dedicated GPUs), and you ended up with a different model for each task. Sentiment classification? One model. Translation? Another. Summarization? Yet another.
+
+In 2020, the GPT-3 paper by Brown et al. changed the game: with a sufficiently large model (175 billion parameters), fine-tuning is no longer necessary for many tasks. GPT-3 performs dozens of NLP tasks competitively, simply by receiving a few examples in the prompt.
+
+The authors formalize three usage regimes:
+
+- **Zero-shot**: only a natural language task description, no examples ("Translate this sentence into English: ...")
+- **One-shot**: a single example of the task, followed by the new input
+- **Few-shot**: several examples (typically 3 to 32), showing the expected pattern
+
+<Callout type="info" title="The Paradigm Shift">
+Before ICL: one specialized model per task, a week of fine-tuning for each new use case, ML skills required. After ICL: a single generalist model, 5 examples in the prompt, immediate result, accessible to any developer. The barrier to entry for using an LLM on a new task went from "several days of ML work" to "a few minutes of prompt formulation." This is what made LLMs accessible to the general public.
+</Callout>
+
+## How Does It Work? Three Competing Theories
+
+This is one of the most fascinating mysteries of modern deep learning: why does ICL work? The weights don't change, yet the model adapts to a new task. Several theories coexist, each illuminating a different aspect of the phenomenon.
+
+### Theory 1: Implicit Gradient Descent
+
+The most audacious explanation. Researchers (Akyurek et al., 2022; von Oswald et al., 2023) mathematically demonstrated that a Transformer's attention layers can implement, during the forward pass, something that formally resembles a **gradient descent**.
+
+In other words: the Transformer "trains itself" on the prompt examples while processing them, by updating temporary "internal weights" encoded in the activations. The examples in the prompt play the role of a mini-training dataset, and attention acts as the optimizer. It's training *inside* a forward pass.
+
+This theory is elegant and mathematically precise, but it has mainly been validated on simplified Transformers (1-2 layers) and linear regression tasks. Its generalization to billion-parameter LLMs on complex tasks remains an active research topic.
+
+### Theory 2: Bayesian Task Selection
+
+Another perspective: the pre-trained model has absorbed hundreds of thousands of different tasks during pre-training. The examples in the prompt simply serve to "select" which of these known tasks applies here.
+
+<Callout type="paper" title={"ICL as Recognition, Not Learning"}>
+According to this theory, the model doesn't truly *learn* from the examples. It *recognizes* that the examples correspond to a pattern already seen during pre-training and applies it. It's memory retrieval, not learning. This would explain why ICL works mainly for "standard" tasks and fails on truly novel ones.
+</Callout>
+
+### Theory 3: Skill Composition
+
+The most pragmatic perspective. Large models acquired modular elementary skills during pre-training: grammar, translation, arithmetic, formatting, logic, etc. The examples in the prompt guide the *composition* of these building blocks to solve the requested task. It's less learning than custom assembly -- like a chef who has all the ingredients in the kitchen and uses the recipe (the prompt) to combine them.
+
+## Induction Heads: The Mechanism Discovered by Anthropic
+
+**Induction heads** are the most concrete and fascinating discovery about the mechanical "how" of ICL. Olsson et al. (2022) at Anthropic identified specific pairs of attention heads that work together to implement a simple but surprisingly powerful pattern:
+
+If the model sees in its context the sequence `[A][B]...[A]`, it predicts `[B]` after the second `[A]`.
+
+In plain terms: "If I've already seen A followed by B somewhere in the context, then when I see A again, I predict B." It's a **conditional copy** mechanism -- and it's exactly what's needed for ICL. When you show "chat -> cat, maison -> house, voiture -> ???," the model has seen the pattern [french_word] -> [english_word] several times, and it applies it to the new case.
+
+<Callout type="paper" title={"A Phase Transition During Training"}>
+Olsson et al. observe that induction heads don't exist in untrained models. They appear during a **phase transition** during training: at a certain stage, the loss improves abruptly, induction heads form, and the ICL capability appears almost instantaneously. This is a direct example of an emergent capability observable mechanistically.
+</Callout>
+
+
+## What Influences ICL Performance
+
+### More Examples, but with Diminishing Returns
+
+In general, more examples = better performance. But the marginal gain diminishes quickly. Between 0 and 5 examples: huge gain. Between 15 and 20 examples: near-zero gain for most tasks.
+
+### Example Order: A Detail That Matters
+
+Surprising but documented: the order in which you present examples can change performance by 10 to 20 percentage points on certain tasks. The best orderings are hard to predict a priori.
+
+### Quality and Diversity
+
+Clear, diverse examples that are representative of the different sub-types of the task yield better results than redundant examples. Diversity helps the model generalize.
+
+### Model Size
+
+ICL is an emergent capability. Models with fewer than 1 billion parameters have very limited ICL abilities. It's from 7-10 billion onward that it becomes truly reliable.
+
+## Limitations to Know
+
+**The context window**: the number of examples is physically capped by the model's context window size (e.g., 128,000 tokens for GPT-4, 200,000 for Claude). That sounds like a lot, but detailed examples with context and explanation take up space quickly. In practice, you can rarely fit more than 20-50 rich examples, which limits the adaptation capacity.
+
+**Out-of-distribution tasks** (when the data encountered differs from what was seen during training): ICL works well for tasks that resemble what the model saw during pre-training. For a truly novel task -- an invented programming language, a radically new classification system, non-standard logic -- performance remains limited. The model can't truly *learn* something fundamentally new from 10 examples; it can only *reconfigure* its existing skills.
+
+<Callout type="warning" title={"ICL Is Not a Replacement for Fine-tuning"}>
+For a task that requires deep and reliable adaptation -- thousands of examples, a highly specialized domain, strict format constraints -- fine-tuning remains superior. ICL is excellent for rapid prototyping, specifying a format, or adapting a simple behavior. For robust production on a specific task, fine-tuning keeps the advantage.
+</Callout>
+
+**Sensitivity to superficial artifacts**: the model can latch onto superficial patterns in the examples rather than the deep logic. If all your "positive" examples start with "I," the model might associate "I" with positive rather than understanding the emotional content.
+
+## In-context Learning in Practice
+
+ICL is the foundation of **prompt engineering** -- the art of crafting effective prompts to get the desired behavior from an LLM. Understanding ICL helps you understand *why* certain techniques work so well: providing examples (few-shot) shows the pattern to the model, illustrating the expected output format guides the response structure, and varying example diversity improves generalization.
+
+In practice, here are the key recommendations:
+- Always start with 3 to 5 diverse examples that cover the different cases of your task
+- Show the exact expected output format in your examples -- the model will reproduce it faithfully
+- If performance isn't sufficient, increase the number of examples before moving to fine-tuning
+- Example order matters: put the most representative ones first and last (primacy and recency effects)
+
+This is also why LLMs are so flexible: a single model can be "programmed" for hundreds of different tasks simply by changing the prompt. This extraordinary flexibility, combined with more advanced prompt engineering techniques (chain-of-thought, structured output), is what we explore in the following sections.

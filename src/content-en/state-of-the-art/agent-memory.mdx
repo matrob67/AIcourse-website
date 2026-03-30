@@ -1,0 +1,181 @@
+---
+title: "Memory Systems for Agents"
+description: "AI agents require different types of memory to function effectively: short-term memory, long-term memory, episodic memory, and semantic memory."
+---
+
+## The Problem: The Amnesiac Agent
+
+Imagine an AI assistant that helps you every day but every morning asks your name, your preferences, and the project you're working on. Frustrating, right? That's exactly what happens with an agent without memory. It starts from scratch every conversation, forgets everything it's learned, doesn't capitalize on past mistakes, and retains none of your habits. **Memory is what transforms a reactive agent into a partner that improves over time** — the difference between an eternal intern and an experienced colleague.
+
+<Callout type="info" title="The Four Types of Agent Memory">
+Inspired by cognitive science, we distinguish four types of memory: **short-term** (the current conversation — like what you keep in mind while someone is talking to you), **long-term** (persistent knowledge retrieved as needed — like looking up information in your notes), **episodic** (your memories of past situations: "the last time I deployed on a Friday, it crashed"), and **semantic** (pure facts: "PostgreSQL uses port 5432 by default").
+</Callout>
+
+## Short-Term Memory: The Context Window
+
+### How It Works
+
+The most basic form of memory is the model's **context window**. It's the equivalent of your working memory during a conversation — you keep in mind what was just said to understand what follows. Technically, the entire conversation history is injected into the prompt with each model call:
+
+- [System instructions to the model]
+- [User message 1]
+- [Agent response 1]
+- [User message 2]
+- [Agent response 2]
+- ... (all of this fits in the model's context)
+- [User message N -- this is where we are]
+
+### The Limits of This Approach
+
+- **Limited size**: even 200,000 tokens (roughly 150,000 words) eventually overflow in a long work session
+- **Growing cost**: every token in the context costs computation and money — a long conversation can become very expensive
+- **Lost in the middle**: the model "forgets" messages in the middle of the context, focusing on the beginning (instructions) and the end (recent exchanges)
+
+### Strategies for Managing Size
+
+- **Sliding window**: keep only the last N messages, dropping the oldest ones. Simple but brutal — you potentially lose key information.
+- **Progressive summarization**: periodically summarize the history into a compact block. You lose details but keep the essentials.
+- **Hybrid**: a summary of the entire conversation + the last 5-10 messages in detail. This is the most effective pattern in practice.
+
+<Callout type="tip" title="The Smart Summary Pattern">
+Every 10-20 exchanges, ask the model to produce a structured summary: "Summarize this conversation keeping the decisions made, user preferences expressed, and essential context for what follows." This summary replaces the detailed history in the prompt. It's like doing a recap at the end of a meeting before moving on, instead of trying to remember every word spoken.
+</Callout>
+
+
+
+## Long-Term Memory: The Vector Database
+
+### The Central Idea
+
+The context window is limited — you can't fit everything in it. The solution: store past interactions and knowledge in an **external vector database**. When the agent needs them, it searches by semantic similarity. It's like having a personal library with a smart librarian: instead of carrying everything on you, you say "I'm looking for what concerns the user's export preferences" and the librarian brings back the most relevant documents.
+
+```python
+# Save an important interaction
+memory_store.add(
+    text="The user prefers JSON format for exports",
+    metadata={"type": "preference", "date": "2024-03-15"}
+)
+
+# Later, retrieve relevant memories
+relevant_memories = memory_store.search(
+    "output format for export",
+    k=5  # Top 5 most relevant memories
+)
+```
+
+### Simple Alternative: Key-Value Storage
+
+For structured information (user preferences, established facts), a simple dictionary often works better than vector search — faster, more predictable, no semantic ambiguity:
+
+```python
+user_profile = {
+    "language": "english",
+    "expertise_level": "advanced",
+    "preferred_format": "JSON",
+    "recent_projects": ["API migration", "dashboard analytics"]
+}
+```
+
+It's like having a clear, structured client file rather than digging through thousands of messages to find a preference.
+
+## Episodic Memory: Lessons Learned
+
+### Storing Complete Experiences
+
+Episodic memory doesn't just store facts — it stores **complete episodes**: the starting situation, the actions attempted, the outcome obtained, and the lesson retained. It's the difference between knowing that "connection timeouts can cause errors" (semantic fact) and remembering that "the last time we had this error, it was a timeout and we fixed it by increasing to 30 seconds" (episode).
+
+```json
+{
+  "episode": "Bug #423 resolution",
+  "date": "2024-03-10",
+  "context": "Database connection error",
+  "actions_taken": ["Check credentials", "Test network connection", "Discover too-short timeout"],
+  "outcome": "Resolved by increasing timeout to 30 seconds",
+  "lesson": "Always check connection timeouts first"
+}
+```
+
+<Callout type="paper" title="Reflexion: Learning from Mistakes">
+The Reflexion framework demonstrates that agents learn significantly faster using episodic memory. The mechanism: after each failure, the agent generates a textual "reflection" (what went wrong, why, and how to do better next time) and stores it. For similar future tasks, it retrieves these reflections and incorporates them into its reasoning. It's the computational equivalent of "lessons learned" in project management.
+</Callout>
+
+## Semantic Memory: The Knowledge Base
+
+### Facts and Concepts
+
+Semantic memory stores **learned facts and concepts** organized by domain — this is the agent's factual knowledge:
+
+- Business rules (a refund requires an invoice less than 30 days old)
+- Domain definitions and terminology
+- Relationships between concepts (this service depends on that database)
+- Standard procedures and workflows
+
+### A Personal Knowledge Graph
+
+The most powerful form of semantic memory is the **knowledge graph**: a network of entities connected by relationships. The agent builds and enriches it through its interactions. For example:
+
+"Alice → works_for → TechCorp" and "TechCorp → makes → software" allows the agent to deduce "Alice works in software" without you having explicitly told it. This inference reasoning over the graph is what distinguishes an agent with rich semantic memory from a simple search engine.
+
+## Memory Architectures in Practice
+
+The idea of giving neural networks external memory isn't new. As early as 2014, **Neural Turing Machines** proposed an architecture where the network learns to read from and write to an external memory matrix, like a differentiable computer. The network itself decides *where* to read and *where* to write via attention mechanisms — it's a direct ancestor of the memory systems we use today in agents.
+
+<ArxivLink id="1410.5401" title="Neural Turing Machines (Graves et al., 2014)" />
+
+### MemGPT / Letta: OS-Inspired Memory
+
+MemGPT proposes hierarchical memory management modeled on computer architecture:
+
+- **Context RAM**: the active context window (fast access, limited size)
+- **Archival disk**: unlimited persistent storage (slower access, unlimited capacity)
+- **Retrieval memory**: index to efficiently search through history
+- **The agent manages transfers**: the model itself decides what to keep in "RAM" and what to archive to "disk"
+
+The computer analogy is very apt: your brain doesn't load all your memories into working memory — it keeps what's immediately needed and retrieves the rest when relevant.
+
+### Mem0: Memory as a Cloud Service
+
+Mem0 is a "ready-to-use" memory layer that simplifies integration:
+
+- Automatic memory extraction from conversations (no need to code the logic)
+- Smart deduplication (if the user repeats the same info, it's stored only once)
+- Minimalist API: add, search, update
+- Multi-user and multi-agent support
+
+## Practical Implementation
+
+### Simple Pattern with Automatic Summarization
+
+```python
+from langchain.memory import ConversationSummaryBufferMemory
+
+memory = ConversationSummaryBufferMemory(
+    llm=llm,
+    max_token_limit=2000,  # When exceeded, auto-summarize
+    memory_key="chat_history",
+)
+
+# Memory handles summary + recent messages automatically
+```
+
+### Hybrid Pattern (recommended)
+
+The pattern that works best in production combines three levels:
+
+1. **Short-term**: the last 5 messages in the context (for conversation fluidity)
+2. **Long-term**: vector search of relevant past interactions (for historical context)
+3. **Profile**: user preferences in key-value (for personalization)
+
+This mirrors how humans function: you remember your conversation partner's last sentence (short-term), you can recall an anecdote they told you (long-term), and you know they prefer coffee over tea (profile).
+
+<Callout type="warning" title="The Big Challenge: Relevance">
+The main problem with long-term memory isn't storage — it's **retrieval**. Finding the right memories at the right time is a hard problem. Too many irrelevant memories pollute the context and distract the agent. Too few cause awkward forgetting. The quality of semantic search and the choice of number of results (the famous k) are the most critical parameters to tune.
+</Callout>
+
+## Best Practices
+
+1. **Start simple**: sliding window + summary solves 80% of problems. Only add complexity if justified by a real need.
+2. **Explicit memory**: prefer letting the user say "remember that..." rather than memorizing everything automatically — it's more predictable and transparent.
+3. **Active forgetting**: regularly delete memories that have become false or outdated. Perfect memory doesn't exist, and stale memories do more harm than no memory at all.
+4. **Transparency**: the user should be able to see and edit what's memorized. An agent with opaque memory creates distrust.
+5. **Continuous evaluation**: regularly test whether the agent retrieves the right information — retrieval quality silently degrades if you don't measure it.

@@ -1,0 +1,81 @@
+---
+title: "Pruning: Structured, Unstructured, and Wanda"
+description: "Pruning removes the least important parameters from a neural network to reduce its size and speed up inference. An overview of classical and modern techniques for LLMs."
+---
+
+
+
+## The Problem: Models Have Useless Weights
+
+Imagine a tree with dead branches. Cutting those branches doesn't hurt its health — it still captures sunlight just as well. Neural networks are the same: many weights **contribute almost nothing** to predictions. Why keep them?
+
+To give you an idea of the scale: in a model like LLaMA-7B with its 7 billion parameters, it's estimated that **half the weights** could be removed without significant impact on performance. It's as if you were carrying a 15-pound backpack where 7.5 pounds were useless rocks. Pruning is the art of identifying and removing those rocks.
+
+Why do these useless weights exist? During training, the network explores many directions. Some weights settle at near-zero values — they serve no purpose but still cost memory and compute. Others compensate for training artifacts rather than capturing useful patterns. The network is **over-parameterized by design**, because that helps convergence during training, but it's wasteful at inference time.
+
+<ArxivLink id="2306.11695" title="A Simple and Effective Pruning Approach for Large Language Models (Sun et al., 2023)" />
+
+<Callout type="info" title="The lottery of networks">
+The "Lottery Ticket Hypothesis" says that in any dense network, there exists a **sparse subnetwork** (a subset of weights) that, trained alone from the same initial conditions, performs just as well as the full network. Pruning is simply looking for this hidden subnetwork. Put differently: the "real" model is smaller than the one you trained. You just need to find it inside.
+</Callout>
+
+## Two Opposing Strategies
+
+### The Scalpel (Unstructured Pruning)
+
+The idea is simple: scan the weight matrix, identify the smallest values (close to zero), and set them to zero individually. Result: a matrix that looks like Swiss cheese — lots of zeros scattered irregularly.
+
+**Advantage**: surgical flexibility. You can remove 70-90% of weights while keeping good performance, because you're precisely targeting the least important weights.
+
+**Problem**: your standard GPU doesn't speed up on Swiss cheese. GPUs are designed to multiply dense (full) matrices, not matrices riddled with holes everywhere. The size in memory decreases (if you use a sparse format), but the **execution speed stays the same** on standard hardware. It's frustrating: your model is technically lighter, but it doesn't run faster.
+
+### The Chainsaw (Structured Pruning)
+
+Remove **entire structures**: a complete attention head, an FFN layer, an entire neuron in a layer, or even a complete Transformer layer. Result: an architecturally smaller model that's still regular.
+
+Imagine a 32-story building. Unstructured pruning removes individual bricks here and there (the building is the same size, but with holes). Structured pruning removes **entire floors** — you have a 24-story building, smaller, but perfectly functional and standard.
+
+**Advantage**: it actually speeds things up, without special hardware. A model with 25% fewer layers truly runs 25% faster.
+
+**Problem**: less flexible. You can only cut 30-50% max before losing significant quality, because each removed structure has a more brutal impact than an individual weight.
+
+<Callout type="tip" title="2:4 sparsity on recent NVIDIA GPUs">
+There's a magical hybrid format between structured and unstructured: **2:4** sparsity. For every 4 consecutive elements, you keep exactly 2 active and set 2 to zero. This regular pattern allows Ampere/Ada GPUs (A100, RTX 4090...) to exploit it natively with dedicated hardware instructions. Result: 50% compression **and** real ~2x speedup. It's the sweet spot between flexibility and hardware efficiency.
+</Callout>
+
+## Wanda: The Simple Method That Works
+
+The standout method of 2023: **Wanda** (Weights AND Activations). The intuition is brilliantly simple. Classical methods remove weights with the smallest absolute values. But a "small" weight connected to a neuron that activates enormously can be very important. Wanda captures this with a single formula:
+
+$$\text{Weight score} = |w| \times \| \text{activations} \|_2$$
+
+An important weight isn't just a big number. It's a weight with a **high value** connected to a channel that **activates a lot**. Think of it like an employee's influence: it's not just their title (the weight value) that matters, it's also how many projects flow through them (the activations).
+
+In practice, Wanda takes a small data sample (128 examples are enough), runs a forward pass to measure activations, computes each weight's score, and removes those with the lowest scores.
+
+Result: on LLaMA-7B, removing 50% of weights with Wanda gives perplexity nearly identical to the original. No full training: just a computation on 128 examples. 10 minutes max on a single GPU.
+
+<Callout type="paper" title="Real results from Wanda">
+Wanda rivals SparseGPT (a much more complex method that solves optimization problems layer by layer) while being as fast as a simple forward pass. The efficiency/simplicity ratio is remarkable: a one-line formula performs as well as a sophisticated algorithm.
+</Callout>
+
+## Production Pruning Pipeline
+
+In production, you can combine techniques aggressively for maximum compression:
+
+1. **Wanda**: remove 50% of weights (unstructured sparsity)
+2. **GPTQ/AWQ**: quantize the remaining weights to 4-bit (each value = 0.5 bytes instead of 2)
+3. Result: model **8x smaller** than the original FP16, retaining ~80% of original performance
+
+Another approach: cut entire layers (structured pruning). Some models like LLaMA-2-70B tolerate removing 30% of their middle layers with light fine-tuning to recover lost quality.
+
+The choice between these strategies depends on your main constraint:
+- **Memory constraint** (e.g., mobile deployment) → unstructured pruning + quantization
+- **Latency constraint** (e.g., real-time) → structured pruning for actual speedup
+- **Both** → structured pruning + quantization, or 2:4 format
+
+<Callout type="warning" title="Pruning pitfalls">
+A model with 50% unstructured sparsity runs at **the same speed** as the original model on standard hardware. The compression is real (memory savings), but speedup requires special hardware (GPUs with sparse support) or optimized kernels (like those from DeepSparse). Don't confuse "smaller in memory" with "faster to run" — those are two different things.
+</Callout>
+
+Pruning isn't as flashy as distillation, but it's pragmatic for **reducing the disk/memory size** of a model without retraining. Combined with quantization, it's your secret weapon for edge deployment — running an LLM on a phone or a Raspberry Pi is possible thanks to these combined techniques.

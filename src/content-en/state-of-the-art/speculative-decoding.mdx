@@ -1,0 +1,125 @@
+---
+title: "Speculative Decoding: generating faster"
+description: "Using a small model to predict and a large one to verify. The best of both worlds."
+---
+
+## The speed problem
+
+Generating text with an LLM is **token by token**, sequential and slow. Each token requires a full forward pass of the model. For a 70B parameter model, that means loading ~140 GB of weights from GPU memory. For **a single token**.
+
+The GPU spends its time **waiting for data** (memory-bound), not computing (compute-bound). It's like having a Ferrari stuck in traffic: all the compute power is there, but the bottleneck is memory bandwidth.
+
+To put concrete numbers on it: an A100 GPU can do 312 TFLOPS of computation, but its memory bandwidth is 2 TB/s. For 140 GB of weights, that takes ~70ms just to read the weights. The computation itself? A fraction of that time. The GPU waits, 95-99% idle.
+
+<Callout type="info" title="The unit batch paradox">
+Generating a single token uses **as much memory bandwidth** as a batch of tokens, because in both cases you load the same 140 GB of weights. The GPU is 99% underutilized for a single token. That's colossal waste. Speculative decoding exploits this gap: since the GPU can verify K tokens for the price of one, you might as well give it K at once.
+</Callout>
+
+## The speculative decoding idea
+
+The most apt analogy: imagine a senior manager (the large model) and a junior assistant (the small model). The junior drafts 5 sentences. The senior reviews and corrects in a single pass -- that's much faster than if the senior wrote each sentence from scratch.
+
+### The trick
+
+1. A **small, fast model** (e.g., 0.5B parameters) proposes K candidate tokens (typically 5-10)
+2. The **large model** (e.g., 7B-70B) **verifies them all in a single parallel pass**
+3. You accept the good tokens, reject the bad ones
+4. You start over from the first rejection
+
+### Why it works
+
+Verifying K tokens in parallel costs barely more than verifying 1, because the memory bandwidth (the bottleneck) is the same. You load the 140 GB of weights a single time, and you process the K tokens all at once. So: K forward passes of the small model (very fast, lightweight model) + 1 forward pass of the large model = net win.
+
+If the small model proposes 5 tokens and 4 are accepted, you just generated 4 tokens for the cost of roughly 1 forward pass of the large model. That's a direct ~4x gain on those tokens.
+
+### The quality guarantee
+
+This is the magical part: the rejection scheme mathematically guarantees that each final token follows **exactly** the large model's distribution. No approximation, no degradation. It's as if the large model had generated everything itself.
+
+The mechanism:
+- If the small model proposes token $X$ with probability $q(X)$
+- The large model accepts it with probability $\min\left(1, \frac{p(X)}{q(X)}\right)$
+- On rejection, you sample from the normalized residual distribution $\max(0, p - q)$
+- Final result = exactly the distribution $p(X)$ of the large model
+
+This is a classic acceptance-rejection scheme from statistics, adapted to the LLM context. The proof is elegant and guarantees exactness.
+
+<ArxivLink id="2302.01318" title="Fast Inference from Transformers via Speculative Decoding (Leviathan et al., 2023)" />
+
+
+
+## Practical results
+
+### Speedup by model size
+
+| Small model | Large model | Acceptance rate | Speedup |
+|---|---|---|---|
+| 160M | 7B | 60% | 1.8-2.2x |
+| 1B | 13B | 70% | 2.0-2.5x |
+| 7B | 70B | 75% | 2.5-3.0x |
+
+The acceptance rate depends on how close the two models' distributions are. The more the small model "thinks" like the large one, the more its proposals are accepted, and the greater the speedup.
+
+<Callout type="tip" title="Choosing the small model">
+Take a small model **from the same family**. E.g., Mistral-0.5B for Mistral-7B, LLaMA-1B for LLaMA-70B. The distributions are close because they were trained on similar data with the same tokenization, which gives a better acceptance rate. A completely different model (e.g., GPT-2 to verify LLaMA) will have distributions that are too different and will be less effective.
+</Callout>
+
+## Modern variants
+
+### Self-Speculative Decoding
+
+Use the model's own **intermediate layers** as a draft. For example, take the output after layer 8 (out of 32) as a fast prediction, then verify with the full model. Advantage: no need to load a second model into memory. Disadvantage: more modest speedup (~1.5-2x) since intermediate layers are less good than a real small model.
+
+### Lookahead Decoding
+
+No small model at all. The idea: look at **n-grams** that already appeared in the generated text to predict what comes next. If the model already said "machine learning" and starts with "machine," you can speculate that "learning" follows. Zero memory overhead, but the acceptance rate is lower and depends heavily on text repetitiveness.
+
+### Medusa
+
+Adds **parallel prediction heads** to the large model. Each head predicts the token at position +1, +2, +3... in parallel. More integrated than classic speculative decoding, but requires fine-tuning.
+
+## Implementation
+
+### With vLLM
+
+```python
+from vllm import LLM
+
+llm = LLM(
+    model="mistralai/Mistral-7B",
+    speculative_model="mistralai/Mistral-0.5B",
+    num_speculative_tokens=5,
+)
+
+outputs = llm.generate(["Explain black holes"])
+```
+
+### TGI and TensorRT-LLM
+
+Both major serving frameworks support speculative decoding via configuration options, making activation trivial.
+
+## Practical considerations
+
+### Additional memory
+
+The small model takes up GPU RAM. Mistral-0.5B in FP16 = ~1 GB. Generally acceptable on a 40-80 GB GPU, but it's less memory available for batching.
+
+### When it helps a lot
+
+- **Single-token generation** (batch=1): the GPU is the most underutilized
+- **Predictable text**: templates, code boilerplate, structured prompts. The small model guesses easily
+- **Low temperature**: more concentrated distribution, therefore easier to guess
+
+### When it doesn't help
+
+- **High batch size**: the GPU is already well occupied, bandwidth is no longer the bottleneck
+- **Creative/unpredictable text**: high temperature, varied vocabulary = low acceptance rate
+- **Tight GPU memory**: if adding the small model reduces your batch size, you lose overall throughput
+
+<Callout type="warning" title="Always measure">
+Speculative decoding can **slow things down** in some cases. A bad small model that gets rejected 80% of the time adds work without benefit. Always test on your real use case with benchmarks. Theory says "it helps," practice says "it depends."
+</Callout>
+
+## Real impact
+
+Speculative decoding has become standard in production systems (vLLM, TGI, TensorRT-LLM). Its unique advantage: it's the only trick that accelerates inference **with zero quality loss** -- mathematically guaranteed. Compared to quantization (approximation) or pruning (removal), it's a "free" acceleration in terms of quality. Easy to activate and it really works for common use cases.

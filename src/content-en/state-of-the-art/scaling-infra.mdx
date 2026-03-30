@@ -1,0 +1,108 @@
+---
+title: "Scaling Infrastructure: InfiniBand, NVLink"
+description: "Guide to the hardware infrastructure needed for large-scale distributed LLM training: GPU interconnects, network topologies, and system optimizations."
+---
+
+
+
+## The problem: your GPUs can't talk fast enough
+
+You've bought 1,000 GPUs to train your next LLM. Congratulations. But here's the trap: if those GPUs can't communicate at lightning speed, you have 1,000 bulldozers stuck on a single-lane country road. Each bulldozer waits for the others to finish maneuvering before it can move an inch.
+
+Distributed training is fundamentally a **communication** problem. GPUs compute fast --- very fast. But between each computation step, they need to exchange gradients, synchronize parameters, share activations. If this communication is slow, your 1,000 GPUs run at the speed of your slowest network cable.
+
+<Callout type="info" title={"The conference room analogy"}>
+Imagine 1,000 people who need to solve a problem together in a room. If they communicate by shouting across the room (slow network), it's chaos. If they each have an instant shared screen with their close neighbors (NVLink) and an efficient PA system for global announcements (InfiniBand), suddenly collaboration becomes smooth. That's exactly what NVLink and InfiniBand do for GPUs.
+</Callout>
+
+## The communication hierarchy: from very fast to just fast
+
+An AI cluster isn't a flat network where all GPUs are equal. It's a **layered hierarchy**, and each layer has a radically different bandwidth:
+
+1. **Inside a GPU**: SRAM communicates with HBM at ~2,000 GB/s (blazing fast)
+2. **GPU-to-GPU within the same server**: NVLink at ~900 GB/s (fast, but 2x slower than internal)
+3. **Server-to-server**: InfiniBand at ~50 GB/s (that's **20x slower** than NVLink)
+4. **Between distant racks**: network switches at ~12 Tb/s (and complexity increases further)
+
+The crucial point to remember: the difference between layer 2 (intra-server) and layer 3 (inter-server) is **enormous** --- a 20x factor. This discontinuity entirely dictates your distributed training strategy. You want to maximize computation that stays inside a server (fast NVLink communication) and minimize what crosses the network (slow InfiniBand communication).
+
+## NVLink: the private language of NVIDIA GPUs
+
+NVLink is NVIDIA's proprietary technology that allows GPUs within the same server to communicate directly with each other, bypassing the PCIe bus or CPU memory. It's a dedicated, ultra-fast point-to-point link.
+
+| Generation | Bandwidth per link | Links per GPU | Total bidirectional bandwidth |
+|-----------|---|---|---|
+| NVLink 3 (A100) | 25 GB/s | 12 | 600 GB/s |
+| NVLink 4 (H100) | 25 GB/s | 18 | 900 GB/s |
+| NVLink 5 (B200) | 50 GB/s | 18 | 1,800 GB/s |
+
+**NVSwitch** is the companion component: a specialized switch that interconnects all GPUs in a server in a full mesh (each GPU can talk directly to any other). A DGX H100 server contains 4 NVSwitches for its 8 GPUs --- creating an ultra-performant internal mini-network.
+
+The real recent revolution: the **NVLink Network** (introduced with the Hopper architecture). Previously, NVLink stopped at the physical server boundaries. Now, it's possible to connect GPUs from different servers via NVLink, creating extended bandwidth domains of 72 GPUs or more.
+
+<Callout type="paper" title="GB200 NVL72: the game changer">
+NVIDIA launched the GB200 NVL72: 72 Blackwell GPUs interconnected via NVLink in a single communication domain. No more boundary between servers --- all 72 GPUs behave as if they were in the same machine. This fundamentally changes training strategies: Tensor Parallelism, which requires ultra-fast communication, can now extend well beyond a single server.
+</Callout>
+
+## InfiniBand: the highway between servers
+
+If NVLink is the ultra-fast local network inside a server, InfiniBand is the highway connecting servers together. It's the **industry standard** for serious AI clusters --- developed by Mellanox (acquired by NVIDIA in 2019).
+
+| Version | Bandwidth | Typical use |
+|---------|---|---|
+| HDR (200 Gb/s) | 25 GB/s | A100 clusters |
+| NDR (400 Gb/s) | 50 GB/s | H100 clusters |
+| XDR (800 Gb/s) | 100 GB/s | Next generation (Blackwell) |
+
+The feature that makes all the difference: **RDMA** (Remote Direct Memory Access). Normally, to copy data from a GPU on server A to a GPU on server B, you have to go through server A's CPU, then the network, then server B's CPU, then the GPU. Four steps. With GPU Direct RDMA, the source GPU copies directly into the destination GPU's memory. Two steps. It's like providing a direct elevator between two floors instead of forcing everyone to go down to the lobby, cross the hall, then go back up.
+
+<Callout type="tip" title="GPU Direct RDMA: a concrete 30-50% gain">
+Without GPU Direct, an inter-server copy goes through 4 memory stages (GPU -> CPU -> network -> CPU -> GPU). With GPU Direct, it goes through 2 (GPU -> network -> GPU). This latency reduction translates directly into training throughput: 30 to 50% improvement on typical workloads.
+</Callout>
+
+## High-performance Ethernet: the challenger
+
+InfiniBand reigns, but Ethernet is fighting back.
+
+**RoCE v2** (RDMA over Converged Ethernet) brings RDMA capabilities to standard Ethernet hardware. Less expensive than InfiniBand, available from more vendors, but with slightly higher latency and less mature congestion management.
+
+The **Ultra Ethernet Consortium** (UEC) is a recent initiative bringing together AMD, Intel, Meta, Microsoft, and others to create an Ethernet truly optimized for AI. The goal: achieve InfiniBand-level performance while staying within the open and competitive Ethernet ecosystem.
+
+<Callout type="warning" title="InfiniBand remains king for large clusters">
+For clusters of more than 1,000 GPUs, InfiniBand retains a significant advantage in latency and network congestion management. Ethernet is improving rapidly, but cluster architects betting on Ethernet for multi-month training runs are taking a risk. For medium clusters (< 256 GPUs), RoCE v2 is a credible and more economical alternative.
+</Callout>
+
+## Topologies: how to architect the network
+
+**Fat-tree**: the classic topology. Switches organized in a hierarchical tree with bandwidth that doesn't decrease going up the tree. No theoretical bottleneck. Expensive in switches but optimal in performance.
+
+**Rail-optimized**: more economical. GPUs of the same rank in different servers share a dedicated switch. Optimized for Data Parallelism communication patterns (all-reduce between same-rank GPUs).
+
+**Dragonfly**: for massive clusters (10,000+ servers). Groups of densely interconnected servers, linked to each other by long-distance links. Good cost/performance trade-off for very large-scale installations.
+
+## Failures: the daily nightmare of large clusters
+
+On a 10,000-GPU cluster, components fail **every week**. Disks, network cards, memory modules, power supplies --- the law of large numbers is merciless. A multi-month training on such a cluster **will** experience failures. The question isn't "if," but "how many."
+
+**Resilience strategies**:
+- **Frequent checkpointing**: saving the training state every few hours
+- **Asynchronous checkpointing**: saving without stopping training (checkpointing happens in the background)
+- **Hot replacement**: isolating a failed GPU and replacing it without restarting the entire cluster
+- **Elastic training**: dynamically adapting the number of GPUs used when some go down
+- **Proactive monitoring**: detecting failures before they occur by monitoring temperatures, memory errors, and abnormal latencies
+
+<Callout type="info" title={"The cost of inefficiency"}>
+A 1,000 GPU H100 cluster with InfiniBand networking costs between $300 and $500 million. The network alone represents 20-30% of that price. If you lose even 1% of utilization time due to failures or network inefficiency, that's the equivalent of several million dollars wasted. At this scale, every percentage point of efficiency counts.
+</Callout>
+
+## The future: bigger, more integrated, smarter
+
+**Giant NVLink domains**: the server boundary is progressively disappearing. The GB200 NVL72 is a first step toward "super-servers" where hundreds of GPUs share the same high-bandwidth memory space.
+
+**In-network accelerators**: specialized chips like SHARP (from NVIDIA) that perform reduction operations (sum, average) directly in the network switches, before data even reaches the GPUs. The network no longer just transports: it computes.
+
+**Cloud vs own infrastructure**: AWS, GCP, and Azure all offer pre-configured clusters with InfiniBand. For most organizations, renting makes more sense than buying --- unless you have a continuous need for thousands of GPUs for years.
+
+---
+
+**The bottom line**: NVLink and InfiniBand are not just cables. They're the vital arteries of your cluster. Without them, even the world's best GPUs remain paralyzed. With them, you can truly harness the parallel power of thousands of GPUs working in concert.

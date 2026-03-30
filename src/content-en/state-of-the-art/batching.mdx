@@ -1,0 +1,128 @@
+---
+title: "Continuous batching: processing multiple requests intelligently"
+description: "Making the model process 100 questions in parallel instead of waiting for them one by one."
+---
+
+## The problem with classic batching
+
+Imagine a restaurant where the waiter waits for all 8 customers at a table to finish eating before clearing. If one customer finishes their appetizer in 5 minutes and another takes 45 minutes for their main course, the first 7 sit there waiting. The waiter is stuck, the next tables aren't being served.
+
+That's exactly what happens with classic (static) batching for LLMs. You group 8 requests together and process them in parallel. But if one request generates 500 tokens and another only 50, the GPU computes empty padding for the 7 finished requests while the last one completes its generation. That's pure waste.
+
+<Callout type="info" title={"The scale of the waste"}>
+With a static batch of 8 requests of varying lengths, the GPU spends up to **90% of its time computing padding** for already-finished requests. Real throughput is a fraction of the hardware's theoretical potential.
+</Callout>
+
+## Continuous Batching: the solution
+
+### The principle
+
+Instead of processing requests from start to finish as a block, continuous batching manages each **generation step** individually:
+
+1. At each step, generate **one token** for each active request in the batch
+2. When a request finishes (EOS token or limit reached), **remove it immediately** from the batch
+3. Instantly replace it with a **new request** from the queue
+4. The batch stays **constantly filled** at full capacity
+
+The GPU never runs idle. As soon as a slot opens up, a new request takes over. It's like a restaurant where each plate is cleared individually and the next customer is served immediately.
+
+### Prefill vs Decode
+
+LLMs have two very different processing phases:
+
+- **Prefill**: process the input prompt in a single pass. It's a **parallelizable** operation that exploits GPUs well (the entire input sequence is processed simultaneously).
+- **Decode**: generate the response token by token. It's **sequential** by nature and much less efficient in terms of GPU utilization.
+
+Continuous batching mixes both phases in the same batch: some requests are in their prefill phase while others are already generating tokens. This maximizes GPU utilization at all times.
+
+<Callout type="tip" title="Throughput gain">
+Continuous batching can improve throughput by **2 to 8x** compared to static batching, depending on the variability of response lengths. The more heterogeneous the lengths (which is the case in production), the greater the gain.
+</Callout>
+
+## Dynamic Batching
+
+A complementary variant: dynamically adapt the batch composition based on load:
+
+- **Queue with timeout**: group requests for 50ms before launching processing, to maximize the initial batch size
+- **Adaptive batch size**: adjust the number of simultaneous requests based on available GPU memory and estimated sequence lengths
+
+### Chunked Prefill
+
+An important optimization to avoid latency spikes: split long prompts into small chunks instead of processing them in one block.
+
+Example: an 8000-token prompt is split into 512-token chunks. Each chunk is processed in a mixed batch with other requests currently decoding. Result: long prompts no longer monopolize the GPU for extended periods. Decode requests continue progressing normally, maintaining stable latency for everyone.
+
+
+
+## KV Cache management: the real challenge
+
+### The memory problem
+
+The **KV cache** (Key-Value cache) stores the already-computed attention keys and values for each request. Without it, you'd have to recompute all the attention at each new token. But its size grows with sequence length:
+
+For a 7B model (32 layers, 32 heads, 128 dimensions per head):
+
+| Granularity | KV cache size |
+|---|---|
+| Per token | 524 KB |
+| For 4096 tokens | 2 GB per request |
+| For 32 requests | 64 GB |
+
+That's **huge**. And the problem is that you don't know the final response length in advance. How much should you reserve?
+
+### Allocation strategies
+
+Three approaches exist:
+
+1. **Maximum pre-allocation**: reserve the max length for each request. Simple, but wastes 60-80% of memory with empty space.
+2. **PagedAttention**: allocation by fixed-size pages, on demand. Reduces waste to < 4%. This is the current standard.
+3. **Radix Tree**: organize KV caches as a tree to automatically share common prefixes between requests.
+
+<Callout type="warning" title="The real limiting factor">
+On modern serving systems, the KV cache consumes **more memory than the model itself** for large batch sizes. It's the limiting factor for the number of simultaneous requests. All LLM serving engineering revolves around efficiently managing this memory.
+</Callout>
+
+## Advanced scheduling
+
+### Priority-based scheduling
+
+Not all requests are equal. An interactive chatbot needs fast responses, a document batch processing job can wait. Priority-based scheduling allows respecting SLAs (Service Level Agreements) for each type of request.
+
+### Preemption
+
+When GPU memory is saturated, you need to make room:
+- **Swap**: move a request's KV cache to CPU RAM (slow to return, but the request isn't lost)
+- **Recompute**: delete the KV cache and recompute it later when memory frees up
+
+### Multi-step scheduling
+
+Instead of making scheduling decisions at every token, plan several decode steps ahead. This reduces management overhead and allows for smarter batching optimizations.
+
+## Framework support
+
+| Framework | Continuous | Chunked Prefill | PagedAttention |
+|---|---|---|---|
+| vLLM | Yes | Yes | Yes |
+| TGI | Yes | Yes | Yes |
+| TensorRT-LLM | Yes | Yes | Yes |
+| SGLang | Yes | Yes | Yes |
+
+All modern serving frameworks implement these techniques. It's become the bare minimum.
+
+## Performance metrics
+
+### The three essential measures
+
+- **TTFT** (Time To First Token): the time before the first response token appears. Determines the "responsiveness" perceived by the user.
+- **TPOT** (Time Per Output Token): the average time between each generated token. Determines the "fluidity" of generation.
+- **Throughput**: the total number of tokens/second the system produces, across all requests combined.
+
+The dilemma: increasing batch size increases overall throughput, but also TPOT (each individual request is slightly slowed because the GPU shares its time).
+
+<Callout type="info" title="The throughput-latency trade-off">
+For an interactive chatbot, you aim for TPOT < 50ms for a fluid experience. For batch processing (summarizing 1000 documents), you maximize total throughput, since per-request latency matters little. The scheduler must juggle these contradictory objectives.
+</Callout>
+
+## Real impact
+
+Continuous batching has become **indispensable** in production. Without it, inference costs would be **5 to 10 times higher** for the same level of service. It's a system optimization that changes nothing about the model itself but radically transforms the economics of deployment.

@@ -1,0 +1,132 @@
+---
+title: "GGUF and llama.cpp: Running LLMs Everywhere"
+description: "How to run LLMs on your laptop, Mac, or CPU server without a specialized NVIDIA GPU."
+---
+
+## The Local Inference Revolution
+
+In March 2023, Georgi Gerganov created llama.cpp: a pure C/C++ project that runs LLMs **without CUDA, without Python, without an NVIDIA GPU**. Overnight, everyone could run a 7 billion parameter model on a MacBook Air. No cloud needed, no expensive graphics card needed.
+
+<Callout type="info" title={"The real impact of llama.cpp"}>
+llama.cpp literally democratized LLMs. Instead of paying OpenAI per token or renting a cloud GPU by the hour, you run the model **on your own machine**. Zero cloud dependency, 100% private data. This project spawned an entire ecosystem of applications: Ollama, LM Studio, Jan, GPT4All, and many more.
+</Callout>
+
+## The GGUF Format: Everything in One File
+
+GGUF (which replaces the old GGML format) is a binary format designed to be **self-sufficient**. A single file contains absolutely everything you need for inference:
+
+1. **Header**: format identifier, version, number of tensors
+2. **Metadata**: model architecture, hyperparameters, complete tokenizer, chat template
+3. **Tensors**: the model weights themselves
+
+The advantage is huge: no more juggling between a config file, a tokenizer file, and separate weight files. You download one file, you run it. That's it.
+
+
+
+## GGUF Quantization Types
+
+This is where things get interesting. GGUF offers several compression levels, each with a different tradeoff between size and quality.
+
+### Q-quants (older generation)
+
+- **Q4_0/Q4_1**: 4 bits, the initial standard. Functional but rudimentary.
+- **Q5_0/Q5_1**: 5 bits, better quality but larger.
+- **Q8_0**: 8 bits, nearly lossless but takes a lot of space.
+
+### K-Quants (recommended today)
+
+The real innovation. These formats use **variable precisions**: important layers of the model get more bits, less critical layers get fewer. It's "smart" quantization:
+
+- **Q2_K**: 2-3 bits, ultra-compressed. The model fits in very little RAM, but quality visibly suffers. For desperate space situations.
+- **Q3_K_M**: ~3.3 bits. Good tradeoff when you really have little space. Usable, but you'll feel the degradation.
+- **Q4_K_M**: ~4.5 bits. **This is the recommended default choice.** The sweet spot between size and quality.
+- **Q5_K_M**: ~5.5 bits. High quality, for those with a bit more memory.
+- **Q6_K**: ~6.5 bits. Nearly lossless, hard to distinguish from FP16 in practice.
+
+<Callout type="tip" title="Q4_K_M: the default choice">
+Q4_K_M offers about 95-97% of the original FP16 model's performance, with a file 3 to 4 times smaller. It's the format to choose first. Move up to Q5_K_M if you want more quality, drop to Q3_K_M only if you're really memory-constrained.
+</Callout>
+
+## Hardware Compatibility: llama.cpp Runs Everywhere
+
+One of llama.cpp's great strengths is its multi-platform support:
+
+| Backend | Hardware | Performance |
+|---|---|---|
+| CPU (AVX2) | Any modern x86 PC | Good |
+| Metal | Mac M1-M4 | Excellent |
+| CUDA | NVIDIA GPU | Excellent |
+| Vulkan | AMD, Intel GPU | Good |
+| CANN | Ascend NPU | Good |
+
+### The Apple Silicon Case (M1-M4)
+
+The Metal backend (Mac's integrated GPU) runs LLMs remarkably fast. A Mac M2 Max with 32 GB of unified RAM can run a 30B model in Q4_K_M at **10-20 tokens per second**. That's more than enough for a smooth and pleasant chat experience. The Mac's unified RAM is a huge advantage here: no CPU-GPU transfer, everything is in the same memory space.
+
+## Estimating Required Memory
+
+A simple rule for a model with N billion parameters:
+
+**Q4_K_M**: approximately $N \times 0.6$ GB (example: 7B gives about 4.5 GB)
+
+On top of that, you need to add the KV cache which depends on context length. For an 8K token context, expect 1 to 2 additional GB depending on the model.
+
+## How to Quantize a Model
+
+### Step 1: Convert from Hugging Face Format
+
+```bash
+python convert_hf_to_gguf.py ./model_hf \
+    --outtype f16 \
+    --outfile model.f16.gguf
+```
+
+This creates an intermediate file in FP16 (full precision). It's large but it's the base.
+
+### Step 2: Quantize to the Desired Format
+
+```bash
+./llama-quantize model.f16.gguf model.Q4_K_M.gguf Q4_K_M
+```
+
+And there you go: a 4.5 GB file replacing 14 GB. The compression is impressive.
+
+## Advanced Features
+
+### Partial GPU Offloading
+
+If your model doesn't fit entirely in the GPU's VRAM, llama.cpp can split the work: some layers on the GPU (fast), the rest in CPU RAM (slower). It's less performant than all-GPU, but it lets you use a GPU with limited VRAM without completely giving up hardware acceleration.
+
+### Prompt Caching
+
+You can save the KV cache of a system prompt and reuse it for all subsequent requests. If you have 100 requests with the same 2000-token system prompt, you compute it only once. Enormous time savings for deployments with a fixed prompt.
+
+### Grammars (GBNF)
+
+You can constrain generation to respect a specific format (JSON, XML, code...) using formal grammars. The model generates token by token following the imposed structure, instead of producing free text that might not parse.
+
+<Callout type="warning" title="Quality: GGUF vs GPTQ/AWQ">
+GGUF quantization uses RTN (Round-To-Nearest), a simple rounding. It's less sophisticated than data-aware methods like GPTQ or AWQ that analyze data to optimize quantization. On NVIDIA GPUs in production, AWQ can offer better quality. But GGUF wins hands down in multi-platform flexibility.
+</Callout>
+
+## The GGUF Ecosystem
+
+### Ollama
+The simplest interface that exists:
+```bash
+ollama run mistral
+```
+A single command. The model is downloaded, quantized, and launched. Perfect for beginners and quick tests.
+
+### LM Studio
+A desktop application with a graphical interface. You browse a model catalog, click, and it runs. Ideal for those who don't want to touch the terminal.
+
+### Jan, GPT4All
+Other desktop clients for local inference, each with its own approach to user experience.
+
+### Hugging Face
+Thousands of pre-quantized models in GGUF format are available on the Hub. Contributors like TheBloke (now bartowski) systematically quantize new models in all variants.
+
+## In Summary
+
+GGUF + llama.cpp have made LLMs **truly local and accessible**. Zero dependencies, zero APIs, private data. It's the ideal entry point for experimenting with LLMs, and a viable production tool for cases where privacy or network latency are constraints.

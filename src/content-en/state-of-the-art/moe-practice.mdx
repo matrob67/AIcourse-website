@@ -1,0 +1,117 @@
+---
+title: "MoE in Practice: Mixtral, DeepSeek-MoE, Grok"
+description: "Study of concrete Mixture of Experts architecture implementations in production models: Mixtral 8x7B, DeepSeek-MoE, and Grok."
+---
+
+## From theory to models that actually work
+
+In 2023-2024, something fundamental shifted in the AI industry: Mixture of Experts architectures left the research labs to become the engine behind the world's most powerful models. Mixtral first, then DeepSeek, then Grok. All MoE. All competitive with dense models two to five times more expensive to run.
+
+This is no coincidence. The MoE promise --- getting giant-level quality at the cost of a medium-sized model --- materialized in real products used by millions of people. Let's see how these teams concretely implemented MoE principles, and what distinguishes their approaches.
+
+## Mixtral 8x7B and 8x22B (Mistral AI)
+
+Mistral AI, the French startup, caused a seismic shift in December 2023 by open-sourcing the first truly competitive large MoE model that could rival proprietary models.
+
+### Mixtral 8x7B Architecture
+
+<ImageWithSource
+  src="/images/admin/img-1774202902864.webp"
+  alt="Diagram of the MoE architecture with FFN layer"
+  source="Bing"
+  sourceUrl="https://www.superannotate.com/blog/mistral-ai-mixtral-of-experts"
+  caption="This diagram illustrates the Mixture of Experts (MoE) architecture used in Mixtral 8x7B, where a router dynamically selects 2 experts out of 4 to process each input token. This replaces the classic fully-connected layers with specialized networks to improve efficiency."
+  size="large"
+/>
+
+The architecture is a classic Transformer with one key modification: each feed-forward layer (the "thinking" part of the Transformer) is replaced by **8 experts** --- eight parallel feed-forward networks with different weights. For each processed token, a Top-2 router selects the 2 best experts out of 8. The other 6 experts remain inactive for that token.
+
+<Callout type="info" title="The real numbers for Mixtral 8x7B">
+- **Total parameters**: ~46.7 billion (not 56B = 8x7B, because attention layers are shared across all experts)
+- **Active parameters per token**: ~12.9 billion (2 activated experts + shared layers)
+- **Context window**: 32,000 tokens (with Sliding Window Attention)
+- **Performance**: matches or surpasses LLaMA 2 70B on most benchmarks, at the inference cost of a ~13B model
+</Callout>
+
+The ratio is striking: you get the performance of a 70 billion parameter model at the computational cost of a 13 billion parameter model. This is the MoE promise realized in production, not just in a research paper.
+
+### Mixtral 8x22B: scaling up
+
+The 8x22B version pushes the architecture further with significantly larger experts. With ~141 billion total parameters and ~39 billion active per token, this model rivals 70B+ dense models while remaining much faster at inference.
+
+**Mistral's strategic choice**: combining Sliding Window Attention (efficient on long sequences) with the MoE architecture, and publishing everything under the Apache 2.0 license. This openness allowed thousands of teams worldwide to experiment with MoE without a proprietary budget --- accelerating research for everyone.
+
+## DeepSeek-MoE: the fine-grained expert revolution
+
+<ImageWithSource
+  src="/images/admin/img-1774202958030.png"
+  alt="Evolution of MoE architectures toward DeepSeekMoE"
+  source="Bing"
+  sourceUrl="https://www.marktechpost.com/2024/01/18/deepseek-ai-proposes-deepseekmoe-an-innovative-mixture-of-experts-moe-language-model-architecture-specifically-designed-towards-ultimate-expert-specialization/"
+  caption="This image illustrates the evolution of MoE (Mixture of Experts) architectures: from the classic top-2 routing strategy (a) to fine-grained expert segmentation (b), then to shared expert isolation in the DeepSeekMoE architecture (c). These improvements enable better efficiency without increasing parameters or computational costs."
+  size="large"
+/>
+
+<ArxivLink id="2401.04088" title="DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models" />
+
+The Chinese team DeepSeek rethought MoE architecture starting from a fundamental question: what is the right **granularity** for experts?
+
+### Fine-grained vs coarse-grained experts
+
+Mixtral uses 8 large experts. DeepSeek-MoE can have **64 fine-grained experts**, of which only 6 are activated per token. The result? Much more precise specialization.
+
+The medical analogy is telling: Mixtral is a hospital with 8 competent general practitioners. DeepSeek-MoE is a hospital with 64 ultra-specialized experts --- a cardiologist, a neurologist, a dermatologist, an ophthalmologist... When you arrive with a specific problem, the 6 most relevant specialists collaborate on your case. The quality of the diagnosis is mechanically better.
+
+<Callout type="paper" title={"The key innovation: shared experts"}>
+DeepSeek-MoE introduces **shared experts**: certain experts are ALWAYS activated for every token, regardless of what the router decides. These shared experts capture universal knowledge (basic grammar, logical structure, common linguistic patterns), while the routed experts specialize in specific domains. It's a clean separation between common knowledge and niche knowledge --- and it considerably stabilizes training.
+</Callout>
+
+### DeepSeek-V2 and V3: pushing the boundaries
+
+**DeepSeek-V2** (236 billion total parameters, 21 billion active) introduced **Multi-head Latent Attention (MLA)** --- a technique that compresses keys and values of the KV cache via a projection into a small-dimensional latent space. In practice, the KV cache (a major memory bottleneck during inference) goes from several dozen GB to a fraction of that size. It's a massive gain for serving the model at scale.
+
+**DeepSeek-V3** takes it up another notch: 671 billion total parameters, ~37 billion active. And it introduces an elegant innovation: **auxiliary-loss-free routing**. Instead of using an explicit balancing loss (which forces tokens toward underused experts at the expense of quality), a simple per-expert bias is dynamically adjusted during training. When an expert is overloaded, its bias decreases to make it less attractive to the router. When it's underused, its bias increases. The result: natural balancing, without quality trade-offs.
+
+<Callout type="tip" title={"The number that stunned the industry"}>
+DeepSeek-V3, with its 671 billion parameters, was trained at an estimated cost of ~$5.5 million --- 10 to 20 times less than comparable models from OpenAI or Google. It's not a magic secret: it's the combination of a well-optimized MoE architecture, FP8 precision training (a first at this scale), and extremely careful systems engineering. Proof that you can compete with the giants without their budget.
+</Callout>
+
+## Grok (xAI)
+
+xAI, Elon Musk's company, also bet on the MoE architecture for its Grok model family.
+
+**Grok-1** was open-sourced with 314 billion parameters. It uses 8 experts per layer with Top-2 routing, giving approximately 86 billion active parameters per token. The architecture is classic, close to the original Switch Transformer, with robust engineering optimizations. Less architecturally innovative than DeepSeek, but a good example of large-scale "mainstream" MoE.
+
+## Comparison: expert granularity makes the difference
+
+| Model | Total experts | Active experts | Approach |
+|--------|---------------|----------------|----------|
+| Mixtral 8x7B | 8 | 2 | Coarse-grained experts |
+| DeepSeek-V3 | 256 + shared | 8 | Fine-grained + shared experts |
+| Grok-1 | 8 | 2 | Coarse-grained experts |
+
+The trend is crystal clear: move toward more, smaller experts, with a fraction always activated for common knowledge. DeepSeek showed that this approach delivers better results at equal computational budget.
+
+### Three balancing philosophies
+
+- **Mixtral**: relatively simple routing, with a classic balancing loss. Effective but creates a slight quality/balancing trade-off
+- **DeepSeek-V3**: auxiliary-loss-free balancing via dynamic biases --- more sophisticated, cleaner, and without quality trade-offs
+- **Grok**: conservative approach, close to established Switch Transformer techniques
+
+<Callout type="warning" title={"The challenge of MoE inference in production"}>
+Running a MoE in production poses unique challenges. Inactive experts still occupy RAM (you need to keep all 256 experts loaded, even though only 8 are used per token). Dynamic routing complicates *batching* (grouping requests together). And GPU-to-GPU communication can become a bottleneck. Techniques like *expert parallelism* (each GPU hosts a subset of experts) and *expert offloading* (storing inactive experts in CPU RAM) are essential at scale.
+</Callout>
+
+## Lessons from MoE in production
+
+**Fine granularity wins**: more, smaller experts enable more precise specialization than a few large experts. DeepSeek proved this convincingly.
+
+**Shared experts stabilize**: separating universal knowledge (grammar, logic) from specialized knowledge (medicine, code) improves both quality and routing stability.
+
+**Auxiliary-loss-free balancing is the future**: dynamic bias approaches avoid the quality/balancing trade-off inherent in classic auxiliary losses. It's more elegant and more effective.
+
+**Open source accelerated everything**: the publication of Mixtral, DeepSeek, and Grok-1 as open source allowed the global community to experiment, fine-tune, and optimize these architectures --- advancing the state of the art much faster than if research had stayed behind closed doors.
+
+<Callout type="info" title="Toward multi-modal MoE">
+The next frontier: multi-modal MoE, where different experts specialize in different modalities (text, image, audio, code). The routing principles remain the same, but complexity increases because the router must handle representations of very different natures. The first models of this type are starting to emerge.
+</Callout>

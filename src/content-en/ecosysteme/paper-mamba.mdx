@@ -1,0 +1,103 @@
+---
+title: "Paper: Mamba - The Linear Alternative to the Transformer"
+description: "December 2023. Mamba proposes O(n) complexity instead of O(n^2). State Space Models with selectivity. Rivals Transformer. Debate: who wins?"
+---
+
+
+
+## The Problem: Quadratic Attention Kills Long Sequences
+
+The Transformer's attention mechanism has an Achilles' heel: its complexity is **O(n^2)**. For each token, it must look at all other tokens. With 1,000 tokens, that's 1 million operations. With 1 million tokens? That's 1 trillion elements in the attention matrix. Impossible in practice.
+
+That's why Transformer context windows are limited. Even with Flash Attention (which optimizes the constants), complexity remains quadratic. Doubling context length costs 4x more in compute.
+
+**Mamba** (Gu and Dao, December 2023) proposes a radical alternative: **O(n)** complexity, linear. Double the length? It costs just 2x. Theoretically, unlimited context becomes conceivable.
+
+<Callout type="info" title="The promise: attention without attention">
+Mamba rivals the Transformer in performance, but without an attention mechanism. The fundamental debate shifts: the Transformer may not be the only viable architecture for LLMs. This is the first time since 2017 that a credible alternative has emerged.
+</Callout>
+
+## State Space Models (SSM): The Theoretical Foundation
+
+Mamba is built on **State Space Models**, a family of models inspired by control theory in engineering (the discipline that models dynamic systems like electrical circuits or mechanical systems).
+
+The core idea is simple: instead of explicitly looking at all previous tokens (as attention does), you maintain a **hidden state** $h(t)$ that summarizes all history. This state evolves according to two equations:
+
+$$h'(t) = A \cdot h(t) + B \cdot x(t)$$
+
+$$y(t) = C \cdot h(t) + D \cdot x(t)$$
+
+The first equation says: "the hidden state updates based on itself (memory) and the current input." The second says: "the output depends on the hidden state and the input."
+
+The matrices $A$, $B$, $C$, $D$ are the model's learned parameters.
+
+For an analogy: imagine you're reading a very long book. The Transformer's attention is like rereading the entire book at every new sentence. The SSM is like taking notes as you go: you keep a summary of what you've read (the hidden state), and you update it at each page.
+
+**S4** (Gu et al., 2021) was the ancestor. It showed that SSMs could be competitive on certain tasks. But classic SSMs had a major problem: the parameters $A$, $B$, $C$ were fixed, identical regardless of input. The model couldn't "choose" to retain certain information over others.
+
+## Mamba's Innovation: Selectivity
+
+This is where Mamba changes the game. Instead of fixed parameters, Mamba makes the parameters **input-dependent**:
+
+$B(x)$, $C(x)$, $\Delta(x)$ become **functions of the current input**.
+
+Concretely, this means the model can **selectively** decide what to retain and what to forget in its hidden state. An important token? The model "opens the gate" to integrate it. An irrelevant token? The model lets it pass without modifying its state.
+
+It's conceptually similar to the gating mechanism of LSTMs (the forget/input/output gates), but within the SSM framework. You can see it as a form of **implicit attention**: the model dynamically decides what matters, but without the quadratic cost of explicit attention.
+
+## Concrete Architecture
+
+Each Mamba layer follows this sequence:
+
+1. **Linear expansion**: project the input into a larger space
+2. **Causal 1D convolution**: capture local dependencies
+3. **Selective SSM**: the heart of Mamba, sequence processing with input-dependent parameters
+4. **Gate multiplication**: information flow control (like in gated architectures)
+5. **Output projection**: return to the original dimension
+
+Key properties:
+
+- **O(n)** in time and memory complexity
+- **No growing KV-cache**: unlike Transformers that store keys/values for all previous tokens, Mamba has a fixed-size hidden state
+- **Constant cost per token at inference**: regardless of context length, generating the next token always costs the same
+
+<Callout type="tip" title="The hardware challenge: parallel scan">
+Making parameters input-dependent breaks a key mathematical property of S4: the ability to reformulate the SSM as a convolution (which enabled parallelism). Mamba solves this problem with a **parallel scan algorithm** implemented in CUDA, optimized for the GPU memory hierarchy (IO-aware, like Flash Attention). This is what makes Mamba fast in practice, not just in theory.
+</Callout>
+
+## Results: Mamba Delivers on Its Promises
+
+**In performance**:
+
+- Mamba-3B outperforms Transformers of the same size on several benchmarks
+- Rivals Transformers that are **2x bigger** in parameter count
+- Particularly good on long sequences (expected given the linear complexity)
+- Good at language modeling, audio, and genomics
+
+**In speed**:
+
+- **5x more throughput** than a Transformer of the same size
+- At inference, cost per token remains **constant** regardless of context length. A Transformer, however, progressively slows down due to the growing KV-cache
+
+To put this in perspective: a Transformer processing 100 tokens per second at the start of a sequence can drop to 20 tokens per second after 100K tokens of context. Mamba maintains 100 tokens per second throughout.
+
+## The Big Debate: Mamba vs Transformer
+
+This is THE architectural question of the moment in AI.
+
+**Arguments in favor of Mamba**:
+- Linear complexity: scales to very long sequences
+- No KV-cache: fixed memory, no degradation with context
+- Fast and constant inference
+- Potential for contexts of millions of tokens
+
+**Arguments in favor of the Transformer**:
+- The attention mechanism is simple, well understood, and massively optimized (Flash Attention, PagedAttention, etc.)
+- The optimization ecosystem is mature (years of CUDA engineering)
+- **In-context learning** seems better with explicit attention (debate ongoing)
+- Scaling beyond 70B parameters is less validated for Mamba
+- Empirical results on very large models still favor Transformers
+
+<Callout type="warning" title="The verdict: not yet settled">
+Mamba is promising, but hasn't replaced the Transformer for very large models. Beyond 70B parameters, nearly all production models remain Transformers. The most likely direction for the future? **Hybrid architectures**: Mamba for layers that process long context, attention for layers that demand precision. Jamba (AI21) and RecurrentGemma (Google) are already exploring this path.
+</Callout>

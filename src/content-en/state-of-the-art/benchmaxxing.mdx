@@ -1,0 +1,166 @@
+---
+title: "Benchmaxxing: When Benchmarks Become the Goal"
+description: "Benchmaxxing — optimizing benchmark scores at the expense of real capabilities. How models 'cheat,' why it's a problem, and how to properly evaluate an LLM."
+---
+
+
+
+## What Is Benchmaxxing?
+
+The term **benchmaxxing**, popularized by Sebastian Raschka, refers to the obsessive optimization of benchmark scores — to the point where leaderboard performance becomes **the goal itself**, rather than an indicator of the model's real capabilities.
+
+The phenomenon is simple to understand. Every new model release comes with carefully presented benchmark charts. These scores directly influence investment decisions, enterprise adoption, and media perception. There's therefore a **massive financial incentive** to display the best numbers possible — by any means.
+
+<Callout type="info" title={"Goodhart's Law"}>
+**"When a measure becomes a target, it ceases to be a good measure."**
+
+That's exactly what's happening with LLM benchmarks. MMLU (Massive Multitask Language Understanding), HumanEval (code generation), GSM8K (math problems) were designed as **proxies** to measure reasoning, comprehension, and coding abilities. But as soon as they became optimization targets, they lost their diagnostic value. A high MMLU score no longer guarantees the model "understands" anything — it guarantees the model is good at MMLU.
+</Callout>
+
+The result: an arms race where teams invest considerable engineering effort to **pump up numbers** rather than improve the fundamental capabilities of their models.
+
+## How Models "Cheat": Benchmaxxing Techniques
+
+### 1. Benchmark Contamination (Data Leakage)
+
+The most direct technique: the training data contains, **accidentally or deliberately**, benchmark questions. The model then doesn't reason about the questions — it **recites memorized answers**.
+
+With training corpora exceeding trillions of tokens, massively scraped from the web, how do you verify that no MMLU or GSM8K question slipped in? It's a needle-in-a-haystack problem. Popular benchmark questions circulate on forums, blogs, and educational sites. They **inevitably** end up in training data.
+
+And the line between "accidental" and "deliberate" contamination is conveniently blurry. No team will publicly admit they targeted benchmark data. But the temptation is real when your next funding round depends on a ranking.
+
+### 2. Targeted Fine-Tuning
+
+Rather than directly contaminating with exact questions, a more subtle approach consists of fine-tuning the model on data **close to the format and topics of benchmarks**.
+
+Concretely, this involves:
+- Creating synthetic data that mimics MMLU's multiple-choice format
+- Training heavily on math problems similar to GSM8K
+- Overrepresenting domains covered by benchmarks in the fine-tuning mix
+
+The model spikes on targeted benchmarks but remains **mediocre on everything else**. It's the equivalent of a student who crammed past exams without understanding the material — they can score well on the test while being unable to apply the concepts in a slightly different context.
+
+### 3. RLVR on Benchmark-Adjacent Tasks
+
+As Andrej Karpathy points out: benchmarks are by nature **verifiable environments** — you can automatically determine whether the answer is correct or not. And verifiable environments are exactly those that are **immediately susceptible to RLVR** (Reinforcement Learning with Verifiable Rewards, meaning RL where the reward is automatically verifiable).
+
+Teams build training environments adjacent to the "pockets of embedding space" occupied by benchmarks. In other words, they don't train directly on benchmark questions, but on problem distributions close enough that improvements mechanically transfer to benchmark scores — without actually improving the model's general capabilities.
+
+<Callout type="warning" title={"Why RLVR makes benchmaxxing so easy"}>
+RLVR works by rewarding correct answers and penalizing incorrect ones, without human intervention. If you define your rewards around benchmark-like tasks, the model will **automatically optimize** for that type of problem. It's benchmaxxing by construction — and it's much harder to detect than simple data contamination.
+</Callout>
+
+### 4. Evaluation Prompt Engineering
+
+The same model can display radically different scores depending on how it's prompted during evaluation. Variations include:
+
+- **The prompt template**: certain formats (with or without system instructions, with carefully chosen few-shot examples) can vary the score by **5 to 10%** on the same benchmark
+- **Temperature**: a temperature of 0 (deterministic) vs 0.7 (creative) changes results
+- **Number of few-shot examples**: 0-shot, 5-shot, 8-shot — each gives a different score
+- **Expected response format**: forcing a specific format can advantage a model trained on that format
+
+Result: when a lab publishes "our model scores 87% on MMLU," they've probably tested dozens of configurations and **picked the best one**.
+
+### 5. Selective Reporting
+
+The simplest and most common technique:
+
+- Only showing benchmarks where the model excels, while silently omitting those where it's mediocre
+- Comparing against **outdated versions** of competing models rather than the latest versions
+- Using evaluation protocols different from those used by competitors, making any direct comparison impossible
+- Presenting results on benchmark subsets rather than the complete set
+
+This is **scientific cherry-picking**, and it has become the norm in AI industry press releases.
+
+## The Concrete Consequences
+
+### "Jagged" Performance Profiles
+
+Karpathy perfectly describes the symptom: benchmaxxed models display **amusingly irregular performance profiles** — simultaneously a polymath genius and a confused elementary schooler. A model can solve complex integrals (because that's in the benchmarks) while failing to follow a simple three-step instruction (because it's not).
+
+### Loss of Trust
+
+When users realize that the #1 ranked model on leaderboards doesn't deliver on its promises in practice, trust in **the entire evaluation system** collapses. How do you choose a model for your use case if public scores don't reflect reality?
+
+### The Illusion of Progress
+
+Benchmaxxing creates a **theater of progress**. Scores go up a few points with each release, the charts are impressive, the press releases triumphant — but actual capabilities progress much more slowly than the numbers suggest. The engineering effort invested in gaming benchmarks is effort that is **not** invested in improving fundamental capabilities.
+
+<Callout type="warning" title={"Benchmark theater"}>
+Entire teams spend weeks optimizing benchmark scores rather than solving their models' real problems. It's a waste of talent and compute at industry scale — and end users pay the price.
+</Callout>
+
+## Chameleon Benchmark Overfit Detector (C-BOD)
+
+How do you detect benchmaxxing objectively? That's the question **C-BOD** (Chameleon Benchmark Overfit Detector) attempts to answer — a research tool designed to measure the degree of overfitting of LLMs on benchmarks.
+
+### The Principle
+
+The idea is elegant: **rephrase the benchmark questions** while preserving their meaning, then check if the model's performance drops. If a model has truly understood the concepts, a rephrasing shouldn't throw it off. If it simply memorized the questions and their answers, a change in wording destabilizes it.
+
+### The Results
+
+The study, conducted on **26 LLMs** evaluated on MMLU, reveals that:
+
+- Even modest perturbations of questions cause an **average performance degradation of ~2.15%**
+- Models with the **highest baseline scores** show the **largest drops** — they relied more heavily on memorized patterns
+- Some models lose up to 5-8% performance on rephrasings that change absolutely nothing about the semantic content of the question
+
+<Callout type="info" title={"What C-BOD reveals"}>
+The fact that the highest-performing models are also the most sensitive to rephrasings is a strong signal: their high performance partly relies on **memorization of the specific distribution** of benchmark questions, not solely on deep understanding of the subjects.
+</Callout>
+
+## How to Evaluate Models Correctly?
+
+If classic benchmarks are compromised, what do you do? Several complementary approaches are emerging.
+
+### Private and Dynamic Benchmarks
+
+**Chatbot Arena (LMSYS)** has become the de facto reference. The principle: human users interact with two anonymous models in parallel and vote for the one they prefer. Models can't prepare for a test they don't know about in advance, and human preferences capture quality dimensions (naturalness, usefulness, nuance) that automated benchmarks miss.
+
+**LiveBench** takes another strategy: the benchmark **changes regularly**, with new questions generated from recent data. A model that memorized the old version faces new questions, making contamination useless.
+
+### Evaluation Specific to Your Use Case
+
+The most practical advice: **test the model on your own tasks**. A model ranked 5th on MMLU may be the best for your specific legal document summarization application, and vice versa. Generic benchmarks don't capture the diversity of real use cases.
+
+Build your own evaluation set:
+- Collect representative examples of your actual tasks
+- Define quality criteria relevant to your context
+- Compare models on **your** metrics, not the industry's
+
+### Red-Teaming and Adversarial Evaluation
+
+Rather than verifying what the model can do, verify what it **can't** do. Red-teaming involves subjecting the model to edge cases, trick questions, and ambiguous situations to expose its real weaknesses. A benchmaxxed model excels on standard questions but collapses when faced with rephrasings or unexpected variations.
+
+### Vibes-Based Evaluation
+
+Karpathy advocates an approach the community calls **vibes-based evaluation**: simply use the model for a few hours on your real tasks and form a judgment. It's subjective, non-reproducible, and yet remarkably informative. An experienced practitioner who interacts with a model for a day develops a more reliable intuition than any benchmark score.
+
+### The Golden Rule: Never Trust a Single Score
+
+No individual benchmark captures a model's quality. Best practice is to cross-reference:
+- Multiple automated benchmarks (for coverage)
+- Human evaluations (for perceived quality)
+- Tests on your use case (for relevance)
+- Red-teaming (for robustness)
+
+A model that excels on **all** these dimensions is probably good. A model that excels on a single benchmark is probably benchmaxxed.
+
+## The Trend
+
+### Loss of Trust
+
+Karpathy observes in 2025 a **growing apathy and loss of trust toward benchmarks** within the community. Experienced practitioners no longer look at MMLU or HumanEval scores to choose a model. They test themselves, they look at user feedback, they consult Chatbot Arena.
+
+### The Structural Conflict of Interest
+
+The community is moving toward more robust evaluation methods, but the industry's **incentive structure** continues to reward benchmaxxing. Investors want numbers. Press releases need charts. Rankings generate media buzz. As long as benchmarks influence funding rounds and purchasing decisions, the temptation to game them will remain.
+
+### Toward Real-Time Evaluation
+
+The real solution may be taking shape in **evaluation-as-inference**: testing models in real time, on real tasks, with fresh data. Rather than a standardized exam you can cram for, it's continuous and unpredictable evaluation — the equivalent of observing an employee at work rather than giving them a multiple-choice test.
+
+<Callout type="info" title={"In summary"}>
+Benchmaxxing is a symptom of a deeper problem: the AI industry hasn't yet found a reliable, gaming-resistant method for evaluating LLMs. Current benchmarks are necessary but insufficient. The solution lies in a **diversification of approaches** — dynamic benchmarks, human evaluation, use-case-specific testing, and a healthy dose of skepticism toward numbers that seem too good to be true.
+</Callout>

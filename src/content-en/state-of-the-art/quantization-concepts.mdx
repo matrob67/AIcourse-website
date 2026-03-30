@@ -1,0 +1,115 @@
+---
+title: "Quantization: Understanding Model Compression"
+description: "How to compress a giant model by making it less precise but still useful. The magic of small numbers."
+---
+
+## The Size Problem
+
+A 70 billion parameter model in FP16 format (2 bytes per number) weighs **140 GB**. To give you an idea, that's more than the total memory of an A100 GPU (80 GB). Impossible to load in one piece. And even if you have multiple GPUs, the bill adds up fast.
+
+**Quantization** is the solution: you replace very precise numbers with coarser, lighter ones. The model loses a bit of finesse, but it fits in memory and runs faster.
+
+<Callout type="info" title="The tradeoff">
+Quantization is a deal: you use less memory and run faster, but you lose some precision. Like a JPEG photo: smaller than PNG, but a bit grainy. The eye barely notices the difference, but the file is 10 times lighter.
+</Callout>
+
+## Number Formats
+
+To understand quantization, you need to understand how computers store numbers. Each format represents a tradeoff between **range** (what values you can represent) and **precision** (how many decimal places).
+
+### FP32 (32 bits - luxury)
+- Very precise but takes 4 bytes per parameter
+- Used for training (gradients need precision)
+- Range: up to 3.4 x 10^38
+- It's the "master" of a photo — you keep everything, but it's heavy
+
+### FP16 / BF16 (16 bits - modern standard)
+- **FP16**: good tradeoff, but limited range (some values that are too large cause "overflow")
+- **BF16**: same range as FP32, but with fewer decimal places
+- Standard for modern LLMs: 2 bytes per parameter
+- Most models on Hugging Face are distributed in BF16
+
+<Callout type="tip" title="BF16 > FP16 for LLMs">
+BF16 (Brain Float, invented by Google Brain) is like FP32 but cut in half. It keeps the same value range, so no risk of overflow. All modern GPUs (A100, H100, RTX 4090) support it natively. It's the default choice today for both training and inference.
+</Callout>
+
+### INT8 (8 bits - integers)
+- Only 256 possible values (-128 to 127)
+- 2x reduction compared to FP16
+- 1 byte per parameter
+- Think of it as a palette of 256 colors instead of millions: for many images, that's enough
+
+### INT4 (4 bits - highly compressed)
+- Only 16 possible values (-8 to 7)
+- 4x reduction compared to FP16
+- Half a byte per parameter
+- This is the current sweet spot: compressed enough to be useful, not too degraded to be useless
+
+### NF4 (4 bits - smart)
+- The 16 levels are placed at the **quantiles of the normal distribution**: where the weights are most concentrated (around zero), you get more precision levels, and where they're rare (the extremes), you get fewer. This works because LLM weights approximately follow a normal distribution.
+- Imagine you need to summarize a class's grades with 16 values. Instead of spacing them evenly (0, 6, 12, 18...), you put more values around the mean where most students are
+- Used by QLoRA for efficient fine-tuning
+
+## How Quantization Works
+
+**The idea is simple:** you take very precise numbers (floats) and "round" them to a limited number of levels. Then you store a formula to (approximately) recover the original values.
+
+1. **Original weight (FP16)**: 0.123456789
+2. **Quantized weight (INT4)**: 5 (on a 0-15 scale)
+3. **During use**: 5 x (scale_factor) + zero_point ≈ 0.123456789
+
+You map the real weights to integers, then rescale during use. The approximation error is the price you pay.
+
+### Per-Channel Quantization
+
+Each column of the weight matrix has its own scaling parameters (scale factor and zero point). It's as if each column of pixels in a photo had its own brightness setting. Finer, so less error, but more metadata to store.
+
+### Group Quantization
+
+Weights are divided into groups of 32 or 128. Each group has its own mapping constants. This is the most commonly used practical tradeoff: you don't go down to the individual channel level (too much metadata), but you don't do a global mapping either (too much error).
+
+## Post-Training Quantization (PTQ)
+
+You take an **already trained** model and compress it after the fact. No need to retrain. Three main approaches:
+
+### Round-to-Nearest (RTN)
+The simplest: round each weight to the nearest quantization level. Like rounding all prices in a supermarket to the nearest cent.
+- Decent in INT8
+- Degraded results in INT4 (too few levels, errors accumulate)
+
+### Data-aware (GPTQ, AWQ)
+You use a small dataset of examples (128-256 sentences) to measure the real impact of each quantization choice on the model's outputs. You protect important weights and compensate for errors intelligently.
+- Measures importance via the Hessian matrix (second derivatives of the loss) or activation magnitudes
+- Slower to produce, but significantly better results
+
+<Callout type="paper" title="The outlier problem">
+LLMs have **outliers**: some activation channels are 100x larger than the average. If you apply uniform quantization, you waste half your levels covering these rare extreme values, and all other weights end up squished onto a few levels. Good methods (AWQ, SmoothQuant) handle these outliers separately.
+</Callout>
+
+## Impact on Performance
+
+| Format | Size (7B) | Quality Loss |
+|---|---|---|
+| FP16 | 14 GB | Reference |
+| INT8 | 7 GB | 1-2% |
+| INT4 (GPTQ) | 3.5 GB | 3-5% |
+| INT4 (AWQ) | 3.5 GB | 2-4% |
+| NF4 (QLoRA) | 3.5 GB | 2-4% |
+
+The loss depends on the type of task:
+- **Math, code**: sensitive to quantization, the loss is noticeable (precise calculations suffer from approximation)
+- **Chat, free generation**: robust, the loss is often imperceptible (natural language tolerates approximations well)
+
+<Callout type="warning" title="Test on YOUR use case">
+These numbers are general averages. A model quantized to INT4 can be excellent for translation but catastrophic for math. Always measure on your actual use case before deploying.
+</Callout>
+
+## Hardware Acceleration
+
+Quantization only speeds things up if the GPU can actually exploit compressed formats:
+
+- **INT8**: natively supported by Tensor Cores (A100, H100)
+- **INT4**: via specialized CUDA kernels (ExLlama, Marlin)
+- **FP8**: native on H100 and RTX 4090
+
+For LLMs, the bottleneck is **memory bandwidth**, not compute power. Each generated token has to read all the model's weights. By reducing weight size by 4x, you read 4x less data, so you go (almost) 4x faster. That's why quantization is so effective for inference.

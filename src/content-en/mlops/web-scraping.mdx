@@ -1,0 +1,188 @@
+---
+title: "Web Scraping for ML Datasets"
+description: "Building ML datasets from the web: scraping techniques, Common Crawl, ethical and legal considerations, data collection pipelines."
+---
+
+## The backstory: where does the data that ChatGPT uses come from?
+
+GPT-3 was trained on 300 billion tokens (small pieces of words). Each token comes from somewhere. And the vast majority comes from the web.
+
+OpenAI crawled billions of web pages: Wikipedia, Reddit, GitHub, blogs, news sites. All of it was scraped, cleaned, filtered, then fed into training. The result? The data that powers modern LLMs.
+
+But how do you do this at scale? You can't ask 1,000 humans to copy-paste web pages. You need an automated, scalable process, capable of handling **petabytes** of raw data.
+
+Welcome to **web scraping for ML**.
+
+## Common Crawl: the largest public web dataset
+
+### What is it?
+
+**Common Crawl** is a **nonprofit organization** that has been systematically crawling the web since 2011. Roughly once a month, it captures a snapshot of several billion web pages.
+
+It's like taking a photograph of the entire web -- a photograph that weighs about **300 terabytes** compressed.
+
+### The data is public and free
+
+Common Crawl makes all its data available online for free. You can download the snapshots, search through billions of pages, use what you find.
+
+It's already used for:
+- **C4** (Common Crawl-Colossal Cleaned): the dataset that Google uses
+- **The Pile**: 825 GB of high-quality text
+- **FineWeb**: 15 trillion tokens, the most recent and widely used dataset
+
+### The formats
+
+Common Crawl distributes its data in three formats:
+
+**WARC**: the raw HTML of each page (complete, heavy)
+**WAT**: the metadata (HTTP headers, timestamps, URLs)
+**WET**: the extracted text (no HTML, just plain text)
+
+For training an LLM, you mainly need the WET (just the text).
+
+
+
+## The pipeline: from raw web to clean dataset
+
+### Step 1: choose the snapshots
+
+Common Crawl produces a new snapshot each month. You pick some. The most recent (for freshness), the oldest (for a baseline), all of them.
+
+### Step 2: extract the text
+
+You need to **parse the HTML** and extract just the textual content. Not the menus, not the ads, not the footers. Just what a human would read.
+
+Tools:
+- **BeautifulSoup**: classic Python library for parsing HTML
+- **trafilatura**: specialized in extracting the "main content" of a page
+
+trafilatura is generally better for this use case. It uses advanced heuristics and ML to identify the editorial content of a page and ignore all the noise (menus, ads, footers, sidebars).
+
+### Step 3: filter by language
+
+You want a French LLM? Keep the French text, discard the rest.
+
+Tool: **fastText** (Meta's library) for language classification.
+
+It sounds simple but at 300 TB of data, it takes time.
+
+### Step 4: filter by quality (THE BIG ONE)
+
+This is the most critical step of the entire pipeline. Among billions of web pages, **the majority is garbage**: spam, auto-generated content, near-empty pages, repetitive content.
+
+You need heuristics and classifiers to say "this page is good, this one is bad."
+
+**Simple heuristics**:
+- Length: not too short (< 100 words), not too long (> 100,000 words)
+- Alphabetic character ratio: lots of symbols = probably code or spam
+- Stop word ratio: too few "the," "a," "is" = probably spam
+- Duplicate lines: lots of duplication = boilerplate (menus, footers)
+- Unique word ratio: low diversity = repetitive content
+
+**More advanced classifiers**:
+- **Perplexity filtering**: a language model measures how "normal" the text is. Wikipedia has low perplexity. A spam page has high perplexity.
+- **Quality classifier**: train a small model to distinguish "high-quality content" (Wikipedia, books) vs "low-quality content" (spam, auto-generated)
+
+<Callout type="paper" title="FineWeb: proof that quality matters more than quantity">
+HuggingFace published FineWeb, a filtered Common Crawl dataset. They applied aggressive filtering: 90 billion original pages reduced to 15 billion after filtering (82% of content eliminated).
+
+Result: models trained on FineWeb (15 billion filtered pages) perform significantly better than models trained on a larger raw dataset.
+
+The lesson: 15 GB of clean data beats 100 GB of dirty data. Quality always trumps quantity.
+</Callout>
+
+### Step 5: deduplication
+
+Common Crawl has A LOT of duplicate content. Mirror pages. Syndicated content (the same article on 100 different blogs). You need to clean up.
+
+**Exact deduplication**: compute a SHA-256 hash of each page. Pages with the same hash are identical.
+
+**Near-exact deduplication**: two pages are 99% identical (just one line different). That's more complex.
+
+Tools: **MinHash + LSH** (Local Sensitive Hashing) to efficiently find near-identical documents at scale.
+
+## Alternatives to Common Crawl: when to crawl yourself
+
+### Public APIs
+
+When they exist, prefer APIs:
+- **Wikipedia**: complete free dump updated monthly
+- **ArXiv**: all scientific articles in open access
+- **GitHub**: API for source code (respect the licenses)
+- **Reddit**: public archives
+- **Stack Overflow**: public data dump
+
+These APIs are cleaner than raw scraping. Less spam. Better structure.
+
+### Direct scraping
+
+For sources not covered by Common Crawl or APIs:
+
+**requests + BeautifulSoup**: simple, OK for small volumes
+
+**Scrapy**: robust framework for large-scale crawls
+
+**Playwright/Selenium**: if pages need JavaScript (single-page apps)
+
+### Trafilatura
+
+**trafilatura** is the most accurate tool for extracting clean text from raw HTML. It combines:
+- Heuristics to identify the main content block
+- Automatic cleaning (removing boilerplate, ads, menus)
+- Handling of tricky cases (tables, lists, multimedia content)
+
+## Ethical and legal considerations
+
+### Robots.txt
+
+Websites publish a `robots.txt` file that tells bots which pages they can crawl and which are off-limits.
+
+Respecting `robots.txt` is a widely recognized ethical best practice. Legally, its binding value depends on the jurisdiction, but violating it exposes you to lawsuits.
+
+### Copyright: the battleground
+
+This is the **real question** of web scraping for AI.
+
+**The facts**:
+- Several lawsuits in progress: New York Times vs OpenAI, Getty Images vs Stability AI
+- The EU AI Act requires transparency about training data and allows creators to request exclusion
+- In the US, "fair use" is sometimes applicable, sometimes not
+- In Asia, it varies enormously
+
+**The takeaway**: the legal landscape **is evolving very rapidly**. What was tolerated in 2020 may no longer be in 2025. Legal risk is increasing, especially in Europe.
+
+<Callout type="warning" title="Consult a lawyer before large-scale scraping">
+If you have commercial ambitions and plan to scrape billions of pages to train a model, **consult a lawyer**. The legal risk is real, especially in the EU. You can also partner with content creators for an explicit license.
+</Callout>
+
+### Personal data: GDPR
+
+Scraping can collect personal data (names, emails, addresses). **GDPR** and other laws impose obligations:
+- **Minimization**: only collect what is necessary
+- **PII scrubbing**: remove emails, phone numbers, addresses
+- **Right to be forgotten**: if someone asks, you must be able to delete their data from the dataset
+
+### Rate limiting and politeness
+
+- Respect the server: delays between requests
+- Descriptive User-Agent: identify your crawler ("MyCrawler/1.0")
+- No accidental DDoS (Distributed Denial of Service): if you send 1,000 requests/second, the server goes down
+
+## Best practices
+
+- **Document provenance**: for each piece of data, trace its URL, date, license
+- **Version the dataset**: use DVC or LakeFS for data versioning
+- **Reproducibility**: the pipeline must be runnable multiple times and produce the same result
+- **Quality over quantity**: 10 GB of clean data is better than 1 TB of dubious content
+- **Respect licenses**: check the terms of use for each source
+
+## Why this matters
+
+80% of the data an LLM sees comes from the web. The quality of web scraping determines the quality of the model.
+
+- Bad scraping -> model with lots of hallucinations
+- Good scraping + good filtering -> capable and factual model
+
+The labs that do good scraping (aggressive filtering, deduplication, cleaning) produce the best models.
+
+It's an invisible but fundamental element of modern AI.

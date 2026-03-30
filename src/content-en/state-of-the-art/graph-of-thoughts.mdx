@@ -1,0 +1,112 @@
+---
+title: "Graph of Thoughts"
+description: "Graph of Thoughts generalizes Tree of Thoughts by enabling merge, refinement, and loop operations on thoughts, modeling reasoning as a directed graph."
+---
+
+## Beyond the Tree: Merging and Refining
+
+Tree of Thoughts constrains reasoning to a tree: each thought has a single parent and information flows only from parent to children. It's already much better than linear Chain of Thought, but it's still limited. What if two exploration branches have each found a piece of the solution and need to be **combined**? Impossible in a tree.
+
+**Graph of Thoughts** (GoT) lifts this fundamental restriction. Reasoning becomes a **directed graph** where thoughts can:
+- **Combine** multiple previous thoughts (branch merging)
+- **Be improved** iteratively (refinement loop)
+- **Form loops** (return to an earlier step with new information)
+
+The most vivid analogy: Tree of Thoughts is like exploring a maze by taking paths that diverge but never reconverge. Graph of Thoughts is like a team of researchers who explore different leads, share their findings, and combine their results to arrive at a solution that none of them would have found alone.
+
+<ArxivLink id="2308.09687" title="Graph of Thoughts: Solving Elaborate Problems with Large Language Models (Besta et al., 2023)" />
+
+<Callout type="info" title="Tree to Graph: the conceptual leap">
+In a tree, information flows strictly from parent to children — branches are isolated. In a graph, you can **merge** divergent branches, **refine** ideas through iteration, and **loop** to correct errors. It's a strictly richer and more flexible structure, capable of modeling reasoning that a tree simply cannot express.
+</Callout>
+
+
+
+## The Four Fundamental Operations
+
+GoT defines four atomic operations that, when combined, can build any reasoning pattern:
+
+**Generate (Branching)**: create multiple candidate thoughts from a parent thought. It's the same operation as in ToT — exploring multiple directions.
+
+**Aggregate (Merging)**: combine two or more thoughts into one. This is the key operation that was missing in ToT. It enables **divide-and-conquer**: split a problem into sub-problems, solve each independently, then merge the partial solutions.
+
+> **Thought A:** Marketing budget = 50K&euro;
+> **Thought B:** Expected ROI = 3.2&times;
+> &rarr; **Aggregation:** Expected revenue = $50\text{K} \times 3.2 = 160\text{K€}$
+
+**Refine (Improving)**: take an existing thought, critique it, and produce an improved version. It's a self-correction loop that allows iteration toward quality. The LLM alternately plays the role of writer and critic.
+
+> **v1:** Merge sort = $O(n^2)$
+> &rarr; **Critique:** Merge sort is a divide-and-conquer algorithm, not quadratic.
+> &rarr; **v2:** Merge sort = $O(n \log n)$
+
+**Score (Evaluation)**: evaluate the quality of a thought to guide decisions. Like ToT, but applied to nodes of any type in the graph.
+
+## GoT Architecture in Practice
+
+Here's how GoT solves a problem concretely:
+
+1. **Problem** arrives and generates Thought 1a, 1b, 1c in parallel (Generate)
+2. Each thought is developed: 1a produces 2a, 1b produces 2b, 1c produces 2c (Generate)
+3. **Aggregation**: results 2a, 2b, 2c are merged into a synthetic thought (Aggregate)
+4. **Refinement**: the merged thought is critiqued and improved (Refine)
+5. **Evaluation** and **Final Solution** (Score)
+
+The fundamental difference from a tree: **branches recombine**. This is exactly the pattern of algorithmic divide-and-conquer — divide the problem, solve the parts, merge the results. Merge sort is the perfect example: divide the list, sort the halves, merge the sorted lists.
+
+## The Controller: The Orchestration Brain
+
+A **controller** orchestrates the operations and dynamically decides the next step:
+
+1. Analyze the current state of the graph (which thoughts exist, their scores, the connections)
+2. Decide which operation to apply: generate, aggregate, refine, or score
+3. Select the target thoughts for the operation
+4. Check stopping conditions (solution found, budget exhausted, convergence)
+
+The controller can be the LLM itself (expensive in tokens but flexible) or a programmed algorithm (less flexible but predictable and economical). In practice, a hybrid controller works best: programmed rules for the overall structure, and the LLM for fine-grained decisions.
+
+<Callout type="paper" title="Results on number sorting">
+Sorting 128 numbers: CoT achieves 12% success, ToT 36%, GoT **62%**. GoT excels here because sorting is **naturally decomposable** into independent sub-problems (merge sort). Sub-lists are sorted independently (parallel branches), then merged (aggregation). It's exactly the type of problem GoT was designed for.
+</Callout>
+
+## Concrete Use Cases
+
+**Decomposable problems**: any problem that naturally divides into independent sub-problems to recombine.
+- Data sorting and merging
+- Multi-criteria analysis (each criterion evaluated separately, then synthesis)
+- Project planning (parallel sub-tasks, then coordination)
+
+**Collaborative writing**: each branch generates a paragraph or section. Aggregation produces a coherent text. Refinement improves fluidity and corrects inconsistencies between sections. It's like an automated editorial process.
+
+**Debugging**: generate bug hypotheses in parallel (Generate), test each one (Score), combine diagnostics (Aggregate), refine the final diagnosis (Refine). The graph naturally captures the process of elimination and synthesis.
+
+## Comparison of Reasoning Paradigms
+
+| Paradigm | Structure | Operations | Relative Cost | Best for |
+|---|---|---|---|---|
+| CoT | Chain | Sequential | 1x | Simple, fast |
+| Self-Consistency | Multiple chains | Majority vote | Kx | Robustness |
+| ToT | Tree | Branch + Prune | 10-30x | Exploration |
+| GoT | Graph | Branch + Merge + Refine | 20-50x | Composite problems |
+
+<Callout type="tip" title="The practical hierarchy">
+Always start with CoT. If results are inconsistent, add self-consistency (multiple chains + vote). If exploration is needed, move to ToT. GoT is only justified for problems that are **truly decomposable** where merging sub-solutions provides clear value. Only add complexity when simplicity fails.
+</Callout>
+
+## Practical Limitations
+
+**Complex orchestration**: when to branch? When to aggregate? When to refine? If the LLM makes all these decisions, the token overhead for "meta-reflection" is enormous — sometimes more expensive than the reasoning itself.
+
+**Prohibitive cost**: 5 branches x 3 levels x merges + refines = 50+ LLM calls for a single problem. At $0.01 per call, that's $0.50 per question. Rarely justifiable for everyday tasks when a simple $0.01 CoT does the job 90% of the time.
+
+**Latency**: even with parallelism, a deep graph implies sequential dependencies (you need branch results before merging). Total latency can reach 30-60 seconds for a complex problem.
+
+<Callout type="warning" title="Cost vs benefit: the reality">
+GoT is theoretically elegant, but rarely used in production. Modern reasoning models (o1, DeepSeek-R1) **internalize** exploration and refinement in a single forward pass, with a better cost/benefit ratio. They do "in their heads" what GoT does explicitly with dozens of API calls. For the majority of use cases, reasoning models are a better option.
+</Callout>
+
+## Perspective
+
+GoT represents the logical culmination of the progression from CoT to ToT to GoT: reasoning as a **search problem in a graph**. Even though explicit GoT is rarely deployed in production, its foundational ideas — aggregation of partial solutions, iterative refinement, branch recombination — persist and directly influence modern agent systems and reasoning architectures.
+
+GoT shows what's theoretically possible. Practice tends toward lighter approaches (reasoning models, agents with tools) that achieve the same benefits with less overhead.

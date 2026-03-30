@@ -1,0 +1,131 @@
+---
+title: "Mixed Precision Training: FP16, BF16 Explained"
+description: "Mixed precision: use 16 bits for training instead of 32, 2x faster, 2x less memory. How it works without breaking everything."
+---
+
+## The Simple Pitch
+
+Training in FP32 (32 bits per floating-point number) is a thing of the past. **Mixed precision** uses 16-bit numbers (FP16 or BF16) for the majority of computations, and reserves FP32 only where it's critical.
+
+The result: 2 to 16x speedup depending on the GPU, 2x memory reduction. This isn't an exotic optimization: **it's the standard** for all modern LLM training. Not using it means wasting half your hardware.
+
+<ArxivLink id="1710.03740" title="Mixed Precision Training" />
+
+## Floating-Point Number Formats
+
+### FP32 (full precision)
+The IEEE 754 standard: 1 sign bit, 8 exponent bits, 23 mantissa bits.
+Range: +-3.4x10^38. Precision: about 7 significant decimal digits.
+It's the "default" format in computing, but it's oversized for most deep learning computations.
+
+### FP16 (half precision)
+1 sign bit, 5 exponent bits, 10 mantissa bits.
+Range: +-65504 only. Precision: about 3 decimal digits.
+
+**The problem**: the range is very limited. A gradient of 0.00001 multiplied by a learning rate of 0.001 gives 0.00000001, which is below the smallest representable value in FP16. This number rounds to zero and the layer stops training (gradient underflow).
+
+### BF16 (Brain Float 16, invented by Google)
+1 sign bit, **8 exponent bits** (as many as FP32!), 7 mantissa bits.
+Range: +-3.4x10^38 (identical to FP32). Precision: about 2 decimal digits.
+
+<Callout type="info" title="FP16 vs BF16: the crucial choice">
+FP16 offers more precision (10 mantissa bits vs 7 for BF16) but a reduced range that causes overflow and underflow. BF16 sacrifices fine precision to keep the **full dynamic range** of FP32. For LLMs, range is far more important than fine precision. That's why BF16 has become the dominant format for LLM training.
+</Callout>
+
+## How You Avoid Breaking Training
+
+The fundamental principle: keep **three copies of the weights** with different roles.
+
+1. **Master copy in FP32**: used for optimizer updates (where precision really matters)
+2. **Working copy in FP16/BF16**: used for forward and backward passes (where speed matters)
+3. **Gradients in FP16/BF16**: computed during the backward pass
+
+The cycle at each iteration:
+1. **Forward**: cast the FP32 master copy to FP16/BF16, compute activations in FP16/BF16
+2. **Backward**: compute gradients in FP16/BF16
+3. **Update**: cast gradients to FP32, update the master copy (FP32 += gradient * lr)
+4. **Cast**: recreate the FP16/BF16 working copy from the updated master copy
+
+Why is this FP32 master copy indispensable? Because the optimizer adds **very small numbers** (gradient x learning_rate, often on the order of 10^-7) to **large numbers** (the weights, often on the order of 10^-1 to 10^1). In FP16, this addition simply rounds to zero: the weight doesn't change. In FP32, the update is preserved. Without a master copy, training stalls.
+
+## Loss Scaling: The FP16 Hack
+
+In FP16, very small gradients (below about 6x10^-8) are rounded to zero. The deep layers of a network naturally have small gradients (due to chain multiplication in the backward pass). These layers would simply stop training.
+
+The solution is elegant: **multiply the loss by a large factor before the backward pass**:
+
+$$\text{loss\_scaled} = 1024 \times \text{loss}$$
+
+All gradients become 1024x larger and stay within FP16's representable range. You divide by the same factor before the update:
+
+$$\text{corrected\_gradients} = \frac{\text{gradients}}{1024}$$
+
+**Dynamic loss scaling**: in practice, the factor is adjusted automatically. If an overflow is detected (gradient = Inf), you divide the factor by 2 and skip the iteration. Otherwise, you gradually increase the factor to maintain maximum precision.
+
+<Callout type="tip" title="BF16: no loss scaling needed!">
+Thanks to its dynamic range identical to FP32, BF16 doesn't suffer from gradient underflow. Loss scaling becomes unnecessary. This is a considerable practical advantage: less complexity, fewer potential bugs, fewer skipped iterations due to overflow.
+</Callout>
+
+## The Concrete Gains
+
+### Speedup Thanks to Tensor Cores
+
+Modern NVIDIA GPUs have specialized compute units called **Tensor Cores**, optimized for matrix multiplications in FP16/BF16.
+
+
+
+| GPU | FP32 TFLOP/s | FP16/BF16 TFLOP/s | Speedup |
+|-----|------|------|---|
+| V100 | 15.7 | 125 | **8x** |
+| A100 | 19.5 | 312 | **16x** |
+| H100 | 67 | 989 | **15x** |
+
+These speedups aren't theoretical: they're directly exploitable with mixed precision. The gap between FP32 and FP16/BF16 is enormous and keeps growing with each GPU generation.
+
+### Memory Reduction
+
+- Activations: 2x (FP16 instead of FP32)
+- Gradients: 2x
+- Weights: about 1.5x total (FP16 copy + FP32 copy, vs 1 single FP32 copy without mixed precision)
+
+### Memory Bandwidth
+
+Each data point in FP16/BF16 is half the size of FP32. For operations limited by memory bandwidth (like attention), this is a direct 2x gain since there's half as much data to read and write.
+
+## Operations That Must Stay in FP32
+
+Some operations are numerically unstable in low precision and must imperatively stay in FP32:
+
+- **Softmax**: involves subtracting the max, exponentiation, and division. Precision is critical to avoid degenerate results.
+- **LayerNorm / RMSNorm**: computing the mean and variance accumulates errors in low precision
+- **Loss accumulation**: summing many small terms in FP16 progressively loses precision
+- **Optimizer states**: Adam's momentum and variance accumulate errors iteration after iteration
+
+The framework (PyTorch AMP, JAX) automatically handles the choice: each operation is classified as "whitelist" (can be in FP16) or "blacklist" (must stay in FP32).
+
+<Callout type="warning" title={"Signs of numerical instability"}>
+NaN or Inf in gradients. Loss that suddenly diverges after thousands of stable iterations. Convergence to a suboptimal result. Diagnosis: check that loss scaling is active (for FP16), that critical operations are indeed in FP32, and that gradients don't contain extreme values.
+</Callout>
+
+## In Practice: AMP (Automatic Mixed Precision)
+
+PyTorch, JAX, and TensorFlow offer AMP which handles everything automatically. A few lines of code are enough:
+
+```python
+with torch.autocast(device_type="cuda"):
+    output = model(input)  # FP16/BF16 automatically
+    loss = criterion(output, target)
+
+scaler.scale(loss).backward()
+scaler.step(optimizer)
+```
+
+The `autocast` chooses the precision for each operation based on the internal whitelist/blacklist. The `scaler` handles dynamic loss scaling (unnecessary with BF16). It's transparent for the rest of the code.
+
+## Universal Adoption
+
+Mixed precision training **has been mandatory** for several years now. All modern LLMs use it without exception. Without mixed precision, training a 7B model would be 4 to 8x slower and require 2x more GPU memory. Economically, that would make most projects non-viable.
+
+<Callout type="info" title={"The evolution continues"}>
+Pure FP32 is a fossil. FP16/BF16 mixed precision is the basic hygiene standard. FP8 is the current frontier (Hopper, Blackwell). The evolution is inexorably toward fewer bits per number, compensated by increasingly sophisticated techniques to preserve training stability.
+</Callout>

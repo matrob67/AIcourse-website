@@ -1,0 +1,137 @@
+---
+title: "Convexity: convex functions, local vs global minima"
+description: "Convexity and non-convexity in optimization: why neural network loss functions are non-convex, and why training works despite this."
+---
+
+## Optimization: finding the bottom of the valley
+
+Training a machine learning model amounts to solving an optimization problem: finding the parameters $\theta$ that minimize a loss function $L(\theta)$. The shape of this loss function determines the difficulty of the problem. And convexity is the property that distinguishes "easy" problems from "hard" ones.
+
+## Convex functions: the bowl
+
+### Definition
+
+A function $f$ is convex if, for all points $x$ and $y$ and any $t \in [0, 1]$:
+
+$$f(tx + (1-t)y) \leq t \cdot f(x) + (1-t) \cdot f(y)$$
+
+In geometric terms, this means that the line segment connecting any two points on the graph of $f$ always stays above the curve. In other words, the function "curves upward," like the inside of a bowl.
+
+### Analogy: the bowl
+
+Imagine a marble in a bowl. No matter where you drop it, it will always end up at the bottom. That's exactly the key property of convex functions: every local minimum is a global minimum. There's only one bottom, and gradient descent inevitably leads there.
+
+### Examples of convex functions
+
+- $f(x) = x^2$ (parabola)
+- $f(x) = |x|$ (absolute value)
+- $f(x) = e^x$ (exponential)
+- $f(\mathbf{x}) = \|\mathbf{x}\|^2$ (squared norm)
+- MSE for linear regression
+
+### Fundamental property
+
+For a differentiable convex function, the optimality condition is simple:
+
+$$\nabla f(x^*) = 0 \implies x^* \text{ is a global minimum}$$
+
+If you find a point where the gradient is zero, you can be certain it's the global minimum. No ambiguity, no trap -- that's what makes convex optimization so comfortable.
+
+## Non-convex functions: the mountainous landscape
+
+### The reality of deep learning
+
+Loss functions of neural networks are massively non-convex. As soon as you introduce nonlinearities (ReLU, sigmoid, tanh) and multiple layers, the loss surface becomes a complex landscape with multiple valleys, hills, and passes.
+
+### Analogy: the mountain
+
+Imagine a blindfolded hiker in a mountain range, looking for the lowest point. By only following the descending slope, they might end up in a valley that isn't the deepest -- that's a local minimum, and they have no way of knowing that something better exists elsewhere.
+
+### Types of critical points
+
+In high dimensions, the points where the gradient is zero fall into three categories:
+
+- **Local minimum**: the function goes up in all directions
+- **Local maximum**: the function goes down in all directions
+- **Saddle point**: the function goes up in some directions and down in others
+
+A saddle point resembles a horse saddle: a minimum in the front-back direction but a maximum in the left-right direction.
+
+## Why networks work despite non-convexity
+
+This is the big question of deep learning. If the loss is non-convex, with potentially billions of local minima, how does SGD (Stochastic Gradient Descent) find good solutions? Several elements of the answer:
+
+### Saddle points dominate
+
+In very high dimensions (millions or billions of parameters), true local minima are extremely rare. Why? For a critical point to be a local minimum, curvature must be positive in all directions simultaneously. With millions of directions, this is statistically improbable.
+
+The vast majority of critical points are saddle points. And SGD naturally traverses them thanks to stochastic noise: the noisy gradient pushes the trajectory away from saddle points, even when the average gradient is close to zero.
+
+### Attraction basins are wide
+
+Good solutions are not isolated, narrow minima, but wide flat basins. Research shows that these flat basins correspond to solutions that generalize well. The intuition: a wide minimum is "robust" to parameter perturbations, just as a generalizing solution is robust to data perturbations.
+
+### Overparameterization helps
+
+A network with more parameters than data has many zero-loss solutions. These solutions form connected manifolds in parameter space. SGD doesn't have to find an isolated point; it just has to reach this manifold, which is much easier.
+
+### SGD noise is beneficial
+
+The mini-batch noise in SGD acts as a natural regularizer. It prevents convergence to narrow, "sharp" minima (which overfit) and favors wide, flat minima (which generalize).
+
+## The Hessian and convexity
+
+### The Hessian
+
+The Hessian $\mathbf{H}$ is the matrix of second derivatives:
+
+$$H_{ij} = \frac{\partial^2 f}{\partial x_i \partial x_j}$$
+
+It captures the curvature of the function in each direction. In a sense, if the gradient tells you "which direction it's tilting," the Hessian tells you "how curved the terrain is" -- and it's this curvature that distinguishes minima from maxima and saddle points.
+
+### Link with convexity
+
+- $f$ is convex if and only if $\mathbf{H}$ is positive semi-definite everywhere (all eigenvalues $\geq 0$)
+- At a critical point $\nabla f = 0$:
+  - All eigenvalues $> 0$: local minimum
+  - All eigenvalues $< 0$: local maximum
+  - Mixed sign eigenvalues: saddle point
+
+### In practice
+
+Computing the full Hessian of a neural network is impossible: for $n$ parameters, it's an $n \times n$ matrix that would occupy petabytes of memory. But you can efficiently compute the Hessian-vector product, which is enough for some second-order optimization methods.
+
+## Local convexity and "nearly convex" functions
+
+### Strong convexity
+
+A function is $\mu$-strongly convex if:
+
+$$f(y) \geq f(x) + \nabla f(x)^\top (y - x) + \frac{\mu}{2} \|y - x\|^2$$
+
+The term $\frac{\mu}{2}\|y - x\|^2$ guarantees a minimum curvature in all directions. The larger $\mu$, the more "curved" the function and the faster gradient descent converges to the minimum. In AI, L2 regularization makes the loss strongly convex around the minimum, which stabilizes training.
+
+### Smoothness
+
+A function is $L$-smooth if its gradient doesn't vary too fast:
+
+$$\|\nabla f(x) - \nabla f(y)\| \leq L \|x - y\|$$
+
+It's a bound on the maximum curvature. Concretely, for an $L$-smooth function, you know gradient descent converges as long as the learning rate satisfies $\alpha \leq 1/L$. That's why a learning rate that's too large makes training diverge: it exceeds the limit imposed by the curvature of the loss.
+
+### The ratio $\kappa = L/\mu$
+
+The condition number $\kappa$ measures the "imbalance" of curvature:
+- $\kappa$ close to 1: the function is well-conditioned, convergence is fast
+- $\kappa$ large: the function is ill-conditioned, optimization is slow (narrow, elongated valleys)
+
+This is exactly what motivates the use of adaptive optimizers like Adam, which adapt to the local curvature in each direction.
+
+## Key takeaways
+
+- A convex function has a unique global minimum: optimization is "easy"
+- Neural network loss functions are non-convex: multiple local minima and saddle points
+- In high dimensions, saddle points are far more common than local minima
+- SGD works despite non-convexity thanks to stochastic noise, overparameterization, and wide attraction basins
+- The Hessian captures local curvature and determines the nature of critical points
+- The condition number $\kappa$ quantifies the difficulty of optimization

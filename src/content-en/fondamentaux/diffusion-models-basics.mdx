@@ -1,0 +1,191 @@
+---
+title: "Diffusion Models: fundamental principles"
+description: "Diffusion models (DDPM), the progressive noising process, the reverse denoising process, and the connection to score matching."
+---
+
+## The simple and elegant idea
+
+The fundamental principle of diffusion models can be summarized in two steps: take an image and **progressively add noise** until you get pure random Gaussian noise. Then learn to **reverse** this process: start from pure noise, remove noise step by step, and reconstruct a coherent image.
+
+It's a deceptively simple idea. And yet, it triggered a revolution. In 2022, Stable Diffusion, DALL-E 2, and Midjourney demonstrated that this approach produces images of superior quality to GANs, with much better training stability than VAEs. Where GANs suffer from a fragile balance between generator and discriminator, and VAEs produce blurry images, diffusion combines the best of both worlds.
+
+<ArxivLink id="2006.11239" title="Denoising Diffusion Probabilistic Models" />
+
+<ImageWithSource
+  src="/images/admin/img-1774045308139.png"
+  alt="Pilgrims in a gothic cathedral"
+  sourceUrl="https://fr.wikipedia.org/wiki/Th%C3%A9%C3%A2tre_d%27op%C3%A9ra_spatial"
+  size="medium"
+/>
+
+## Forward process: from signal to noise
+
+<ImageWithSource
+  src="/images/admin/img-1774045435511.png"
+  alt="Transformation of an image into noise via forward process"
+  sourceUrl="https://www.superannotate.com/blog/diffusion-models"
+  size="medium"
+/>
+
+### The step-by-step progression
+
+The forward process is **fixed** and not learned. It's simply the progressive addition of Gaussian noise. At each step $t$ (from 1 to $T$, typically $T = 1000$), you mix the image with a bit of noise:
+
+$$
+x_t = \sqrt{\alpha_t} \cdot x_{t-1} + \sqrt{1 - \alpha_t} \cdot \epsilon_t
+$$
+
+with $\epsilon \sim \mathcal{N}(0, I)$ being pure Gaussian noise (randomly drawn).
+
+The intuition is that of a mixer: $\alpha_t$ controls the proportion between signal and noise at each step. When $\alpha_t$ is close to 1, you mostly keep the existing signal and add very little noise. When $\alpha_t$ is small, you drown the signal under the noise.
+
+**Why square roots?** This is a **variance-preserving** process: the coefficients $\sqrt{\alpha_t}$ and $\sqrt{1 - \alpha_t}$ guarantee that the total variance of $x_t$ stays at 1 at each step. Indeed, if $x_{t-1}$ has variance 1 and $\epsilon_t$ does too, then $\text{Var}(x_t) = (\sqrt{\alpha_t})^2 + (\sqrt{1 - \alpha_t})^2 = \alpha_t + (1 - \alpha_t) = 1$. Without these square roots -- if you directly used $\alpha_t$ and $(1 - \alpha_t)$ as coefficients -- the variance of $x_t$ would be $\alpha_t^2 + (1-\alpha_t)^2 \neq 1$. The signal would swell or collapse over steps, making the process unstable. The square roots are therefore the key to keeping each step properly normalized.
+
+### The noise schedule
+
+The amount of noise added at each step is defined by the **schedule** -- literally a "calendar" that says how much noise to add at each step: $\beta_t = 1 - \alpha_t$. Two common schedules:
+
+**Linear schedule** (original DDPM): $\beta$ increases linearly from $0.0001$ to $0.02$. The noising is very gradual at first (preserving fine details), then accelerates. Simple and effective.
+
+**Cosine schedule**: smoother progression, particularly beneficial for high-resolution images. The noising is more uniform throughout the process, avoiding destroying low-frequency structures too quickly.
+
+### Jumping directly to step t
+
+Crucial mathematical property: thanks to the properties of the Gaussian, you can compute **directly** $x_t$ from $x_0$ without going through all intermediate steps.
+
+Let's first define $\bar{\alpha}_t$: it's the **cumulative product** of all $\alpha$ values up to step $t$:
+
+$$
+\bar{\alpha}_t = \prod_{s=1}^{t} \alpha_s = \alpha_1 \cdot \alpha_2 \cdot \ldots \cdot \alpha_t
+$$
+
+Intuitively, $\bar{\alpha}_t$ measures **how much of the original signal survives after $t$ noise steps**. Since each $\alpha_s < 1$, this product decreases over steps: at the beginning $\bar{\alpha}_t$ is close to 1 (signal dominates), at the end it tends toward 0 (noise completely dominates).
+
+With this definition, the direct jump formula is:
+
+$$
+x_t = \sqrt{\bar{\alpha}_t} \cdot x_0 + \sqrt{1 - \bar{\alpha}_t} \cdot \epsilon
+$$
+
+with $\epsilon \sim \mathcal{N}(0, I)$.
+
+**Why can you jump directly from $x_0$ to $x_t$?** Because the sum of independent Gaussians is itself a Gaussian. Each forward step adds Gaussian noise, and by "unrolling" the recurrence over $t$ steps, all these individual noises combine into a single Gaussian term. You can therefore compute the result of $t$ noising steps in a single operation.
+
+Why is this **crucial for training**? Because during training, you need to noise an image to a random step $t$. Without this formula, you'd have to sequentially apply all 500 noising steps to get $x_{500}$. With it, a single computation suffices. You can sample any $t$ uniformly and obtain $x_t$ instantly.
+
+<Callout type="info" title="Progressive destruction in images">
+At step $t = 0$: the original image, intact. At step $t = 100$: the image is blurry, fine details have disappeared but the major structures are visible. At step $t = 500$: you can vaguely make out shapes, dominant colors. At step $t = T = 1000$: pure noise, indistinguishable from $\mathcal{N}(0, I)$. All information has been destroyed. But each individual step only added a **small perturbation**, which makes the process **potentially reversible** step by step. This is where the magic happens.
+</Callout>
+
+## Reverse process: learned denoising
+
+### The objective
+
+Reverse the forward process. Start from pure noise $x_T$ and go back step by step to a clean image $x_0$.
+
+Mathematically, this means learning the conditional distribution $p(x_{t-1} | x_t)$: "given this noisy image at step $t$, what did it look like at step $t-1$, i.e., with just a tiny bit less noise?" If you can answer this question for each $t$, you can go back from $x_T$ (noise) to $x_0$ (image) step by step.
+
+### The denoising network
+
+In practice, you train a network (typically a **U-Net**) to predict the **noise** that was added:
+
+$$
+\epsilon_\theta(x_t, t) \approx \epsilon
+$$
+
+The network receives as input the noisy image $x_t$ along with an encoding of the timestep $t$ (via positional sinusoids, like in Transformers). Its task: predict the Gaussian noise $\epsilon$ that was added to obtain $x_t$ from $x_{t-1}$.
+
+### Why predict noise rather than the image?
+
+This is a **parameterization** choice -- that is, "how to formulate the problem." You could train the network to predict $x_0$ directly, or $x_{t-1}$, and mathematically it would be equivalent. But predicting the noise $\epsilon$ is empirically more stable: the target (Gaussian noise) has uniform variance across all timesteps, which stabilizes training. Mathematically, knowing $\epsilon$ allows recovering $x_0$ via the forward formula, so it's equivalent -- but it's a better parameterization in practice.
+
+## DDPM training: remarkable simplicity
+
+The training algorithm is almost strikingly simple:
+
+1. Sample an image $x_0$ from the dataset
+2. Draw a random timestep $t$ from $\{1, \ldots, T\}$
+3. Draw noise $\epsilon \sim \mathcal{N}(0, I)$
+4. Compute $x_t$ via the forward formula (a single computation, no need to iterate)
+5. Pass $x_t$ and $t$ through the network, get the prediction $\hat{\epsilon}$
+6. Minimize: $\mathcal{L} = \| \epsilon - \hat{\epsilon} \|^2$
+
+That's it. A simple MSE (mean squared error) between the true noise and the predicted noise. No complex loss, no adversarial components, no delicate balancing between two networks.
+
+Let's compare with the alternatives. **GANs** require a fragile balance between generator and discriminator, suffer from mode collapse (the generator only produces a subset of possible images), and are notoriously difficult to train. **VAEs** require a delicate tradeoff between reconstruction loss and KL regularization, and often produce blurry images. Diffusion? A single network, a single loss, guaranteed convergence. It's this stability that allowed scaling diffusion models to resolutions and quality levels inaccessible to GANs.
+
+<Callout type="tip" title="The beauty of simplicity">
+Each training step is essentially a classic supervised denoising task: "here's a noisy image, predict the noise." Nothing more. This simplicity makes diffusion extremely robust and easy to reproduce, unlike GANs which require complex training tricks.
+</Callout>
+
+### U-Net architecture: the denoising network
+
+<ImageWithSource
+  src="/images/admin/img-1774045223821.png"
+  alt="U-Net architecture diagram for diffusion models"
+  sourceUrl="https://towardsdatascience.com/what-are-stable-diffusion-models-and-why-are-they-a-step-forward-for-image-generation-aa1182801d46/"
+  size="medium"
+/>
+
+The standard denoising network is a **U-Net**, a U-shaped architecture:
+
+- **Encoder** (downward branch): progressive convolutions that reduce spatial resolution while increasing the number of channels. The 256x256 image becomes 128x128, then 64x64, etc.
+- **Bottleneck** (lowest point): minimum resolution, maximum channels. This is where global dependencies are captured.
+- **Decoder** (upward branch): progressive increase in spatial resolution.
+- **Skip connections** between encoder and decoder at each resolution: allow combining low-level information (textures, edges) with high-level information (global structure).
+- **Attention blocks** at intermediate resolutions: self-attention to capture long-range spatial dependencies.
+- **Temporal conditioning**: the timestep $t$ is encoded via sinusoids (like positional embeddings in Transformers) and injected into each layer via adaptive layer norm. This allows the network to know "what level of noise I need to remove."
+
+## Inference: generating images from nothing
+
+The generation process is the reverse of the forward:
+
+1. Sample pure noise: $x_T \sim \mathcal{N}(0, I)$
+2. For each step $t = T, T-1, \ldots, 1$:
+   - Predict the noise: $\hat{\epsilon} = \epsilon_\theta(x_t, t)$
+   - Compute $x_{t-1}$ using $\hat{\epsilon}$ and the schedule parameters
+   - Add a small stochastic noise (except at the last step $t = 1$) to maintain diversity
+
+The result: a realistic synthetic image, progressively built from pure noise.
+
+### The major tradeoff: slowness
+
+**Main disadvantage**: the process requires 1000 sequential passes through the U-Net network. Each pass is a full forward computation. Comparison: a GAN generates an image in a **single** pass. Diffusion is therefore about 1000 times slower. In practice: several seconds on GPU for one image, versus a few milliseconds for a GAN.
+
+### Acceleration techniques
+
+Several approaches have been developed to drastically reduce this cost:
+
+**DDIM** (Denoising Diffusion Implicit Models): a deterministic reformulation of the denoising process that allows "skipping" intermediate steps. You get down to 50-100 steps with very little quality loss. The idea: instead of following the full stochastic trajectory, you follow a more direct deterministic path.
+
+**DPM-Solver**: uses higher-order ODE (Ordinary Differential Equations) solvers. Instead of naive Euler steps (1 step = 1 stage), you take smarter steps that cover multiple stages at once. Achieves 10-20 steps with quality comparable to the original 1000.
+
+**Consistency distillation**: you train a "student" model to mimic in 1-4 steps what the "teacher" model does in 1000. The student learns to jump directly from noise to the final image, "compressing" the entire denoising trajectory.
+
+<Callout type="info" title="Connection to score matching">
+There's a deep mathematical link between diffusion and "score matching." Predicting noise $\epsilon$ is equivalent to estimating the **score** of the distribution (the gradient of the log probability density) of the noised distribution. Song et al. unified diffusion models, score matching, and SDEs (Stochastic Differential Equations) in an elegant theoretical framework. This connection paves the way for flow matching and score-based models.
+</Callout>
+
+## Guidance: controlling what the model generates
+
+### Classifier guidance
+
+First approach: use a pre-trained classifier to "guide" denoising toward a target class. At each step, you add the classifier's gradient to the denoising process, pushing the image under construction toward the desired class. The tradeoff: more guidance = images more faithful to the class but less diverse.
+
+### Classifier-free guidance (the current standard)
+
+A more elegant approach that requires no external classifier. During training, the model learns to denoise **with and without** conditioning (text, class, etc.). At inference, you combine the two:
+
+$$
+\epsilon_{\text{guided}} = \epsilon_{\text{uncond}} + w \cdot (\epsilon_{\text{cond}} - \epsilon_{\text{uncond}})
+$$
+
+**Why does the difference work?** The term $(\epsilon_{\text{cond}} - \epsilon_{\text{uncond}})$ isolates the **conditioning direction**: it's the part of the noise prediction that is specifically due to the prompt. The unconditional model predicts "generic" noise, the conditional model predicts noise influenced by the prompt -- their difference is therefore the pure effect of the prompt on the prediction. By amplifying this difference by $w$, you force the model to follow the prompt more strongly. Concretely: $w = 1$ gives standard behavior (standard conditioning), $w > 1$ exaggerates the features requested by the prompt (more faithful images but less diverse), and $w = 0$ amounts to completely ignoring the prompt (unconditional generation). In practice, $w$ between 7 and 15 gives the best results. This is exactly how Stable Diffusion and DALL-E turn text into images.
+
+<Callout type="paper" title={"Latent diffusion: scaling up"}>
+Stable Diffusion doesn't operate in pixel space but in the **latent space** of a pre-trained VAE. The VAE's encoder compresses the image (e.g., 512x512x3) into a small latent vector (64x64x4), roughly 100 times less data. The diffusion process operates entirely in this compact space. The VAE's decoder reconstructs the final image. This is the trick that makes diffusion practical at high resolution -- without it, noising and denoising 512x512 images pixel by pixel would be prohibitively expensive.
+</Callout>
+
+## Summary
+
+Diffusion models rest on a remarkably simple idea: progressively noise data until pure noise (forward, fixed), then learn to reverse this process (reverse, learned by a U-Net). Training is stable and simple (a single MSE loss), unlike GANs. Generation is slow (1000 steps) but techniques like DDIM and DPM-Solver bring this down to 10-50 steps. Classifier-free guidance allows conditioning generation on text or other signals. Since 2022, diffusion models dominate image generation -- Stable Diffusion, DALL-E 2, and Midjourney all use them.

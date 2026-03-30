@@ -1,0 +1,129 @@
+---
+title: "Fine-tuning API"
+description: "Fine-tuning Mistral models via the API: supported models, data format, hyperparameters, monitoring, and evaluating custom models."
+---
+
+
+
+## Fine-tuning: Adapting Mistral to Your Domain
+
+A generalist model talks a bit about everything but excels at nothing specific. For your particular domain, you want it to **speak your language**, follow your conventions, and understand the subtleties of your business.
+
+**Fine-tuning** consists of training a Mistral model on **your own data**. The result: a model that understands your jargon, follows your response style, and performs significantly better on your specific tasks.
+
+The analogy: a university degree gives solid general knowledge. Fine-tuning is the professional specialization that follows: you take someone competent and train them on the specifics of a particular profession.
+
+<Callout type="info" title="Fine-tuning vs Prompt Engineering vs RAG: Three Levels of Customization">
+Three complementary approaches to adapt a model to your needs:
+1. **Prompt Engineering**: adjust the instructions and prompt format. Free, fast, but limited.
+2. **RAG**: provide document context to the model on each request. Powerful for factual information, but not for style or behavior.
+3. **Fine-tuning**: modify the model's weights with your data. The most powerful for style, format, and recurring behaviors.
+
+Fine-tuning is the right approach when prompt engineering and RAG aren't enough: when you want to change the response style, the output format, or instill specific behaviors in the model.
+</Callout>
+
+### Models Supported for Fine-tuning
+
+| Model | Fine-tuning | Typical Use Case |
+|--------|------------|---------------------|
+| Mistral Small | Yes | Classification, high-volume applications |
+| Mistral Medium | Yes | Quality/cost balance for enterprise |
+| Mistral NeMo | Yes | Multilingual applications, long context |
+| Codestral | Yes | Specialized code for a language or framework |
+
+Fine-tuned models are accessible via the standard API with a custom identifier. No code changes needed to switch from the base model to your custom model.
+
+### Data Format: Conversational JSONL
+
+Each line of the JSONL file is a conversation example:
+
+```json
+{"messages": [{"role": "system", "content": "You are a legal assistant specializing in French law."}, {"role": "user", "content": "What is force majeure?"}, {"role": "assistant", "content": "Force majeure is an unforeseeable, irresistible, and external event..."}]}
+```
+
+**Required structure**:
+- Each example is a conversation (list of messages)
+- Available roles: `system`, `user`, `assistant`
+- Minimum required: at least one `user` message and one `assistant` message
+- The `system` message is optional but strongly recommended to define the expected behavior
+
+Each example should represent the **ideal behavior** you expect from the model. If the model should respond in a specific format, all your examples should use that format.
+
+### Data Preparation: 90% of the Success
+
+The quality of your training data determines 90% of your fine-tuning success. It's the most important step, and often the most underestimated.
+
+**Recommended volume**:
+- **Minimum**: 50 to 100 examples to observe a first effect. Sufficient to adjust style and format.
+- **Optimal**: 500 to 5,000 examples. This is the sweet spot for most enterprise use cases.
+- **Advanced**: 10,000+ examples for very specific domains where maximum precision is needed.
+
+<Callout type="tip" title="Quality > Quantity, Always">
+100 excellent examples will produce a better model than 10,000 mediocre ones. Invest in the quality of each example. Every line of your JSONL file should be a perfect example of the behavior you want to see from your model.
+</Callout>
+
+**Best practices for preparation**:
+- **Diversity**: cover the variety of real situations the model will encounter. If 80% of your examples are simple cases, the model won't know how to handle complex ones.
+- **Consistency**: maintain the same style and format across all your examples. Inconsistencies confuse the model.
+- **Realism**: your examples should resemble the real queries from your users. Artificial examples produce a model that works well in testing but not in production.
+- **Class balance**: if you're doing classification, make sure each class is represented proportionally. A massive imbalance will bias the model.
+
+### Hyperparameters: The Knobs to Adjust
+
+**Learning rate**: the speed at which the model learns. This is the most critical parameter.
+- Too high: the model learns too fast and "forgets" its base knowledge (catastrophic forgetting)
+- Too low: the model learns virtually nothing from your data
+- Generally, Mistral's default values work well to start with
+
+**Epochs**: the number of complete passes over your data. Typically 1 to 3 epochs are sufficient. Beyond that, the risk of overfitting increases rapidly.
+
+**Batch size**: the number of examples processed simultaneously. Influences training stability (larger = more stable) and speed (larger = faster).
+
+**Warmup ratio**: the fraction of training during which the learning rate gradually increases from zero. This stabilizes the beginning of training.
+
+### The End-to-End Process
+
+1. **Data upload**: send your JSONL file via the API or the console
+2. **Validation**: Mistral automatically checks the format, compatibility, and data quality
+3. **Launch**: start the training job with your hyperparameters
+4. **Training**: the model trains on Mistral's infrastructure (duration proportional to data volume)
+5. **Real-time monitoring**: track the training loss and validation loss during training
+6. **Automatic deployment**: once training is complete, the model is automatically accessible via the API with its custom identifier
+
+### Monitoring During Training
+
+Two metrics to watch like a hawk:
+
+**Training loss**: measures the model's error on training data. It should decrease steadily. If it plateaus, there's likely a problem with the data or the learning rate.
+
+**Validation loss**: measures the error on data the model has never seen. If it increases while training loss continues to drop, that's the classic sign of **overfitting**: the model is memorizing examples instead of learning generalizable patterns.
+
+### Evaluation After Training
+
+**Qualitative evaluation**: test your fine-tuned model on representative cases you know well. Are the responses better than the base model? Is the style correct? Is the format respected?
+
+**Quantitative evaluation**: if you have objective metrics (precision, recall, F1 for classification), evaluate on a test set the model has never seen.
+
+**A/B testing**: compare your fine-tuned model with the base model on real user queries. This is the most reliable test because it measures the actual impact in production conditions.
+
+<Callout type="warning" title="The Overfitting Trap">
+The main risk of fine-tuning is overfitting: the model memorizes your examples instead of extracting generalizable patterns. Symptoms: excellent performance on previously seen examples, poor performance on new cases. Solutions: increase data volume, reduce the number of epochs, or add regularization.
+</Callout>
+
+### Successful Production Use Cases
+
+**Support ticket classification**: fine-tuning Small on 2,000 categorized tickets, result: 95% accuracy, compared to 80% without fine-tuning. The model learned the company's specific categories.
+
+**Invoice data extraction**: fine-tuning Small on 500 annotated invoice examples, result: reliable structured extraction without complex prompts. The model knows where to look for each field.
+
+**Legal assistant**: fine-tuning Medium on 3,000 legal question-answer pairs, result: responses in appropriate legal terminology and style, with references to relevant legal articles.
+
+### Fine-tuning Costs
+
+Fine-tuning is billed based on tokens processed during training. The cost depends on the chosen model, data volume, and number of epochs.
+
+The resulting fine-tuned model is billed slightly more at inference than the base model. That's the price of customization, but the quality gain usually justifies this difference.
+
+---
+
+**Fine-tuning** transforms a generalist model into an expert in your domain. It's the most powerful tool for adapting Mistral to your specific needs, with an investment that pays for itself quickly.

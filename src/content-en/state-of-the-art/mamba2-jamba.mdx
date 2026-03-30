@@ -1,0 +1,120 @@
+---
+title: "Mamba-2 and Jamba: SSM+Attention Hybrids"
+description: "Exploring Mamba-2 and Jamba, hybrid architectures combining State Space Models and attention mechanisms for the best of both worlds."
+---
+
+## The realization: each architecture has its strengths
+
+After Mamba, the community made a clear-eyed assessment: neither pure SSMs nor pure Transformers are optimal for all tasks. Each excels at one aspect and struggles with the other.
+
+**Transformers** are unbeatable for precise recall --- retrieving a name, a date, an exact number mentioned thousands of tokens earlier --- and for few-shot learning, where a few examples in the prompt are enough for the model to understand a new task. But their KV cache explodes with context length, making long sequences expensive and energy-hungry.
+
+**SSMs** (like Mamba) offer constant-cost inference, regardless of sequence length. But they compress the entire history into a fixed-size state --- impossible to retrieve a precise detail buried in a compressed summary of 50,000 tokens.
+
+The natural question: what if we put both in the same model, each in its rightful place?
+
+## Mamba-2: a unified theory
+
+<ArxivLink id="2405.21060" title="Transformers are SSMs: Generalized Models and Efficient Algorithms Through Structured State Space Duality" />
+
+### The theoretical revelation: SSM and attention are the same thing
+
+Mamba-2's most striking contribution isn't a speed gain --- it's a deep theoretical discovery. The authors demonstrate that structured SSMs and **linear attention** are fundamentally two ways of writing the same mathematical operation.
+
+<Callout type="paper" title="Structured State Space Duality (SSD)">
+The SSD framework establishes that an SSM with a scalar diagonal state matrix is **mathematically equivalent** to a form of linear attention with a structured masking matrix. In other words, SSM and attention are not two rival families --- they are different points on the same continuous spectrum. The SSM recurrence and the attention matrix multiplication are two ways of computing exactly the same result, each optimal in a different context (inference vs training).
+</Callout>
+
+Concretely, this means you can write the same operation either as an SSM recurrence (fast for token-by-token inference) or as an attention-type matrix multiplication (fast for parallel training). They are two sides of the same coin --- not a trade-off, an equivalence.
+
+### Mamba-2 simplifications
+
+Armed with this theoretical unification, Mamba-2 significantly simplifies Mamba-1's architecture:
+
+**Scalar A matrix per head**: in Mamba-1, A was a full diagonal matrix with N parameters per head. In Mamba-2, A is reduced to a simple scalar per head --- a single number controlling the decay rate. Fewer parameters, but the same expressiveness in practice, because B and C (which remain full vectors) carry the bulk of the model's richness.
+
+**Multi-head SSM**: Mamba-2 organizes the SSM into multiple distinct "heads," exactly like Multi-Head Attention organizes attention. Each head has its own B and C parameters, allowing it to capture different aspects of the sequence --- one head might specialize in syntax, another in semantics.
+
+**Larger state at no extra cost**: thanks to algorithmic simplifications, you can increase the state dimension N without the computational cost exploding. More state = more memorization capacity, which helps on recall tasks.
+
+### The SSD algorithm: faster thanks to matmul
+
+The SSD algorithm exploits the block-diagonal structure of the operation to compute it via a **chunk** decomposition (sequence segments):
+
+1. **Intra-chunk**: within each segment, the computation reduces to a pure matrix multiplication (matmul) --- the best-optimized operation that exists on GPUs
+2. **Inter-chunk**: between segments, state is propagated via the classic SSM recurrence
+
+<Callout type="info" title="Concrete performance gains">
+Mamba-2 is 2 to 8 times faster than Mamba-1 at training. The reason is as much about hardware as mathematics: Mamba-1's associative scan doesn't exploit the tensor cores of modern GPUs well, which are designed for matrix multiplications. By reformulating the operation to use structured matmuls, Mamba-2 exploits the hardware as it was designed. Language modeling performance is comparable or slightly superior.
+</Callout>
+
+
+## Jamba: the first SSM+Attention hybrid at production scale
+
+AI21 Labs made a pragmatic rather than ideological decision: don't choose between SSM and attention, but **combine them in the same model**, each playing the role where it excels.
+
+### Jamba's architecture
+
+Jamba organizes its layers into hybrid blocks with a fixed ratio:
+
+**Mamba** $\rightarrow$ **Mamba** $\rightarrow$ **Mamba** $\rightarrow$ **\[Attention + MoE\]** $\rightarrow$ **Mamba** $\rightarrow$ **Mamba** $\rightarrow$ **Mamba** $\rightarrow$ **\[Attention + MoE\]**
+
+**7 Mamba layers for 1 attention layer**. And the attention layer also integrates Mixture of Experts to maximize capacity without increasing the per-token cost.
+
+<Callout type="tip" title="Why this 7:1 ratio?">
+Attention layers are the most expensive in the model: they contribute to the KV cache (memory) and perform quadratic computations relative to context length. By using them only 1 time in 8, Jamba preserves the unique capabilities of attention --- precise recall and few-shot learning --- while benefiting from Mamba's efficiency for the remaining 7/8 of processing. It's the minimum amount of attention needed for the maximum benefit.
+</Callout>
+
+
+### Jamba's results
+
+Jamba 52B (with 12B active parameters via MoE) delivers results that validate the hybrid approach:
+
+- **Performance**: comparable to similarly-sized Transformer MoE models on standard benchmarks
+- **Context**: efficiently processes sequences of **256,000 tokens** --- well beyond most Transformers
+- **KV cache**: reduced by ~80% compared to a pure Transformer (only the attention layers, i.e., 1/8, contribute to the KV cache)
+- **Throughput**: superior to pure Transformers, with the advantage growing with context length
+
+The 80% KV cache reduction is transformative in practice. On a 256K token context, a pure Transformer's KV cache can reach several hundred GB. Jamba brings that down to a few dozen GB --- the difference between a GPU cluster and a single machine.
+
+## Other hybrid architectures
+
+### Zamba (Zyphra)
+
+Zamba takes a clever approach: more attention layers than Jamba, but the attention layers **share their weights**. A single attention matrix is reused at multiple points in the network. Each pass through this shared layer sees different representations (transformed by the interleaved Mamba layers), so the processing isn't redundant. Result: excellent parameter efficiency, particularly well-suited for small models.
+
+### Griffin and RecurrentGemma (Google)
+
+Griffin combines **linear recurrent gates** (RG-LRU --- a deliberately simplified version of SSMs) with **local attention** limited to a 2,048-token window. The insight: when a recurrent mechanism handles long-range dependencies, attention doesn't need to be global --- it can focus on fine interactions between nearby tokens, where it adds the most value.
+
+RecurrentGemma instantiates this architecture as 2B and 9B parameter models, open-sourced by Google.
+
+### StripedHyena (Together AI)
+
+StripedHyena alternates Hyena layers (long convolutions via FFT) with attention layers --- demonstrating that the hybrid principle extends beyond SSMs. Any sub-quadratic mechanism can play the role of "efficient layer" in a hybrid. Competitive at 7B parameters.
+
+<Callout type="info" title="The common trend across all hybrids">
+All these architectures converge toward the same fundamental principle: use efficient recurrent or convolutional mechanisms for **the majority of layers** (80-90% of the network), complemented by a few strategically placed attention layers for capabilities that can't be delegated --- precise recall of exact information and learning from examples in the context.
+</Callout>
+
+## Comparative table of architectures
+
+| Capability | Pure SSM | Pure Transformer | Hybrid |
+|----------|---------|-----------------|---------|
+| Long sequences | Excellent | Expensive | Excellent |
+| Precise recall | Weak | Excellent | Good |
+| In-context learning | Medium | Excellent | Good |
+| Efficient inference | Excellent | Medium | Good |
+| KV cache | None | Large | Reduced (~80%) |
+
+### The fundamental trade-off
+
+<Callout type="warning" title="Compression versus exact access">
+This is the central architectural tension of this generation of models. SSMs **compress** the entire history into a fixed-size state --- efficient but lossy, like a book summary. Attention maintains **exact access** to the entire history via the KV cache --- faithful but expensive, like having the entire book in front of you. Hybrid architectures seek the optimal balance point: enough exact access (via attention layers) for critical decisions that require precise details, enough compression (via SSM layers) to efficiently process ordinary passages.
+</Callout>
+
+## Perspectives
+
+The hottest research question: what is the **optimal ratio** between SSM layers and attention layers? Is Jamba's 7:1 the right choice, or can we do better? Should attention layers be concentrated at the beginning of the network (to form good representations), in the middle (for reasoning), or at the end (for output decisions)? Empirical studies are starting to converge on answers, but the territory is still largely unexplored.
+
+More fundamentally, Mamba-2's SSD framework suggests that SSM and attention are not really rival architectures --- they are instances of a more general mathematical operation. Future architectures could exploit a **unified mechanism** that dynamically adapts between SSM behavior (compressive, efficient) and attention behavior (exact, expensive) depending on the nature of the context at each position. That would be the true synthesis.

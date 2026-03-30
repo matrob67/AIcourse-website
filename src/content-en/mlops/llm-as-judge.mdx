@@ -1,0 +1,159 @@
+---
+title: "LLM-as-Judge: LLMs Evaluate LLMs"
+description: "Use an LLM as an automatic evaluator. 80% correlation with humans. Pairwise comparisons, direct scoring, biases you need to know."
+---
+
+## The Fundamental Problem: How to Evaluate LLM Quality?
+
+Imagine you're grading exam papers, except each student can answer with completely different words and still be right. That's exactly the problem of LLM evaluation.
+
+Classic NLP metrics (**BLEU** and **ROUGE**) compare generated text to a reference answer word by word. But "The capital of France is Paris" and "Paris serves as France's capital" say the same thing with 0 words in common. And conversely, a response can perfectly match the reference while being factually wrong. These textual metrics are blind to meaning.
+
+Human evaluation remains the **gold standard**, but it's brutally slow and expensive. Evaluating 1,000 responses on 5 criteria takes about 80 hours of annotation work, $3,000 to $5,000, and 20-30% inter-annotator variability. Not viable for iterating quickly.
+
+The **LLM-as-Judge** paradigm offers a pragmatic alternative: use a powerful LLM (GPT-5.4, Claude Sonnet 4.6) as an automatic evaluator. Studies show an **80-85% correlation with human judgments** -- and you can evaluate 10,000 responses in 15 minutes for a few dollars. It's not perfect, but it's an unbeatable cost/quality ratio for day-to-day development.
+
+<Callout type="info" title={"The intuition behind LLM-as-Judge"}>
+If an LLM understands the nuance and relevance of a response well enough, it can serve as a proxy for a human evaluator. Think of it as an automatic grader: it doesn't replace the teacher, but it lets you filter 95% of papers before manual grading. It's not perfect, but it's infinitely better than nothing or than blind textual metrics.
+</Callout>
+
+## The Three Evaluation Modes
+
+Why three modes? Because "evaluate" can mean very different things depending on your context. Assigning an absolute score, comparing two candidates, or checking conformity to a reference -- each approach has its strengths and pitfalls.
+
+### Direct Scoring: Simple but Biased
+
+The LLM-judge receives a question and a response, then assigns a score on a scale (1-5 or 1-10) according to defined criteria. It's the most intuitive mode: one API call, one score, done.
+
+**Advantages**: set up in 10 minutes, a single API call per evaluation, easy to aggregate into averages and charts.
+
+**Limitations**: it's also the least reliable mode. LLMs have a massive tendency to give high scores -- in practice, 85% of scores fall between 7 and 9/10. You end up with a crushed distribution where everything is "good," making discrimination nearly impossible.
+
+### Pairwise Comparison: The Most Reliable Method
+
+The LLM-judge receives a question and **two responses** (A and B), then indicates which is better with a justification. Why is it better? For the same reason you find it easier to say "this wine is better than that one" than to rate a wine out of 100. **Comparing is cognitively simpler than scoring in the abstract.**
+
+**Advantages**: 85%+ correlation with human judgments, forces the judge to be discriminating, results much more stable across runs.
+
+**Limitations**: to compare $n$ models, you need $O(n^2)$ comparisons. With 10 models, that's 45 pairs. In practice, Elo tournament systems are used (like the Chatbot Arena) to reduce the number of necessary comparisons.
+
+### Reference-Guided Evaluation
+
+The LLM-judge receives the question, a **reference answer** (the gold standard), and the response to evaluate. It judges by comparing the two. Think of a grader who has the answer key in front of them.
+
+**Advantages**: very accurate when a good reference exists -- factual QA, translation, structured document summarization.
+
+**Limitations**: you need a quality reference, which rules out creative tasks, open conversations, and anything that admits very different valid answers.
+
+<Callout type="paper" title="MT-Bench validated the concept">
+MT-Bench, LMSYS's conversational benchmark, popularized LLM-as-Judge by showing that GPT-4 as a judge ranked models very similarly to human rankings from the Chatbot Arena. This high correlation convinced the community that the approach is viable for day-to-day development.
+</Callout>
+
+## Choosing the Right Evaluation Criteria
+
+Choosing criteria accounts for 80% of your evaluation quality. A prompt that says "is this response good?" will give inconsistent results. A prompt with explicit, measurable criteria turns your LLM-judge into a rigorous evaluator.
+
+### General Criteria (applicable to most cases)
+- **Relevance**: does the response actually answer the question asked, without going off on a tangent?
+- **Factual accuracy**: is the information correct and verifiable?
+- **Completeness**: are all important aspects of the question covered?
+- **Clarity**: is the response well-structured and understandable by the target audience?
+- **Conciseness**: is the length appropriate, without unnecessary padding?
+
+### Specific Criteria (depending on context)
+- **Faithfulness** (RAG systems): does the response rely solely on the source documents, without hallucinating additional information?
+- **Safety**: does the response avoid dangerous, offensive, or misleading content?
+- **Instruction following**: are the specific prompt constraints respected (JSON format, max length, style)?
+- **Tone**: is the tone appropriate for the context (formal for legal, accessible for the general public)?
+
+Golden rule: **never evaluate more than 3-4 criteria at once**. Beyond that, the LLM-judge loses precision on each one. It's better to do multiple focused passes than a single catch-all evaluation.
+
+## LLM-as-Judge Biases: Must-Know
+
+These biases aren't theoretical -- they actively skew your results if you don't manage them. Each one can tip an evaluation the wrong way. Here's how they manifest concretely and how to neutralize them.
+
+### Position Bias
+
+The LLM-judge tends to favor the response presented in **first position**. In MT-Bench experiments, this bias reaches 10-15%: an identical response is judged better simply because it appears first.
+
+Concrete example: you compare two article summaries. Summary A is in position 1, Summary B in position 2. The judge says "A is better." You swap: B in position 1, A in position 2. This time, the judge says "B is better." The judge doesn't actually have an opinion -- it follows its preferred position.
+
+**How to neutralize it**: evaluate each pair **twice** by reversing the order (AB then BA). If the judge gives the same winner in both cases, the result is reliable. If the verdict changes, mark that pair as "undecided" and exclude it from your statistics. In practice, 15-25% of pairs are undecided -- that's normal, it means the two responses are of comparable quality.
+
+### Verbosity Bias
+
+LLM-judges love long responses. A 400-word response that says the same thing as an 80-word response will systematically receive a higher score, even if the extra 320 words are padding.
+
+Concrete example: "What is the capital of France?" Response A: "Paris." Response B: "The capital of France is Paris. Paris is a city located in northern France, crossed by the Seine, and home to many historical monuments like the Eiffel Tower..." The judge will give a higher score to B, even though A is perfectly correct and more concise.
+
+**How to neutralize it**: add an explicit instruction in your evaluation prompt like *"Conciseness is a quality. A short but complete response is better than a long response with padding."* Even better: include an **anchor example** -- a short response you rate 5/5 with the justification "complete and perfectly concise response." This recalibrates the judge.
+
+### Self-Preference Bias
+
+An LLM rates responses that resemble its own style better. GPT-5.4 as a judge gives on average 0.3 to 0.5 extra points to GPT-5.4 responses compared to Claude Sonnet 4.6 responses, and vice versa. It seems subtle, but on a ranking of 10 models, it's enough to bump the judge-model up 2-3 places.
+
+Concrete example: you evaluate responses from 5 different models with Claude as the judge. Claude's responses mysteriously come out on top, with a writing style the judge "prefers." You redo the evaluation with GPT-5.4 as the judge -- and surprise, GPT-5.4 comes out on top.
+
+**How to neutralize it**: use a **panel of 2-3 different judges** (GPT-5.4 + Claude Sonnet 4.6 + Gemini 3.1 Pro) and do a majority vote. If all three agree, the result is solid. If two out of three diverge on a specific model, it's probably self-preference bias in action. Less expensive alternative: use a judge that **isn't** in the list of evaluated models.
+
+### Leniency Bias (the most pernicious)
+
+LLM-judges are overly nice graders. In direct scoring, 85% of scores fall between 7 and 9 out of 10. The result: a correct but unremarkable response gets 7/10, an excellent response gets 8/10. The gap is so small it's drowned in statistical noise. You can no longer distinguish good from excellent.
+
+Concrete example: you evaluate 500 responses from your chatbot. Average score: 8.2/10. You make a major prompt change, you re-evaluate. Average score: 8.4/10. Real improvement or noise? Impossible to tell with this score compression.
+
+**How to neutralize it**: three complementary techniques. First, **favor pairwise mode** -- leniency bias doesn't exist when you force a choice between A and B. Next, provide in your prompt **examples of bad responses with their scores**: "Here's an off-topic response -- it deserves 2/10" and "Here's a correct but incomplete response -- it deserves 5/10." This stretches the distribution. Finally, **require the justification before the score** (not after): the judge must first write its analysis, then derive the score from it. This prevents giving an 8 by default and rationalizing after the fact.
+
+### Format Bias
+
+A response with bullet lists, headings, and code blocks receives a 0.5 to 1 point bonus compared to a plain text response of equal quality. The LLM-judge confuses "well-presented" with "better content."
+
+Concrete example: two responses to "How do you implement quicksort?" Response A: a paragraph of text that clearly explains the algorithm. Response B: the same explanation, but with `###` headings, bullet points, and a `python` block. The judge gives 7/10 to A and 9/10 to B, even though the content is identical.
+
+**How to neutralize it**: include in your evaluation prompt a **calibrating counter-example** -- a beautifully formatted but factually incorrect response, rated 2/10, with the justification "formatting does not compensate for content errors." This teaches the judge to separate form from substance.
+
+<Callout type="warning" title={"Score inflation, the main trap"}>
+In practice, leniency bias causes the most damage, because it makes your evaluations useless without you realizing it. Your scores look reasonable (who questions an 8/10?), but they no longer discriminate anything. Countermeasures: (1) pairwise mode rather than direct scoring, (2) anchor examples of bad responses with their scores, (3) mandatory justification before the score.
+</Callout>
+
+## Advanced Techniques to Improve Reliability
+
+### Chain-of-Thought Evaluation
+
+Ask the judge to **reason step by step** before giving its score. The 4-step protocol:
+1. Analyze the question and list what a good response must contain
+2. Examine the response on each criterion individually
+3. Cite concrete passages from the response to justify each evaluation
+4. Give the final score **only after** this analysis
+
+Why does it work? Because it prevents the judge from giving a "gut feeling" score and rationalizing afterward. The preliminary analysis forces consistency between reasoning and the grade.
+
+### Multi-Judge (Panel of Judges)
+
+Use **multiple different LLMs** as judges (GPT-5.4, Claude Sonnet 4.6, Gemini 3.1 Pro) and aggregate by majority vote. If 2 judges out of 3 prefer response A, A wins. This neutralizes biases specific to each model. The cost is multiplied by 3, but reliability increases enough to make it worthwhile for evaluations that matter.
+
+### Rubric-Based Evaluation (Detailed Rubric)
+
+Provide a **detailed evaluation rubric** where each score level is precisely described. For example: "5 = answers all aspects of the question, factually correct, concise" / "3 = correct but omits an important aspect or contains padding" / "1 = off-topic or factually wrong." Without a rubric, two runs of the same judge on the same data can give different scores. With a rubric, reproducibility reaches 90%+.
+
+<Callout type="tip" title={"The evaluation prompt makes all the difference"}>
+The quality of LLM-as-Judge depends ENORMOUSLY on the evaluation prompt. A vague prompt ("is this response good?") gives inconsistent results. A detailed prompt with explicit criteria, anchor examples for each score level, and a requirement for justification **before** the score produces much more reliable and reproducible evaluations. Invest 2 hours on your evaluation prompt -- it's the best ROI in your entire eval pipeline.
+</Callout>
+
+## Frameworks and Tools
+
+- **RAGAS**: framework specialized for RAG systems -- evaluates faithfulness to sources, relevance, and contextual recall
+- **DeepEval**: open source framework with predefined and customizable LLM-as-Judge metrics, well-integrated with CI/CD pipelines
+- **Promptfoo**: prompt evaluation tool with LLM-as-Judge support, automatic comparisons, and a visual interface for analyzing results
+- **LangSmith Evaluators**: evaluators built into the LangSmith platform, with full traceability of each evaluation
+
+## Best Practices for a Reliable LLM-as-Judge
+
+- **Calibrate on a human sample**: compare the LLM-judge's judgments with human annotations on 100-200 examples. If the correlation is below 75%, rework your evaluation prompt before going further.
+- **Document the criteria**: explicit criteria, shared with the team, and versioned in your repo. Everyone must evaluate the same thing with the same standards.
+- **Actively mitigate biases**: pairwise mode, panel of multiple judges, systematic order reversal of responses.
+- **Require justification before the score**: the judge must first write its analysis, then derive the score. Not the other way around. This forces consistency.
+- **Use a judge at least as capable**: an 8B parameter model cannot evaluate frontier model responses. The judge must be at the same level or above.
+- **Combine with human evaluations**: for critical decisions (production deployment, final comparison), humans complement the LLM-judge on a strategic sample of 50-100 examples.
+
+LLM-as-Judge is not a perfect replacement for human evaluation, but it's an extraordinarily powerful tool for iterating quickly and cheaply during development. Master its biases, and you have an evaluation pipeline that runs 100x faster than a team of annotators.

@@ -1,0 +1,188 @@
+---
+title: "Self-attention: query, key, value in detail"
+description: "The heart of the Transformer explained simply: how each word looks at all the others."
+---
+
+## The story: understanding who does what in a sentence
+
+Read this sentence: *"The cat that was sleeping on the couch woke up."*
+
+Your brain, reading "woke up", must answer a crucial question: "Who woke up?" Instantly, you know it's the **cat**, not the couch, even though "couch" is the word right before "woke up". To understand this link, your brain had to "jump" over four intermediate words and identify the correct grammatical subject.
+
+How does it do it? It looks at **all the words in the sentence simultaneously** and evaluates: "Which one has the most semantic relationship with 'woke up'?" The answer is "cat", because it's a living being that can wake up, unlike a couch.
+
+**Self-attention** does exactly this work. For each word in a sequence, the mechanism looks at **all the other words** and computes: "Which one concerns me the most? Which one helps me understand my role and meaning in this sentence?"
+
+This is a fundamental break from older architectures. RNNs (Recurrent Neural Networks) read the sentence **word by word**, from left to right, trying to compress all past context into a single vector. For the information from the word "cat" to reach the word "woke up", it had to traverse the entire intermediate chain, losing information at each step. Self-attention, on the other hand, establishes a **direct** connection between any pair of words, regardless of distance.
+
+
+
+## Q, K, V: three views of the same text
+
+Let's take a concrete example: the word "cat" in our sentence. We want to determine which other words it should pay attention to.
+
+The central idea is to create **three different perspectives** of the same word, each playing a distinct role:
+
+1. **Query (Q) - The question**: "What is this word looking for? What does it need to be understood?" For "cat", the query might encode "I'm a subject, I'm looking for my verb".
+2. **Key (K) - The label**: "Here's what I offer as context to others." For "woke up", the key might encode "I'm a verb that needs an animate subject".
+3. **Value (V) - The content**: "Here's the semantic information I transmit if I'm selected." It's the rich representation of the word that will actually be shared.
+
+The most intuitive analogy: imagine a library. The Query is your search ("I'm looking for a book about astronomy"). The Key is the label on each book on the shelf ("astrophysics", "cooking", "novel"). The Value is the actual content of the book you read once you've found it. You compare your search (Q) with each label (K), and you read the content (V) of the most relevant books.
+
+In the Transformer code, these three views are obtained through simple matrix multiplications:
+
+$$
+Q = X \cdot W_Q, \quad K = X \cdot W_K, \quad V = X \cdot W_V
+$$
+
+The same input vector X is projected three times with three different weight matrices, producing three distinct representations. These matrices $W_Q$, $W_K$ and $W_V$ are **learned** during training: the network discovers on its own what "questions" to ask and what "labels" to create.
+
+
+
+<Callout type="info" title="Self vs Cross-attention">
+"Self"-attention: Q, K, V come from the same text (a word looks at its neighbors).
+"Cross"-attention: Q comes from one text, K and V from another (a translator looks at the source text).
+</Callout>
+
+## How it works: step by step
+
+### Step 1: The three projections
+
+Each word is a vector. You multiply it by three learned matrices (W_Q, W_K, W_V) to get three versions of the word:
+
+$$
+Q = x \cdot W_Q \quad \text{(the question)}
+$$
+$$
+K = x \cdot W_K \quad \text{(the label)}
+$$
+$$
+V = x \cdot W_V \quad \text{(the information)}
+$$
+
+Each word is transformed into three versions of itself, each optimized for a specific role in the attention mechanism.
+
+### Step 2: Finding similarity
+
+Now, we compare the Query of each word with the Key of **every other word**. The similarity measure used is the dot product: if two vectors point in the same direction, their dot product is large (high compatibility). If they're orthogonal, the product is zero (no relationship).
+
+$$
+\text{scores} = Q \cdot K^T \quad \text{(} n \times n \text{ matrix)}
+$$
+
+The result is a square $n \times n$ matrix (where $n$ is the number of words). Each cell $(i, j)$ contains the compatibility score between word $i$'s query and word $j$'s key. In other words: "how much should word $i$ pay attention to word $j$?"
+
+### Step 3: Scaling (really important!)
+
+We divide each score by $\sqrt{d_k}$, where $d_k$ is the dimension of the key vectors. This technical detail is crucial and often poorly explained.
+
+Here's the problem: when you compute a dot product between two vectors of dimension $d_k$, you're adding $d_k$ terms. The larger the dimension, the larger the sum in absolute value. Concretely, if $d_k = 64$, the dot products will have a variance on the order of 64. Some scores will be very large (positive or negative). When you apply the softmax in the next step, these extreme values will produce near-binary distributions (99.99% on one word, 0.01% on the others), which crushes the gradients and makes learning nearly impossible.
+
+$$
+\text{scores} = \frac{\text{scores}}{\sqrt{d_k}}
+$$
+
+Dividing by $\sqrt{64} = 8$ brings the variance back to 1, producing well-distributed softmax outputs and healthy gradients. It's a simple gesture, but without it, the Transformer simply wouldn't work.
+
+<Callout type="tip" title="Technical corner: variance">
+This is a classic statistical normalization. If $d_k$ independent random variables with variance 1 are summed, the sum has a variance of $d_k$. Dividing by $\sqrt{d_k}$ brings the variance back to 1. The authors of the "Attention Is All You Need" paper explicitly mentioned this problem and proposed this solution.
+</Callout>
+
+### Step 4: Converting to probabilities
+
+Apply softmax to convert the scores into probabilities (between 0 and 1, summing to 1):
+
+$$
+\text{attention\_weights} = \text{softmax}(\text{scores})
+$$
+
+Now, for each word, you have a probability distribution: "what percentage of attention will I give to each other word?"
+
+### Step 5: Gathering the answers
+
+Compute a **weighted average** of all the Values (V) using the attention weights:
+
+$$
+\text{output} = \text{attention\_weights} \cdot V
+$$
+
+Result: for each word, you get a representation that combines all the other words, weighted by their relative importance.
+
+### The complete magic formula
+
+$$
+\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{Q \cdot K^T}{\sqrt{d_k}}\right) \cdot V
+$$
+
+That's the entire algorithm, in a single line. Three linear projections, a similarity measure, scaling normalization, a conversion to probabilities via softmax, and a weighted average of values. It's this elegance that makes the Transformer powerful: a relatively simple mechanism, but one that gives the model the ability to connect any elements of a sequence to each other.
+
+## Visualizing: seeing where the model looks
+
+The attention matrix (the weights after softmax, before the weighted average) is a fascinating interpretability tool. It shows **literally** where the model looks when it processes each word. Researchers generate **heatmaps** to visualize them, which allows you to "see" the model's reasoning.
+
+Let's take the example of the sentence "The cat eats the mouse". If we visualize the attention of the word "eats":
+- ~40% attention to the word "cat" (the subject performing the action)
+- ~35% attention to the word "mouse" (the object receiving the action)
+- ~15% attention to function words ("the")
+- ~10% to itself
+
+What's remarkable is that nobody ever taught the model grammar. It has never seen explicit syntactic rules. By simply training to predict the next word on billions of texts, it **discovered on its own** that verbs must pay attention to their subjects and objects. This is an example of emergent behavior: a complex capability that spontaneously emerges from a simple training objective.
+
+## The problem: it's very expensive
+
+The downside is severe. To compute attention, each word must be compared with **every other word**. The complexity therefore grows with the **square** of the sequence length:
+
+- 100 words = 10,000 comparisons (trivial)
+- 1,000 words = 1 million comparisons (manageable)
+- 10,000 words = 100 million comparisons (expensive)
+- 100,000 words = 10 **billion** comparisons (enormous)
+
+Formally:
+
+$$
+\text{Old RNN} : O(n) \quad \text{(linear - fast but sequential)}
+$$
+$$
+\text{Transformer} : O(n^2) \quad \text{(quadratic - expensive but parallelizable)}
+$$
+
+To put things in perspective: large models like GPT-5.4 process contexts of 1M tokens. That represents roughly 16 billion attention operations **per layer**. Multiplied by 80+ layers, it's an astronomical volume of computation, even spread across thousands of GPUs.
+
+This is a very active research area. **Flash Attention** reorganizes computations to better exploit the GPU memory hierarchy (avoiding costly transfers between SRAM and HBM). **Mamba** and SSM-type models (State Space Models) propose linear alternatives to attention. **Linear attention** approximates the softmax to avoid the quadratic computation. But for now, none of these approaches has completely replaced standard attention, which remains the dominant standard.
+
+<Callout type="warning" title="The context length limit">
+Quadratic complexity makes very long sequences expensive. Models in 2026 reach 1M tokens (GPT-5.4, Claude Sonnet 4.6, Gemini 3.1 Pro) and even 10M (Llama 4 Scout), thanks to optimizations like Flash Attention, but the computational cost remains a challenge.
+</Callout>
+
+## Masked attention: preventing cheating
+
+When you train an autoregressive model like GPT (which generates text word by word), there's a fundamental problem: during training, the model sees the entire sentence at once, but it must not be able to "cheat" by looking at **future** words it's supposed to predict.
+
+The analogy: imagine an exam where the questions and answers are on the same sheet. If the student can read the answer to question 6 before answering question 5, the exam no longer measures anything. You need to mask the future answers.
+
+Solution: the **causal mask**. We impose an invisible barrier in the attention matrix:
+
+| Word | Can see |
+|---|---|
+| Word 1 | itself |
+| Word 2 | word 1, word 2 |
+| Word 3 | word 1, word 2, word 3 |
+| Word 4 | word 1, word 2, word 3, word 4 |
+
+In practice, the implementation is elegant: we set $-\infty$ in the attention scores corresponding to future tokens (the upper-right part of the matrix). After softmax, $e^{-\infty} = 0$, so these words receive exactly zero attention. No information from the future can leak to the past.
+
+At inference (text generation), the causal mask is naturally respected: the model generates one word at a time, and each new word can only see already-generated words. It's the consistency between training (with mask) and inference (sequential generation) that makes the model work correctly in both cases.
+
+## Why this matters
+
+Self-attention is the beating heart of the Transformer, and by extension of all modern language models. It's the mechanism that allows an AI to understand that "cat" and "woke up" are linked, even if they're separated by ten words. Without attention, each word would be processed in isolation or with context degraded by distance. It's attention that gives Transformers their ability to capture long-range relationships, understand grammatical structure, and model the complex dependencies of natural language.
+
+## Key takeaways
+
+1. **Q, K, V** = three different perspectives of the same word
+2. **Dot product Q . K** = similarity measure
+3. **Scaling by sqrt(d_k)** = stabilizes training and variance
+4. **Softmax** = converts scores to probabilities
+5. **Aggregation** = weighted average of all answers
+6. **O(n^2) complexity** = the current bottleneck
+7. **Causal mask** = prevents cheating by looking at the future

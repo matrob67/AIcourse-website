@@ -1,0 +1,177 @@
+---
+title: "Feed-forward networks and residual connections"
+description: "The discrete but essential components: where does the Transformer's knowledge hide?"
+---
+
+## The story: the hidden knowledge of FFNs
+
+Everyone talks about the Transformer's attention. It's the star mechanism, the one that makes headlines. But here's a secret that few people realize: **FFNs probably contain more knowledge than attention itself**.
+
+To understand, let's use a city analogy. Attention is like the **roads** between cities: they enable communication, transporting information from one point to another. FFNs are like the **factories and warehouses** in the cities: that's where resources are stored and transformed.
+
+Without roads, cities don't communicate. Without factories, they have nothing to offer. Both are indispensable. And yet, in courses and articles, people talk almost exclusively about the roads (attention) while forgetting the factories (FFNs).
+
+
+
+## FFNs: the small networks that store the model's memory
+
+### Structure: simple but surprisingly powerful
+
+After each attention block, each token passes **independently** through a small two-layer neural network. That's the FFN (Feed-Forward Network). Each token is processed in isolation, without interaction with the other tokens.
+
+**Step 1**: project the token into a higher-dimensional space. If the token has size 512, we project it to 2048 (typically a 4x factor):
+
+$$
+\text{intermediate} = \text{ReLU}(\text{token} \times W_1 + b_1)
+$$
+
+It's like opening a fan: the token is "unfolded" into a wider space, where more details become visible and manipulable.
+
+**Step 2**: project back to the original size (2048 becomes 512 again):
+
+$$
+\text{output} = \text{intermediate} \times W_2 + b_2
+$$
+
+The fan closes: we recondense the information, keeping what's relevant.
+
+This is applied to **each token independently**. Unlike attention, which puts tokens in relation with each other, the FFN only performs a local transformation on each token. Simple? Yes. But mysteriously powerful.
+
+<Callout type="info" title="FFNs are an associative memory">
+Researchers discovered something fascinating: FFNs function as a hidden **associative memory**. The rows of $W_1$ are "keys" and the columns of $W_2$ are "values". The mechanism works as follows: when a token strongly activates a row of $W_1$ (the key matches the observed pattern), the corresponding column of $W_2$ produces the associated response.
+
+Concrete example: when the token represents "capital of France", a row of $W_1$ fires strongly (it recognizes this pattern), and the corresponding column of $W_2$ produces a vector close to "Paris". It's in the FFNs that the world's facts live, not in attention. Attention connects words to each other; FFNs inject knowledge.
+</Callout>
+
+### The evolution of activation functions
+
+The activation function between the two FFN layers has evolved considerably:
+
+| Year | Activation | How it works |
+|---|---|---|
+| 2017 | ReLU | The simplest: max(0, x). If the input is positive, it passes. Otherwise, it's blocked at zero. |
+| 2023+ | SwiGLU | Two parallel branches: one that transforms, one that serves as a "gate" to filter. |
+| Alternative | GeGLU | SwiGLU variant with a smoother Gaussian activation. |
+
+**SwiGLU** has become the de facto standard (LLaMA, Mistral, and essentially all recent models). Its operation is more sophisticated than ReLU:
+- **Branch 1** ($W_1$): transforms the token into the expanded space
+- **Branch 2** ($W_3$): computes a "relevance" score for each dimension, serving as a gate
+
+The two branches are multiplied element-wise. Result: the model learns not only to transform information, but also to **finely select** which parts of the transformation are relevant. It's a **gating** mechanism (literally "gate"): one part of the network learns to filter and modulate the output of the other part, like a gate that controls information flow -- some dimensions pass through, others are attenuated or blocked. The concept is similar to the gates in LSTM (Long Short-Term Memory).
+
+
+
+### The cost secret: FFNs dominate the model
+
+FFNs look like modest components, but in terms of parameters, they constitute the **overwhelming majority** of the model.
+
+Take LLaMA 7B (7 billion parameters):
+
+| Component | Parameters | % of total |
+|---|---|---|
+| Attention (all layers) | ~500M | ~7% |
+| FFN (all layers) | ~3 billion | ~43% |
+| Embeddings + other | ~3.5 billion | ~50% |
+
+FFNs represent **3 billion parameters out of 7**, nearly half the model. Attention, which gets all the hype, represents only **7%** of the parameters.
+
+But this isn't waste: FFNs need this mass of parameters because they effectively store the world's knowledge. Each key-value pair in $W_1$ / $W_2$ represents a memorized fact or pattern. The larger the model, the more knowledge it can store. Attention, on the other hand, needs only few parameters because its role is purely to connect and route information.
+
+## Skip connections: how to stack 100 layers without collapsing
+
+### The nightmare without skip connections
+
+Imagine stacking 10 layers of neural networks on top of each other. During training, the error gradient must travel back from the last layer to the first via backpropagation.
+
+The problem: at each layer, the gradient passes through a non-linear activation (ReLU, tanh, etc.) and a matrix multiplication. If the gradient is systematically reduced at each passage (multiplied by values < 1), after 10 layers it becomes infinitely small (near zero): that's the **vanishing gradient**. Conversely, if it's amplified, it explodes. In both cases, the first layers of the network learn nothing useful. Training collapses.
+
+That's why for a long time, you couldn't train very deep networks. 5-10 layers was already difficult.
+
+### The solution: skip connections (gradient highways)
+
+The idea, introduced by He et al. in 2015 with ResNet (Residual Network), is disarmingly simple: **add the input directly to the transformation's output**.
+
+$$
+\text{output} = \text{input} + \text{Transformation}(\text{input})
+$$
+
+That's it. A simple "+". But the consequences are profound.
+
+Now, the gradient has **two paths** to travel back:
+1. Through the transformation (the classic path, subject to vanishing/exploding problems)
+2. Directly via the "+": it's a **highway** where the gradient passes without any modification
+
+The highway guarantees that the gradient can flow **freely** from the last layer to the first, without attenuation. The transformation, meanwhile, learns a "residual": the difference between what the network should produce and what it receives as input. Hence the name "residual connection".
+
+<Callout type="tip" title={"Why the simple '+' is so powerful"}>
+The derivative of addition is simply 1. The gradient passes without amplification or dampening. It's this elementary mechanism that allows the Transformer to stack 80, 100, or even 200+ layers without the gradient vanishing or exploding. Without skip connections, modern LLMs would be simply impossible to train.
+</Callout>
+
+### The complete flow in a Transformer layer
+
+Let's see how all these components fit together in a single Transformer layer:
+
+| Step | Operation | Result |
+|---|---|---|
+| 1 | $x$ passes through **Self-Attention** | $\text{Attn}(x)$ |
+| 2 | Skip connection + Normalization | $y = \text{Norm}(x + \text{Attn}(x))$ |
+| 3 | $y$ passes through **FFN** | $\text{FFN}(y)$ |
+| 4 | Skip connection + Normalization | $z = \text{Norm}(y + \text{FFN}(y))$ |
+
+The pattern is always the same: transform, add the original input (skip), normalize. Transform, add, normalize. Each sub-block (attention, FFN) learns a "refinement" of the input, and the skip connection guarantees that the original information is never lost. The token "always knows who it was" before the transformation.
+
+## Normalization: regulating values to stabilize training
+
+After each operation (attention or FFN), the vectors can have very large or very small values. Without normalization, these imbalances accumulate layer after layer and make training unstable (erratic gradients, divergence). Normalization brings values back into a reasonable range after each operation.
+
+### LayerNorm: the classic version
+
+Each vector is individually recentered to mean 0 and rescaled to variance 1:
+
+$$
+\text{LayerNorm}(x) = \gamma \times \frac{x - \mu(x)}{\sqrt{\text{Var}(x) + \epsilon}} + \beta
+$$
+
+The parameters $\gamma$ (scale) and $\beta$ (shift) are learnable: the network can adjust the normalization if needed. The small $\epsilon$ prevents division by zero.
+
+### RMSNorm: the modern version
+
+LLaMA, Mistral, and nearly all recent models use **RMSNorm**, a simplification of LayerNorm:
+
+$$
+\text{RMSNorm}(x) = \gamma \times \frac{x}{\sqrt{\text{mean}(x^2) + \epsilon}}
+$$
+
+The difference: no recentering (we don't subtract the mean), just a renormalization by the root mean square. Intuitively, LayerNorm does two things -- recentering values around zero *then* controlling their amplitude -- while RMSNorm only controls amplitude. It's mathematically simpler, faster to compute (one fewer operation), and performance is identical in practice.
+
+<Callout type="info" title={"Why RMSNorm took over"}>
+The recentering (mean subtraction) of LayerNorm doesn't provide a measurable benefit but costs computation time. RMSNorm eliminates this superfluous step. When you stack 80+ layers and each layer normalizes twice (after attention and after FFN), this simplification compounds into a significant speed gain.
+</Callout>
+
+## Pre-norm vs Post-norm: a detail that changes everything
+
+Where exactly to place the normalization? This "detail" has a major impact on training stability.
+
+| Variant | Formula |
+|---|---|
+| **Post-norm** (original, 2017) | $\text{output} = \text{Norm}(\text{input} + \text{Transformation}(\text{input}))$ |
+| **Pre-norm** (modern) | $\text{output} = \text{input} + \text{Transformation}(\text{Norm}(\text{input}))$ |
+
+The difference is subtle but crucial. In **pre-norm**, we normalize **before** the transformation, and the skip connection adds the result **without additional normalization**. This means the gradient highway stays perfectly clean: the gradient flows through the "+" without passing through any normalization. This is much more stable for training very deep models. All modern LLMs (GPT, LLaMA, Mistral) use pre-norm.
+
+This idea of pre-activation was formalized by He et al. in their follow-up paper on ResNets. They showed that placing BatchNorm (or any normalization) **before** the transformation -- rather than after -- significantly improves gradient propagation and final performance. These are called "pre-activation residual blocks", and it's exactly the principle that Transformers adopted with pre-norm.
+
+<ArxivLink id="1603.05027" title="Identity Mappings in Deep Residual Networks (He et al., 2016)" />
+
+## Why this matters
+
+FFNs and skip connections are the **true workhorses** of the Transformer. Without FFNs, the model has nowhere to store its world knowledge. Without skip connections, training deep networks (80+ layers) is mathematically impossible. People always talk about attention because it's the most original and most publicized mechanism, but these "discrete" components are equally indispensable to the system's operation.
+
+## Key takeaways
+
+1. **FFNs** are an associative key-value memory that stores factual knowledge
+2. **SwiGLU** = modern activation with gating (LLaMA, Mistral)
+3. FFNs occupy **~43%** of total parameters (vs ~7% for attention)
+4. **Skip connections** create gradient highways (derivative = 1)
+5. **RMSNorm** = current standard normalization (faster than LayerNorm)
+6. **Pre-norm** = modern placement of normalization (stable, scalable)

@@ -1,0 +1,123 @@
+---
+title: "AWQ: Smarter Quantization"
+description: "Compressing models by identifying which weights really matter through a simple observation of activations."
+---
+
+## The Key Observation: Not All Weights Are Equal
+
+Most quantization methods treat all model weights the same way: round everything to 4 bits and cross your fingers. AWQ is smarter. Its founding idea is simple: **look at what flows through the layers** (the activations) to identify which weights are truly critical. Then protect them.
+
+<ArxivLink id="2306.00978" title="AWQ: Activation-Aware Weight Quantization (Lin et al., 2023)" />
+
+**The idea in one sentence:** If an activation channel consistently carries large values, the corresponding weights play an important role. They need to be quantized with care.
+
+<Callout type="info" title={"The intuition with an analogy"}>
+Imagine a building. To know which pillars are structural, look at the load they bear. A pillar carrying 50 tons is critical: you're not going to replace it with a cardboard pillar. A decorative pillar carrying 5 kilograms? You can afford to simplify it. AWQ does exactly this with the model's weights.
+</Callout>
+
+## How It Works, Concretely
+
+### Step 1: Measure Channel Salience
+
+A channel's **salience** refers to its relative importance, measured by the average magnitude of its activations: the higher the activations, the more important the channel is for the model.
+
+You pass a few text examples through the model (the "calibration dataset") and observe the activations. For each weight channel, you measure the **average magnitude of activations** flowing through it:
+
+$$\text{salience}(\text{channel}_j) = \text{mean}(|\text{activation}_j|)$$
+
+Channels with high average activations are the important channels: they carry the model's critical information. Channels with low activations? The model barely uses them, so you can quantize them more aggressively.
+
+### Step 2: Protect Important Channels Through Scaling
+
+Here's the central trick. Before quantizing, you **multiply the important weights by a scale factor**. Why? Because quantization rounds numbers, and large numbers are better preserved by rounding than small ones (they lose a smaller fraction of their value).
+
+$$\text{Protected weights} = \text{Original weights} \times \text{scaling\_factor}$$
+
+Then you quantize normally. And when you use the model, you divide the input activations by the same factor to compensate. Mathematically, the result of the weight-activation multiplication is identical. But the quantization was much more precise on the weights that matter.
+
+It's as if you "zoomed in" on the important weights before taking the low-resolution photo (quantization), then "zoomed out" afterward.
+
+### Step 3: Find the Optimal Scaling Factor
+
+The last step is a simple grid search: you test a few scaling values and keep the one that minimizes quantization error. No complex matrix computation, no Hessian inversion like GPTQ. Just test and measure.
+
+<Callout type="paper" title={"Why it's much faster than GPTQ"}>
+GPTQ has to invert a Hessian matrix (the matrix of second derivatives) for each layer, which is very expensive. AWQ only measures activation averages and tests a few scaling factors. The result: AWQ is 10 to 100 times faster to calibrate.
+</Callout>
+
+
+
+## The Concrete Advantages
+
+### 1. Superior Quality
+AWQ produces **better perplexity** than GPTQ at 4 bits, especially on large models (30B+). The gap widens with model size.
+
+### 2. Ultra-Fast Calibration
+A few minutes instead of several hours. You can quantize a model during a coffee break.
+
+### 3. Robustness to Calibration Dataset
+AWQ is not very sensitive to the choice of calibration examples. Activation magnitudes are a relatively stable property of the model, not an artifact of a particular dataset.
+
+### 4. Optimized GPU Kernels
+The AWQ team developed specialized CUDA kernels for fast inference. These kernels are natively integrated into vLLM, TGI, and other deployment frameworks.
+
+## Comparative Results
+
+| Model | Method | Bits | Perplexity |
+|---|---|---|---|
+| LLaMA-7B | FP16 | 16 | 5.68 |
+| LLaMA-7B | RTN | 4 | 6.24 |
+| LLaMA-7B | GPTQ | 4 | 5.85 |
+| LLaMA-7B | **AWQ** | 4 | **5.78** |
+
+AWQ wins slightly over GPTQ, and the gap widens on larger models.
+
+<Callout type="tip" title="AWQ shines especially on large models">
+On 7B models, AWQ's advantage over GPTQ is marginal. It's starting from 30B+ that the difference becomes significant. If you have a large model and little time to calibrate, AWQ is the obvious choice.
+</Callout>
+
+## Practical Usage
+
+### Quantizing a Model
+
+```python
+from awq import AutoAWQForCausalLM
+
+model = AutoAWQForCausalLM.from_pretrained("mistralai/Mistral-7B")
+tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B")
+
+model.quantize(tokenizer, quant_config={
+    "w_bit": 4,
+    "q_group_size": 128,
+})
+model.save_quantized("./mistral-awq")
+```
+
+### Inference with vLLM
+
+```python
+from vllm import LLM
+model = LLM("./mistral-awq", quantization="awq")
+outputs = model.generate(["Hello"])
+```
+
+## AWQ in the Deployment Ecosystem
+
+- **vLLM**: native support with optimized kernels, the most common combination in production
+- **TGI** (Text Generation Inference by Hugging Face): native support
+- **TensorRT-LLM**: support via conversion, for optimized NVIDIA deployments
+- **Transformers HF**: support via the autoawq library
+
+AWQ has become the preferred quantization format for production deployment on NVIDIA GPUs, thanks to its excellent quality/calibration speed/inference performance ratio.
+
+<Callout type="warning" title="NVIDIA GPUs only">
+AWQ kernels are only optimized for NVIDIA GPUs (CUDA). If you're targeting CPU, Mac (Metal), or AMD, you'll need to turn to GGUF. The two formats target different use cases: AWQ for production GPU servers, GGUF for local multi-platform inference.
+</Callout>
+
+## Recent Developments
+
+### AWQ + FP8 on H100
+On H100 GPUs (which natively support the FP8 format), you can combine AWQ (4-bit weights) with FP8 quantization of activations. This is maximum compression with maximum speed, perfect for very large-scale deployments.
+
+### The De Facto Standard in Production
+AWQ has established itself as the default format in production LLM deployment pipelines. Its secret: an excellent balance between output quality, calibration speed, and inference performance. When you see a model deployed on a GPU server, there's a good chance it's quantized with AWQ.

@@ -1,0 +1,114 @@
+---
+title: "ReAct: Reasoning + Acting"
+description: "The ReAct pattern alternates reasoning (Thought) and action (Act) to solve complex tasks, allowing LLMs to plan and act in a structured manner."
+---
+
+
+
+## The Problem: Reasoning Alone Hallucinates
+
+Chain-of-thought (CoT) was a major breakthrough: asking the LLM to "think out loud" improves its answers. But there's a fundamental problem. When the LLM reasons in a vacuum, without ever checking its claims against the real world, it can build perfectly coherent reasoning that is completely wrong. It hallucinates with conviction.
+
+Let's take an example: you ask "Who wrote the best-selling book in 2023?" The LLM can reason "The best-selling book is probably..." and invent a plausible answer. Without access to a reliable source, it can only guess.
+
+**ReAct** (Reasoning + Acting) solves this problem by combining reflection AND action: the LLM thinks, then **acts** (calls a tool), observes the real result, and thinks again with this new information.
+
+<ArxivLink id="2210.03629" title="ReAct: Synergizing Reasoning and Acting in Language Models (Yao et al., 2022)" />
+
+<Callout type="info" title={"The Key Insight"}>
+Reflection alone can hallucinate: the LLM fabricates facts. Action alone is blind: the agent acts without understanding why. ReAct combines them to get the best of both worlds: an agent that thinks AND verifies against reality.
+</Callout>
+
+## The Cycle: Thought, Action, Observation
+
+Here's ReAct in action on a concrete example:
+
+> **Q: How old is the current French president?**
+>
+> **Thought 1:** I need to first search for who the current president of France is.
+> **Action 1:** search("president France 2024")
+> **Observation 1:** Emmanuel Macron has been president of France since 2017.
+>
+> **Thought 2:** Now I know the president. For his age, I need his date of birth.
+> **Action 2:** search("Emmanuel Macron date of birth")
+> **Observation 2:** Emmanuel Macron was born on December 21, 1977.
+>
+> **Thought 3:** Born in 1977, in 2024 he is 46 years old. I have all the information I need.
+> **Action 3:** finish("Emmanuel Macron is 46 years old.")
+
+Notice the structure: the LLM doesn't just act mechanically. It **explains** what it's doing and why at each step, making the process transparent and debuggable.
+
+### The Three Components
+
+**Thought**: the LLM verbalizes its reasoning. What does it know? What is it missing? What's the next logical step? This is the "brain" of the agent.
+
+**Action**: a concrete call to an external tool with specific parameters. Web search, calculator, API, database — any tool the LLM has access to.
+
+**Observation**: the actual result returned by the tool, re-injected into the LLM's context. This is the grounding in reality, the moment when the LLM confronts its hypotheses with facts.
+
+## Why It Works So Well
+
+**Grounding in reality**: observations force the LLM to confront concrete facts. Every assertion can be verified, drastically reducing hallucinations. The LLM no longer "guesses" — it searches and verifies.
+
+**Complete traceability**: you see exactly why the LLM made each decision. If the final result is wrong, you can trace back: was Thought 2 poorly formulated? Did the tool return bad information? This is a huge advantage for debugging.
+
+**Natural adaptability**: simple questions resolve in 1-2 steps, complex questions in 5-10. The LLM automatically adjusts the depth of its reasoning based on difficulty. No need to fix the number of steps in advance.
+
+<Callout type="paper" title="Empirical Results">
+ReAct outperforms CoT alone on HotPotQA (questions requiring cross-referencing multiple sources) and FEVER (fact verification). The main advantage: far fewer factual errors thanks to grounding through real observations.
+</Callout>
+
+## Simple Implementation
+
+```python
+from langchain.agents import create_react_agent
+from langchain.tools import Tool
+
+tools = [
+    Tool(name="search",
+         func=search_fn,
+         description="Web search"),
+    Tool(name="calc",
+         func=calc_fn,
+         description="Mathematical calculation"),
+]
+
+agent = create_react_agent(llm, tools, prompt)
+result = agent.invoke({
+    "input": "France's population squared?"
+})
+```
+
+The LangChain framework implements ReAct natively. You define the available tools, the LLM decides when and how to use them. Behind the scenes, the system prompt structures the Thought/Action/Observation format.
+
+## Variants and Extensions
+
+**ReAct + self-reflection**: after each observation, the LLM explicitly evaluates whether the result is satisfactory or if the search needs to be reformulated.
+
+> **Thought:** The result isn't precise enough, I'll reformulate my query with more specific terms.
+
+**ReAct + planning**: before starting actions, the LLM develops a complete plan, then follows it step by step. Useful for complex tasks with dependencies between steps.
+
+> **Plan:** 1) Search X &rarr; 2) Search Y &rarr; 3) Combine results &rarr; 4) Formulate the answer
+
+**ReWOO** (Reasoning Without Observation): the opposite approach. The LLM plans all its actions at once, executes them in parallel, then synthesizes the results. Faster (fewer round trips), but less adaptive: if the first action returns an unexpected result, the plan doesn't adjust.
+
+<Callout type="tip" title="ReAct Is the Default Starting Point">
+For most LLM agents, ReAct is the right starting architecture. Simple to implement, easy to debug, flexible enough for the majority of cases. Only introduce more complex alternatives (planning, MCTS, multi-agents) if ReAct shows concrete limitations on your use case.
+</Callout>
+
+## Pitfalls to Avoid
+
+**Infinite loops**: the agent repeats the same actions in a loop without making progress. This is the most common pitfall. Solution: limit the number of iterations (typically 5-10 max) and detect repetitions to force an exit.
+
+**Token cost explosion**: each iteration adds the Thought, Action, and Observation to the context. After 10 iterations, the context becomes huge and expensive. On complex queries, the cost can be 10-20x that of a simple call.
+
+**Cascading errors**: a bad observation at the beginning (tool returning noise, API crash) contaminates the entire reasoning chain. The LLM builds its subsequent Thoughts on false foundations.
+
+<Callout type="warning" title="Tool Quality Is Decisive">
+ReAct is only as reliable as its tools. A search engine that returns irrelevant content, an API that silently fails, or a poorly documented tool can sabotage the entire reasoning process. Invest in robust tools with clear error messages and structured responses.
+</Callout>
+
+## The Legacy of ReAct
+
+ReAct has become the foundational paradigm of modern LLM agents. LangChain, LlamaIndex, AutoGen, CrewAI: all implement a variant of ReAct as their base architecture. Even the most sophisticated agents (with planning, long-term memory, multi-agents) build on the Thought-Action-Observation cycle introduced by ReAct. It's the "HTTP of LLM agents": the base protocol on which everything else is built.

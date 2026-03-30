@@ -1,0 +1,132 @@
+---
+title: "DARE, Model Soups, and SLERP"
+description: "Advanced model merging techniques: DARE uses random dropout on task vectors, Model Soups averages checkpoints, and SLERP interpolates in spherical space."
+---
+
+
+
+## Beyond TIES: Diversifying Merging Approaches
+
+Model merging has become a true art in the open-source community. After TIES, several complementary techniques have emerged, each with its own philosophy for solving the interference problem between merged models.
+
+<ArxivLink id="2311.03099" title="Language Models are Super Mario: Absorbing Abilities from Homologous Models as a Free Lunch (Yu et al., 2023)" />
+
+## DARE: Drop And REscale
+
+### The Counter-Intuitive Insight
+
+Here's a result that surprises: you can **randomly remove** 90 to 99% of the modifications made by a fine-tuning **without significant degradation** in performance.
+
+In other words, when you fine-tune a model, the vast majority of weight changes are redundant. Only a few percent truly carry the essence of the acquired skill. It's like an iceberg: the visible part (the critical parameters) is tiny compared to the total mass of modifications.
+
+### The Algorithm
+
+For each task vector $\tau$:
+
+1. **Drop**: apply a dropout mask with probability p (for example p=0.9, which removes 90% of modifications)
+2. **Rescale**: multiply surviving modifications by $\frac{1}{1-p}$ to compensate for lost energy
+
+$$\tau_{\text{dare}} = \frac{\text{mask}(\tau, p)}{1 - p}$$
+
+Then, add the sparsified task vectors as usual:
+
+$$\theta_{\text{merged}} = \theta_{\text{base}} + \sum_i \lambda_i \times \tau_{i}^{\text{dare}}$$
+
+Rescaling is crucial. Without it, the surviving modifications would be too weak (you only kept 10% of the original energy). By multiplying by 10 (for p=0.9), you restore the expected magnitude. It's exactly the same principle as the classical dropout used during neural network training.
+
+<Callout type="paper" title="Counter-intuitive result">
+Removing 90% of a fine-tuning's modifications preserves virtually all of its performance. This demonstrates **massive** redundancy in the weights: only a few parameters carry the essence of the learned skill.
+</Callout>
+
+
+### Advantage for Merging
+
+Here's where DARE shines for model merging: if each model keeps only 10% of its modifications (and not the same 10%, since the mask is random), the probability that two models modify the same parameter drops to about 1%. Conflicts collapse naturally, without needing to resolve them explicitly like in TIES.
+
+### DARE + TIES: The Winning Combination
+
+In practice, the two are often combined: first DARE (dropout to reduce density), then TIES (resolution of remaining conflicts by majority vote). This combination is often more performant than either method used alone.
+
+## Model Soups: Smart Averaging of Checkpoints
+
+### A Different Concept
+
+Unlike TIES and DARE which merge models fine-tuned on **different** tasks, Model Soups averages **checkpoints from the same training** with slightly different hyperparameters.
+
+The idea: you launch 5 trainings of the same model on the same task, but with different learning rates, seeds, or schedulers. Then you average the weights of the 5 resulting models.
+
+### Types of Soups
+
+- **Uniform soup**: simple average of all models (the most basic)
+- **Greedy soup**: progressively adds each model to the soup only if it improves the validation score. Models that degrade are discarded
+- **Learned soup**: learns the optimal weighting coefficients per model (the most sophisticated)
+
+<Callout type="tip" title="Practical tip">
+Train the same model 5 times with slightly different seeds or learning rates. Average the weights. The result is almost always better than any individual model, with zero additional inference cost. It's free ensembling.
+</Callout>
+
+### Why It Works: Flat Mode Connectivity
+
+The theoretical explanation is fascinating. Different trainings of the same model find optima in the loss landscape that are connected by regions of **flat loss** (no barrier between them). The weight average lands in this flat zone, which typically corresponds to better generalization than any individual optimum. It's as if the different trainings explored the edges of a valley, and the average found the flat bottom.
+
+## SLERP: Spherical Interpolation
+
+### The Problem with Linear Averaging
+
+Classical arithmetic averaging (LERP) has a subtle flaw: it **reduces the norm** of weight vectors.
+
+$$\text{LERP}(a, b, 0.5) = 0.5 \times a + 0.5 \times b$$
+
+If two unit-norm vectors point in slightly different directions, their average has a norm less than 1. In neural networks, weight norms encode important information (they control activation amplitude).
+
+### The Solution: SLERP (Spherical Linear Interpolation)
+
+SLERP interpolates along the arc of a circle on the hypersphere instead of cutting in a straight line, which **preserves the norm**:
+
+$$\text{SLERP}(a, b, t) = \frac{\sin((1-t)\Omega)}{\sin(\Omega)} \times a + \frac{\sin(t\Omega)}{\sin(\Omega)} \times b$$
+
+Where $\Omega$ is the angle between vectors a and b. The result stays on the sphere of the same radius.
+
+<Callout type="info" title="Preserved geometry">
+SLERP guarantees that the interpolated vector maintains a norm proportional to the originals. The distance is traversed uniformly along the arc. The result is better calibrated and more stable than linear averaging.
+</Callout>
+
+### Limitation: Two Models Only
+
+SLERP is naturally defined only for **2 models**. To merge more, you must apply SLERP sequentially (merge A and B, then the result with C) or combine it with other methods.
+
+## Comparison Table: Which Method for Which Case?
+
+| Method | N models | Handles conflicts | Hyperparameters | Complexity |
+|---|---|---|---|---|
+| Simple average | N | No | $\lambda_i$ | Minimal |
+| Task Arithmetic | N | No | $\lambda_i$ | Simple |
+| TIES | N | Yes (signs) | $\lambda_i$, density | Medium |
+| DARE | N | Yes (dropout) | $\lambda_i$, drop rate | Medium |
+| DARE-TIES | N | Yes (both) | $\lambda_i$, density, drop rate | Medium |
+| SLERP | 2 | Partial (norm) | t | Simple |
+| Model Soups | N | Not applicable | Selection | Simple |
+
+## MergeKit: The Unified Toolbox
+
+Arcee AI developed MergeKit, which implements all these methods:
+
+```bash
+mergekit-yaml config.yml ./merged_model --cuda
+```
+
+A YAML file to specify the method, source models, and hyperparameters. You can even apply different strategies per layer (for example, SLERP for the first layers and TIES for the last ones).
+
+## The Crucial Point: Model Merging Isn't Magic
+
+<Callout type="warning" title="Unpredictability">
+Model merging is powerful but fundamentally unpredictable. Results depend heavily on the source models, their similarity, and the chosen hyperparameters. Always budget time for evaluation and experimentation. The best merged models on leaderboards are the result of dozens of attempts, not a lucky break.
+</Callout>
+
+## Impact: The Open-Source Community Loves It
+
+A significant proportion of the best open-source models are **merges**, not models trained from scratch. Model merging democratizes access to performant models: even without a massive GPU cluster, you can create a competitive model by intelligently combining existing ones.
+
+---
+
+**TL;DR**: DARE (massive dropout on task vectors), Model Soups (averaging checkpoints for generalization), SLERP (spherical interpolation that preserves norms). Each is a complementary tool in the merging toolbox. Experiment, evaluate, find the winning combination for your case.

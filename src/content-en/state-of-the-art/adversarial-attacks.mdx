@@ -1,0 +1,135 @@
+---
+title: "Adversarial Attacks on Neural Networks"
+description: "How perturbations invisible to the human eye can fool a model with 99% confidence. Understanding FGSM, PGD attacks, and the defenses that try to resist them."
+---
+
+## A Stop Sign That Becomes a Speed Limit Sign
+
+In 2017, researchers placed a few carefully positioned stickers on a stop sign. For a human driving by: nothing abnormal, it's clearly a stop sign. For a self-driving car's neural network: a 45 mph speed limit sign, with 100% confidence.
+
+No hacking. No access to the model. Just paper and glue, placed with mathematical precision.
+
+This type of attack is called an **adversarial attack**: a perturbation, often imperceptible to a human, specifically designed to fool a machine learning model. It's not an anecdotal bug — it's a fundamental fragility of deep networks, still relevant despite more than ten years of active research.
+
+## Why Models Are Fragile
+
+### High-Dimensional Space
+
+To understand the problem, you need to think in terms of dimensions. A 28x28 pixel image is a point in a 784-dimensional space. In this space, classes (dog, cat, car) occupy regions separated by **decision boundaries** that the model learned during training.
+
+The problem: in high dimensions, these boundaries are **locally very close** to legitimate data points. It's counterintuitive — you imagine well-separated classes like countries on a map. But in reality, it's more like each country is surrounded by a border just millimeters away, in certain directions.
+
+<Callout type="info" title={"The geometric intuition"}>
+In 2 dimensions, to cross from one side of a boundary to the other, you need to walk in a specific direction. In 784 dimensions, there are 784 possible directions. Even if the boundary is far in most of these directions, it only needs to be close in **one** for an adversary to exploit it. The more dimensions there are, the more "short paths" to the boundary exist. That's why the problem gets worse with image size.
+</Callout>
+
+### The Famous Panda-Gibbon Example
+
+In 2014, Ian Goodfellow and his colleagues at Google Brain published what remains the most iconic example in the field.
+
+<ArxivLink id="1412.6572" title="Explaining and Harnessing Adversarial Examples" />
+
+They take an image of a panda, correctly classified with 57.7% confidence. They add a computed perturbation — structured noise, invisible to the naked eye — and get a visually identical image. The network now classifies this image as a **gibbon** with 99.3% confidence.
+
+The added perturbation is so small that looking at both images side by side, you'll see strictly no difference. And yet, it not only changed the prediction, but also **massively increased the model's confidence** in its wrong answer. The model isn't just fooled — it's convinced.
+
+## FGSM: Fast Gradient Sign Method
+
+FGSM is the foundational attack — the simplest, the most elegant, and the most instructive. Its idea relies on a clever reversal of backpropagation.
+
+**The algorithm in one line:**
+
+$$x_{adv} = x + \varepsilon \cdot \text{sign}(\nabla_x \mathcal{L}(\theta, x, y))$$
+
+Let's unpack this. You compute the gradient of the loss with respect to the input image — note, not with respect to the model parameters as in standard training. This gradient tells us: "in which direction should each pixel be modified to increase the model's error?" You take the **sign** of this gradient (each pixel moves by +epsilon or -epsilon), and apply this perturbation to the image.
+
+<Callout type="tip" title="The difference from normal backpropagation">
+In training, you compute grad(loss) with respect to the model's **weights** to update them — you modify the model so it makes fewer errors. Here, you do the opposite: you compute grad(loss) with respect to the image's **pixels** to modify them — you modify the image so the model makes more errors. The model stays frozen, the image moves toward the wrong class. Same mathematical tool, opposite objective.
+</Callout>
+
+FGSM is a **single-step** attack. It's ultra-fast (one gradient computation) but not always optimal. The hyperparameter epsilon controls the trade-off: too large, the perturbation becomes visible to the naked eye; too small, it's not enough to cross the decision boundary.
+
+## PGD: Projected Gradient Descent
+
+PGD (Projected Gradient Descent) is the iterative, muscular version of FGSM, introduced by Madry et al. in 2017.
+
+<ArxivLink id="1706.06083" title="Towards Deep Learning Models Resistant to Adversarial Attacks" />
+
+Instead of one big step, PGD takes many small successive FGSM steps, projecting the perturbation at each step back into a ball of radius epsilon. The analogy: FGSM fires a single arrow in the approximate direction of the boundary. PGD zigzags like a heat-seeking missile, adjusting its trajectory at each iteration to find the most vulnerable point.
+
+**PGD Algorithm:**
+
+1. Start from a random point within the ball around x
+2. Take an FGSM step with a small alpha
+3. Project onto the ball of radius epsilon (to stay imperceptible)
+4. Repeat N times (typically 20-40 iterations)
+
+PGD is considered one of the most powerful white-box attacks (with full access to the model and its gradients). If a model resists PGD, it's a strong signal of robustness.
+
+<Callout type="paper" title={"PGD as a standard evaluation tool"}>
+Madry et al. proposed treating PGD as the reference attack for evaluating robustness. The argument: PGD is an approximation of the worst possible perturbation within the epsilon ball. A model robust to PGD should therefore be robust to an entire class of white-box attacks. This approach has become the standard in the literature.
+</Callout>
+
+## Black-Box Attacks and Transferability
+
+The attacks described above require access to the model's gradients (white box). In the real world, you often only have access to the model's outputs (black box) — not its architecture, not its weights, just its predictions.
+
+Two approaches make attacks possible even in this case:
+
+**Transfer attack**: you train a substitute model on similar data, craft an adversarial attack on this substitute model, then apply it to the target model. And often, it works. Why? Because different models, trained on similar data, develop similar decision boundaries and share the same vulnerabilities.
+
+**Score/decision-based attacks**: you estimate gradients by querying the model hundreds or thousands of times, with small random perturbations, observing how output scores change. It's slower, but it converges toward an effective attack.
+
+<Callout type="warning" title="The real world is black box">
+In practice, an attacker who wants to fool a facial recognition system at an airport doesn't have access to the model's weights. But transfer attacks work well enough to remain a real risk — research has shown that you can print glasses with an adversarial pattern and fool commercial facial recognition systems, without ever having had access to the target model.
+</Callout>
+
+## Real-World Stakes
+
+### Autonomous Vehicles
+
+Falsified road signs are just the tip of the iceberg. Adversarial attacks on lidars (laser sensors) and combined cameras raise deep questions about the robustness of complete perception systems — is a multi-sensor system more robust, or does it simply create more attack surfaces?
+
+### Medical AI
+
+A diagnostic model that classifies X-rays or histology slides can be fooled by digital perturbations. More concrete and more concerning: printers have been used to create physical spots on lab slides that induce classification errors by the model, demonstrating that adversarial attacks are not limited to the digital domain.
+
+### Facial Recognition
+
+Researchers have demonstrated that you can print glasses whose pattern fools commercial facial recognition systems, allowing someone to impersonate another person — or become invisible to the system. The gap between academic research and practical exploitation is narrowing.
+
+
+
+## Defenses
+
+### Adversarial Training
+
+The most robust defense known to date: include adversarial examples (typically generated by PGD) directly in the training data.
+
+$$\min_\theta \mathbb{E}_{(x,y)} \left[ \max_{\delta \in S} \mathcal{L}(\theta, x + \delta, y) \right]$$
+
+In plain terms: instead of training the model on clean images, you train it on the worst adversarial images you can construct. The model thus learns to be correct even when faced with the most vicious perturbations. The cost: training that's 2-10x slower and a slight accuracy drop on clean data. But it's the most reliable method.
+
+### Certified Robustness
+
+Rather than heuristically testing robustness (running PGD and seeing if it holds), certified robustness methods **mathematically prove** that no perturbation of a certain size can change the prediction.
+
+Major approaches include interval arithmetic (IBP) and the randomized smoothing of Cohen et al. — the latter technique consists of evaluating the model on multiple noisy versions of the input and taking a majority vote, with probabilistic guarantees.
+
+<ArxivLink id="1902.02918" title="Certified Adversarial Robustness via Randomized Smoothing" />
+
+### Preprocessing and Purification
+
+A third path: detect or "purify" adversarial inputs before they reach the model. Techniques: JPEG compression (which destroys high-frequency perturbations), denoising by diffusion model, anomaly detection in the input space.
+
+The problem: these methods are often circumvented by **adaptive attacks** that incorporate the preprocessing into their optimization. If the attacker knows there's a JPEG filter, they craft a perturbation that survives the filter.
+
+<Callout type="warning" title="The arms race continues">
+Each new defense published is generally circumvented within months by an adaptive attack. Adversarial robustness remains an open and active problem. There is no universal solution — only defenses that increase the cost of an attack without making it impossible.
+</Callout>
+
+## Takeaways
+
+Adversarial attacks are not a bug that will one day be fixed with a patch — they reveal something fundamental about the way neural networks learn. These models memorize statistical correlations in training data, not a robust semantic understanding of the world. They don't learn "that's a panda" — they learn "this pixel distribution is statistically associated with the label panda."
+
+Research in adversarial robustness is therefore also, at its core, research on understanding what models actually learn — and on the gap between statistical correlation and understanding.

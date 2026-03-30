@@ -1,0 +1,191 @@
+---
+title: "Positional encoding: how the Transformer understands order"
+description: "Giving the Transformer a sense of position: from sinusoids to modern techniques like RoPE."
+---
+
+## The problem: the Transformer is blind to order
+
+Here's a subtle but fundamental mathematical problem: the attention mechanism has **no notion of position**. If you permute the input tokens, the attention produces exactly the same result (up to a permutation of the outputs).
+
+An example that illustrates the absurdity:
+- "The cat eats the mouse" → result A
+- "The mouse eats the cat" → same result A (catastrophic!)
+
+Linguistically, the meaning completely changes. Mathematically, the attention doesn't care -- it only sees **sets** of vectors, not ordered **sequences**. Each token interacts with all the others via the dot product $Q \cdot K$, and this product doesn't depend on the order in which the tokens appear.
+
+This is a striking contrast with RNNs, which process tokens one by one from left to right and naturally integrate order. The Transformer, in exchange for its massive parallelization, lost this property. So you have to **manually inject** position information into the representations.
+
+The question is: how to encode position in a way that the model can learn to exploit it effectively?
+
+## Sinusoids: the original recipe (2017)
+
+<ImageWithSource
+  src="/images/admin/img-1774047443936.png"
+  alt="Visualization of sinusoidal positional encodings"
+  sourceUrl="https://erdem.pl/2021/05/understanding-positional-encoding-in-transformers"
+  size="medium"
+/>
+
+The "Attention Is All You Need" paper proposes an elegant and mathematically inspired solution: add to each token a position vector built from **sinusoidal functions** at different frequencies.
+
+For position $i$ in the sequence, each dimension $k$ of the position vector is computed as follows:
+
+$$
+PE_{(i, 2k)} = \sin\left(\frac{i}{10000^{2k / d_{\text{model}}}}\right)
+$$
+
+$$
+PE_{(i, 2k+1)} = \cos\left(\frac{i}{10000^{2k / d_{\text{model}}}}\right)
+$$
+
+The formula looks intimidating, but the intuition is simple. Think of a **multi-frequency clock**:
+- The first dimensions oscillate **slowly**: they distinguish distant positions (beginning vs middle vs end of sentence). It's like the hour hand.
+- The last dimensions oscillate **quickly**: they distinguish neighboring positions (word 42 vs word 43). It's like the second hand.
+
+Each position in the sequence gets a unique "code" composed of these oscillations at different frequencies. Like in a numeral system, the "high-order digits" (low frequencies) change rarely and the "low-order digits" (high frequencies) change often.
+
+The PE vector is simply **added** to the token embedding: $\text{input} = \text{token\_embedding} + \text{PE}$. The model thus receives a vector that combines the word's meaning and its position.
+
+<Callout type="info" title="Why sinusoids?">
+The choice of sinusoids isn't arbitrary. Mathematically, position $i+k$ can be expressed as a **linear transformation** of position $i$ (a property of trigonometric functions). This means the model can easily learn to recognize **relative positions** ("this token is 5 positions further") from simple matrix products. Moreover, sinusoids are defined for any positive integer, which theoretically allows **generalizing to longer sequences** than those seen during training.
+</Callout>
+
+**Advantages of sinusoids**:
+- **No training needed**: it's a fixed mathematical formula, no parameters to learn
+- **Multiple frequencies**: simultaneously captures local AND global relationships
+- **Extrapolation**: works in theory for sequences longer than training sequences
+- **Deterministic**: same position = same encoding, always
+
+**Limitation**: in practice, sinusoids are no longer used in modern models. They've been surpassed by learnable approaches or by RoPE. But they remain an important conceptual starting point.
+
+## Learned embeddings: the direct approach
+
+The simplest approach: instead of a formula, **learn a different vector** for each possible position.
+
+```python
+position_embedding = nn.Embedding(max_seq_len, d_model)
+# Position 0: learned vector of dimension d_model
+# Position 1: learned vector of dimension d_model
+# ...
+# Position 511: learned vector of dimension d_model
+```
+
+It's a lookup table: position 42 corresponds to the 42nd vector in the table, which is a model parameter updated by gradient descent during training. The position embedding is added to the token embedding, exactly as with sinusoids.
+
+It's simple to implement and works well in practice. BERT (Bidirectional Encoder Representations from Transformers) and GPT-2 (Generative Pre-trained Transformer 2) use this approach.
+
+**The major problem**: you're **limited to the maximum training length**. If the model is trained with `max_seq_len = 512`, the table contains 512 vectors. Position 513? It doesn't exist. You can't use the model on a 1024-token sequence without retraining it or hacking (interpolating existing embeddings).
+
+This is a serious limitation in the era of long contexts. A user wants to feed a 10,000-word document into their model, but the model only knows positions 0 through 511. Modern techniques solve this problem.
+
+## RoPE: the current champion
+
+RoPE (Rotary Position Embedding), proposed by Su et al. in 2021, is a fundamentally different approach. Instead of **adding** a position vector to the embeddings, RoPE **rotates** the Query and Key vectors according to their position in the sequence.
+
+<ImageWithSource
+  src="/images/admin/img-1774047782802.png"
+  alt="Diagram of embedding rotation by position"
+  sourceUrl="https://d2jud02ci9yv69.cloudfront.net/2025-04-28-positional-embedding-19/blog/positional-embedding/"
+  size="medium"
+/>
+
+### The geometric intuition
+
+Imagine a 2D vector $(x, y)$ in the plane. A rotation by angle $\theta$ transforms it into:
+$$(x \cos\theta - y \sin\theta,\; x \sin\theta + y \cos\theta)$$
+
+RoPE applies exactly this idea: for each **pair of consecutive dimensions** of the Q or K vector, a 2D rotation is applied whose angle is proportional to the token's position in the sequence.
+
+$$
+Q'_i = R(\theta_i) \cdot Q_i
+$$
+
+$$
+K'_j = R(\theta_j) \cdot K_j
+$$
+
+$R(\theta)$ is a block-diagonal rotation matrix with 2x2 blocks, and $\theta_i$ is proportional to position $i$, with different frequencies for each pair of dimensions (exactly like sinusoids, but applied as rotation rather than addition).
+
+### Why it's brilliant
+
+**1. Relative distances emerge naturally.**
+After rotation, the dot product $Q'_i \cdot K'_j$ depends only on the **difference** in positions $i - j$, not on the absolute positions. The model automatically sees "this token is 3 positions before me" rather than "I'm at position 42 and the other is at position 39". That's exactly the relational information attention needs.
+
+Mathematically: $Q'_i \cdot K'_j = Q_i^T R(\theta_i - \theta_j) K_j$. The dot product depends on $\theta_i - \theta_j$, and therefore on the relative distance.
+
+**2. Attention naturally decays with distance.**
+It's a mathematical property of rotations applied to the dot product: the farther apart two tokens are, the more the rotation angles diverge, and the more the dot product tends to decrease. Nearby tokens naturally receive more attention than distant tokens, without any ad hoc mechanism.
+
+**3. Extensible to long sequences.**
+Unlike learned embeddings, RoPE is defined for any position (it's a formula, not a table). With some adjustments (YaRN, NTK-aware scaling), a model trained on 4096 tokens can handle sequences of 32000+ tokens.
+
+<ArxivLink id="2104.09864" title="RoFormer: Enhanced Transformer with Rotary Position Embedding (Su et al., 2021)" />
+
+<Callout type="tip" title="Technical corner: pairwise rotations">
+RoPE slices the Q or K vector into pairs of dimensions: (dim 0, dim 1), (dim 2, dim 3), etc. Each pair undergoes an independent 2D rotation at its own frequency. Low-dimension pairs use low frequencies (slow oscillation = global position), high-dimension pairs use high frequencies (fast oscillation = local position). It's exactly the same multi-frequency logic as sinusoids, but applied multiplicatively via rotations.
+</Callout>
+
+**Used by**: LLaMA, Mistral, GPT-NeoX, Qwen, Gemma, and virtually all modern LLMs. It's the de facto standard.
+
+## ALiBi: the minimalist alternative
+
+ALiBi (Attention with Linear Biases), proposed by Press et al. in 2022, takes a radically different approach from all the previous ones. Rather than encoding position in the input vectors, ALiBi simply adds a **linear bias** to the attention scores:
+
+$$
+\text{score}(i, j) = Q_i \cdot K_j - m \cdot |i - j|
+$$
+
+It's disarmingly simple: if two tokens are far apart ($|i - j|$ is large), their attention score is **penalized** by an amount proportional to the distance. If two tokens are close, the score stays intact. The parameter $m$ is a fixed (not learned) scalar that varies by attention head, allowing each head to specialize on a different range.
+
+No position vectors, no rotations, no trigonometric formulas. Just a subtraction.
+
+<ArxivLink id="2108.12409" title="Train Short, Test Long: Attention with Linear Biases (Press et al., 2022)" />
+
+### Exceptional extrapolation
+
+The main advantage of ALiBi is its **extrapolation**. A model trained on 1024 tokens can be used on 10,000 tokens with minimal performance loss. Why? Because the linear bias is defined for any distance -- there's nothing to "extend" or "interpolate". The model learned that distant tokens matter less, and this rule generalizes naturally.
+
+**Models using ALiBi**: BLOOM, MPT
+
+**Limitation**: ALiBi imposes a monotonic decay of attention with distance, which can be restrictive for certain tasks where long-range dependencies are crucial. RoPE offers more flexibility because the model can learn attention patterns at arbitrary distance.
+
+## Comparison: the four approaches
+
+| Method | Principle | Extrapolation | Implementation complexity | Key models |
+|---|---|---|---|---|
+| Sinusoidal | Fixed formula (sin/cos) | Good in theory | Medium | Original Transformer |
+| Learned | Optimized lookup table | Poor (limited to training max) | Easy | BERT, GPT-2 |
+| RoPE | 2D rotation of Q/K | Good (with YaRN/NTK) | Medium-hard | LLaMA, Mistral, Qwen |
+| ALiBi | Linear bias on scores | Excellent | Very easy | BLOOM, MPT |
+
+## The major challenge: extending the context window
+
+One of the most active challenges in current research is **context window extension**. Models are trained on a certain length (4096, 8192, 32000 tokens), but we'd like them to process much longer sequences (100,000+ tokens) without retraining from scratch.
+
+Positional encoding is the limiting factor. Even with RoPE, a model trained on 4k tokens sees its performance degrade beyond that. Several extension techniques have been developed:
+
+- **YaRN** (Yet another RoPE extensioN): mathematically interpolates RoPE frequencies to "stretch" the positional encoding. Allows extending from 4k to 128k tokens with minimal fine-tuning.
+- **NTK-aware scaling**: adjusts RoPE's base frequencies taking into account Neural Tangent Kernel theory. Low frequencies are stretched more than high ones.
+- **LongRoPE**: progressive interpolation with a continuum of extension factors.
+- **Position interpolation** (Meta): instead of extrapolating beyond known positions, interpolates by "compressing" positions into the original range.
+
+Concrete result: a model trained on 4k tokens can handle 32k to 128k tokens with only a short fine-tuning and a slight performance drop. The context extends without complete retraining, saving millions of dollars.
+
+## Why this matters
+
+Context length affects **everything** an LLM can do:
+- **Short context (512-2k)**: a simple question, a sentence to complete
+- **Medium context (4k-16k)**: an article, a conversation of a few exchanges
+- **Long context (32k-128k)**: an entire book, a complete codebase, a conversation history spanning several hours
+- **Very long context (500k+)**: multiple books, an entire software project
+
+Positional encoding is the building block that determines this limit. Choosing the right technique (and knowing how to extend it) is crucial for practical applications.
+
+## Key takeaways
+
+1. The Transformer **forgets order** by construction: you must add position information explicitly
+2. **Sinusoids**: the original solution, elegant but surpassed in practice
+3. **Learned embeddings**: simple but rigidly limited to the training length
+4. **RoPE**: the current standard (LLaMA, Mistral, Qwen), encodes relative positions via 2D rotations
+5. **ALiBi**: best native extrapolation, minimalist approach, but less flexible
+6. **Context extension** (YaRN, NTK): a major research challenge in 2024-2026, directly tied to positional encoding

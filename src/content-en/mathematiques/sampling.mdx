@@ -1,0 +1,146 @@
+---
+title: "Sampling: Monte Carlo, importance sampling, MCMC"
+description: "Sampling techniques in machine learning: Monte Carlo, importance sampling, MCMC, the reparameterization trick for VAEs, and temperature sampling in LLMs."
+---
+
+## Why sample?
+
+In machine learning, we constantly encounter integrals that are impossible to compute analytically. For example, to make predictions with a Bayesian model, you'd need to integrate over all possible parameters:
+
+$$P(y | x, \mathcal{D}) = \int P(y | x, \theta) P(\theta | \mathcal{D}) \, d\theta$$
+
+If $\theta$ lives in a space with millions of dimensions (like the weights of a network), this integral is intractable. Sampling is the solution: instead of computing the integral exactly, you draw samples and average.
+
+## Basic Monte Carlo
+
+### The principle
+
+The idea of Monte Carlo is simple and elegant. To compute $E_{p(x)}[f(x)] = \int f(x) p(x) \, dx$, you draw $N$ samples $x_1, x_2, \ldots, x_N$ from $p(x)$ and compute the average:
+
+$$E_{p(x)}[f(x)] \approx \frac{1}{N} \sum_{i=1}^N f(x_i), \quad x_i \sim p(x)$$
+
+By the law of large numbers, this approximation converges to the true value as $N \to \infty$.
+
+### Analogy
+
+To estimate the area of a lake on a map, throw darts randomly at the map. The proportion of darts that land in the lake, multiplied by the area of the map, gives an estimate of the lake's area. The more darts you throw, the more precise the estimate.
+
+### In ML
+
+- **SGD** is a Monte Carlo method: you estimate the gradient over the entire dataset by computing it on a random mini-batch
+- **Dropout** during inference: averaging multiple forward passes with different masks is Monte Carlo
+
+### Limitations
+
+The problem with basic Monte Carlo is efficiency. If the distribution $p(x)$ is highly concentrated in a small region of space, most samples fall in "uninteresting" areas and contribute little to the estimate. In high dimensions, this problem explodes.
+
+## Importance sampling
+
+### The idea: sample smarter
+
+Instead of drawing from $p(x)$ (which may be hard to sample from or inefficient), you draw from a proposal distribution $q(x)$ that's easier, and correct with a weight:
+
+$$E_{p(x)}[f(x)] = \int f(x) \frac{p(x)}{q(x)} q(x) \, dx \approx \frac{1}{N} \sum_{i=1}^N f(x_i) \frac{p(x_i)}{q(x_i)}, \quad x_i \sim q(x)$$
+
+The ratio $w_i = \frac{p(x_i)}{q(x_i)}$ is the importance weight. If $q$ concentrates its samples where $f(x) \cdot p(x)$ is large, the estimate is more efficient.
+
+### Analogy
+
+To estimate the average size of fish in a lake, instead of fishing randomly (lots of small fish, few big ones), you could fish in the deep areas where big fish concentrate, then correct your estimate to account for your sampling bias.
+
+### In ML
+
+- **Off-policy learning in RL**: you learn from data collected by an old policy, using importance weights to correct
+- **PPO (Proximal Policy Optimization)** uses importance sampling with a clipped ratio for stability
+- **Log-likelihood estimation** in latent variable models
+
+### High-dimensional problem
+
+In high dimensions, importance weights can vary by several orders of magnitude, making the estimate very noisy. A few samples with enormous weights dominate, and variance explodes. This is the "curse of dimensionality" of importance sampling.
+
+## MCMC: Markov Chain Monte Carlo
+
+### The problem
+
+You want to sample from a distribution $p(\theta)$ whose form you know (up to a constant) but can't draw from directly. Typically: the posterior $P(\theta | \mathcal{D}) \propto P(\mathcal{D} | \theta) P(\theta)$.
+
+### The MCMC idea
+
+Instead of drawing independent samples (impossible), you build a Markov chain whose stationary distribution is $p(\theta)$. By letting the chain evolve long enough, the visited states form a (correlated) sample from $p(\theta)$.
+
+### Metropolis-Hastings
+
+The most classic algorithm:
+
+1. Start from a point $\theta_0$
+2. Propose a new point $\theta' \sim q(\theta' | \theta_t)$ (for example, a small Gaussian step)
+3. Compute the acceptance ratio: $\alpha = \min\left(1, \frac{p(\theta') q(\theta_t | \theta')}{p(\theta_t) q(\theta' | \theta_t)}\right)$
+4. Accept $\theta_{t+1} = \theta'$ with probability $\alpha$, otherwise stay $\theta_{t+1} = \theta_t$
+5. Repeat
+
+The beauty of this algorithm is that you only need the ratio $p(\theta')/p(\theta_t)$, not the normalized $p$. The normalization constant (the evidence) cancels in the ratio.
+
+### Limitations in ML
+
+MCMC is exact in theory but slow in practice for high-dimensional models. Traversing the parameter space of a neural network with millions of weights would take an astronomical amount of time. That's why Bayesian deep learning uses variational inference instead.
+
+## The reparameterization trick
+
+### The VAE problem
+
+In a Variational Autoencoder, you want to optimize:
+
+$$\mathcal{L} = E_{z \sim q_\phi(z|x)}[\log p_\theta(x|z)] - D_{KL}(q_\phi(z|x) \| p(z))$$
+
+The first term requires sampling $z$ from $q_\phi(z|x)$. But a random sample is not differentiable with respect to the encoder parameters $\phi$. How do you backpropagate the gradient through a random draw?
+
+### The solution
+
+Instead of drawing $z \sim \mathcal{N}(\mu_\phi, \sigma_\phi^2)$, you write:
+
+$$z = \mu_\phi + \sigma_\phi \cdot \epsilon, \quad \epsilon \sim \mathcal{N}(0, 1)$$
+
+The randomness is moved to $\epsilon$, which doesn't depend on $\phi$. Now $z$ is a deterministic and differentiable function of $\mu_\phi$ and $\sigma_\phi$, and the gradient can flow freely.
+
+### Analogy
+
+Imagine you want to adjust the temperature of a shower (parameter $\phi$) based on the water coming out (sample). If the water is random, you can't tell which faucet to turn. The reparameterization trick amounts to separating the plumbing noise ($\epsilon$) from the faucet setting ($\phi$). The noise still exists, but you can see how the setting affects the average temperature.
+
+### Impact
+
+This trick, introduced simultaneously by Kingma and Welling (VAE) and Rezende et al. in 2014, made it possible to train VAEs by gradient descent. Without it, generative models with continuous latent variables would have remained intractable.
+
+## Temperature sampling in LLMs
+
+### How an LLM generates text
+
+At each step, the model produces logits $z_1, \ldots, z_V$ over the entire vocabulary. You apply softmax with a temperature $T$:
+
+$$P(\text{token}_i) = \frac{e^{z_i / T}}{\sum_j e^{z_j / T}}$$
+
+Then you sample a token from this distribution.
+
+### Effect of temperature
+
+- **$T = 0$** (in practice, argmax): always the most probable token. Deterministic, but repetitive and boring.
+- **$T = 0.7$**: a good tradeoff between coherence and creativity. The most common choice.
+- **$T = 1.0$**: the "natural" distribution learned by the model.
+- **$T > 1.0$**: more random, more creative, but also more incoherent.
+
+### Top-k and top-p (nucleus) sampling
+
+In practice, temperature is combined with filtering:
+
+- **Top-k**: only consider the $k$ most probable tokens
+- **Top-p (nucleus)**: only consider the tokens whose cumulative probability reaches $p$
+
+These techniques prevent the model from choosing very improbable tokens that would make the text incoherent, while preserving diversity.
+
+## Key takeaways
+
+- Sampling solves the problem of intractable integrals in ML
+- Monte Carlo estimates an expectation by averaging random samples
+- Importance sampling enables more efficient sampling with correction weights
+- MCMC builds a Markov chain to sample from complex posteriors
+- The reparameterization trick makes sampling differentiable, which enabled VAEs
+- Temperature and nucleus sampling control the diversity of generation in LLMs

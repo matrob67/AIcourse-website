@@ -1,0 +1,102 @@
+---
+title: "Mixtral 8x7B"
+description: "The first major open-source Mixture-of-Experts model: 46.7 billion total parameters, 12.9 billion active per token, with top-2 routing and a 32K token context."
+---
+
+## Mixtral 8x7B: The Moment Open-Source Caught Up with the Giants
+
+December 2023. A French startup just a few months old publishes a 46 billion parameter model as open-source. Free. Apache 2.0 license. And it rivals GPT-3.5 Turbo, the most widely used proprietary model in the world, while costing 5x less to run.
+
+The entire industry turns around: "How is this possible with so few resources?"
+
+The answer fits in three letters: MoE. And Mixtral 8x7B is its masterful demonstration.
+
+<ArxivLink id="2401.04088" title="Mixtral of Experts" />
+
+### The Mixture-of-Experts Architecture: The Heart of the Innovation
+
+In a classic (so-called "dense") transformer, every token passes through ALL the model's layers. It's as if, for every question asked in a hospital, you gathered all the doctors from every department to answer it together. Efficient? Not at all.
+
+Mixtral does the opposite. Each feed-forward layer (FFN) is replaced by 8 independent "experts" -- specialized mini neural networks. For each token, a routing network (the "gate network") selects the 2 most relevant experts. The other 6 stay idle.
+
+**The concrete result:** the model has 46.7 billion parameters in total, but only 12.9 billion are activated for each token. Inference therefore costs the same as a dense 13B parameter model, while benefiting from the representational capacity of a much larger model. It's like having the knowledge of a team of 8 specialists, but only paying for 2 consultations each time.
+
+#### The Routing Network: Who Decides What?
+
+The router is a surprisingly simple mechanism: a linear network that takes a token's hidden representation and produces a score for each of the 8 experts. The 2 experts with the highest scores are activated, and their outputs are combined in a weighted average by their softmax scores.
+
+In formal terms, for a token x:
+
+- The router computes G(x) = Softmax(TopK(x . W_g, k=2))
+- The output is: y = Sum_i G(x)_i . E_i(x), where only the 2 selected experts contribute
+
+<Callout type="paper" title="Origins of MoE">
+The Mixture-of-Experts idea dates back to the work of Jacobs et al. in 1991, but its application to transformers was popularized by Google's Switch Transformer (2021) and GShard. What makes Mixtral historic is that it was the first to make this architecture accessible as open-source at large scale, proving that it worked just as well in practice as on paper.
+</Callout>
+
+### Technical Specifications
+
+| Parameter | Value |
+|-----------|-------|
+| Total parameters | 46.7 billion |
+| Active parameters per token | 12.9 billion |
+| Number of experts | 8 per layer |
+| Active experts per token | 2 (top-2 routing) |
+| Transformer layers | 32 |
+| Model dimension | 4096 |
+| Expert dimension (FFN) | 14,336 |
+| Maximum context | 32,768 tokens |
+| Vocabulary | 32,000 tokens |
+| License | Apache 2.0 |
+
+### Performance That Shook the Industry
+
+Mixtral 8x7B didn't just "do well." It redefined what an open-source model could accomplish.
+
+**Vs LLaMA 2 70B.** Mixtral matches or surpasses LLaMA 2 70B on the majority of benchmarks, while being 6x faster at inference. Why? Because it only activates 12.9B parameters per token instead of 70B. Same quality, fraction of the cost.
+
+**Vs GPT-3.5 Turbo.** On standard benchmarks (MMLU, HellaSwag, ARC, WinoGrande), Mixtral achieves performance comparable to OpenAI's most popular commercial model. A free, downloadable model going toe-to-toe with a flagship commercial product: that's an earthquake.
+
+**Multilingual.** Mixtral excels particularly in French, German, Spanish, and Italian, thanks to training on diverse multilingual data. For European users, it was a breath of fresh air.
+
+**Code.** The model demonstrates solid code generation performance, approaching CodeLlama 34B on the HumanEval benchmark.
+
+<Callout type="tip" title="The real game-changer: the performance/cost ratio">
+The genius of Mixtral isn't being the absolute best model. It's offering the best performance-to-inference-cost ratio ever seen. LLaMA 2 70B-level performance at a 13B inference cost: Mixtral made high-quality LLMs accessible to budgets that couldn't afford giant models.
+</Callout>
+
+### Mixtral 8x7B Instruct: Alignment via DPO
+
+The Instruct version of Mixtral was fine-tuned via DPO (Direct Preference Optimization) to follow instructions and produce helpful, safe responses. It achieved an Elo score of 8.30 on MT-Bench, comparable to the best proprietary models of the time.
+
+DPO is an elegant alternative to RLHF (Reinforcement Learning from Human Feedback). Instead of training a separate reward model then optimizing with reinforcement learning (a complex and unstable process), DPO directly optimizes human preferences in a single step. Simpler, more stable, and often just as effective.
+
+### The Practical Implications of MoE
+
+#### The Memory vs Compute Paradox
+
+Here's a subtle but crucial point: even though Mixtral only activates 12.9B parameters per token, all 46.7B total parameters must be loaded into GPU memory. The VRAM requirement is therefore that of a 47B model, even though each operation only costs the equivalent of a 13B model.
+
+In practice, Mixtral requires about 90 GB of VRAM in fp16, meaning at minimum 2 A100 80GB GPUs. Quantized 4-bit versions reduce this requirement to about 25-30 GB, making it accessible on a single high-end consumer GPU.
+
+#### Expert Specialization: More Subtle Than You'd Think
+
+Frequent question: "Does one expert handle math, another code, another poetry?" In reality, no. Analysis of routing patterns reveals that specialization operates at the level of syntactic and semantic structures, not knowledge domains. One expert might specialize in conditional structures, another in lists and enumerations. It's finer, more flexible, and ultimately more powerful.
+
+#### Load Balancing: Avoiding "Teacher's Pet" Experts
+
+Without precaution, the router could systematically favor 2-3 experts and ignore the others. The favorites would improve (more training data), the others would stagnate: a vicious cycle. Mixtral uses an auxiliary load balancing loss that penalizes this unequal distribution, forcing a fair distribution of tokens across all 8 experts.
+
+<Callout type="warning" title={"Limitations of the MoE architecture"}>
+MoE isn't without trade-offs. The full model is larger in memory than a dense model of equivalent performance, routing adds slight complexity, and distributing experts across multiple GPUs requires efficient inter-GPU communication. These constraints are particularly sensitive on limited hardware or in edge configurations.
+</Callout>
+
+### The Impact on the Industry: A Before and After
+
+**Democratization of MoE.** Before Mixtral, MoE models existed mostly in Google's internal labs (GShard, Switch Transformer). Mixtral democratized this architecture by proving it worked in real-world conditions, and by making it downloadable by anyone.
+
+**Competitive pressure.** The Apache 2.0 release triggered a chain reaction. Meta accelerated development of LLaMA 3, and other labs started seriously exploring MoE architectures.
+
+**Fine-tuning ecosystem.** Thousands of fine-tuned Mixtral variants flourished on Hugging Face: specializations for code, for specific languages, for technical domains. An open-source model that generates its own ecosystem is proof that it hit the mark.
+
+Mixtral 8x7B remains one of the most influential models in recent AI history. It demonstrated that the MoE architecture was the path forward for reconciling performance and efficiency, and that open-source could rival proprietary giants.

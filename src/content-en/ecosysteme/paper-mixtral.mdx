@@ -1,0 +1,79 @@
+---
+title: "Paper: Mixtral - The Democratized MoE"
+description: "Mistral AI January 2024. 8x7B = 47B total, 13B activated. 70B-class performance. 13B inference cost. Mixture of Experts goes mainstream."
+---
+
+
+
+## The Brilliant Idea: Don't Activate Everything
+
+Imagine you have a team of 8 specialists. A math expert, a history expert, a code expert, etc. When someone asks you a math question, you don't mobilize all 8: you just send the 2 best ones for that question. The others stay on standby.
+
+That's exactly what **Mixtral 8x7B** does. Instead of activating all parameters for every token (like a classic Transformer does), the model selects only the most relevant experts.
+
+**Mixtral 8x7B**: 8 experts, top-2 activated per token. 47B total parameters. 13B activated at any given time. The quality of a 70B model. The inference costs of a 13B model.
+
+It's an incredible deal.
+
+<Callout type="info" title="MoE: Not New, But Finally Accessible">
+The Mixture of Experts concept has existed since 1991 (Jacobs et al.). Google explored it with Switch Transformer in 2021. But it was Mixtral that made it popular and especially **open-source**. Before Mixtral, MoE remained a lab thing. After Mixtral, it became a standard architecture that everyone adopts.
+</Callout>
+
+## Architecture: How It Actually Works
+
+In a classic Transformer, each layer contains an attention block and a feed-forward network (FFN). The FFN is the computationally "heavy" part: that's where the model stores its knowledge.
+
+Mixtral replaces this single FFN with **8 parallel FFNs** (the "experts") plus a small network called the **router**.
+
+The router is a simple linear network. For each token, it produces a score for each of the 8 experts, then selects the **top-2**. The other 6 experts? Not activated, no computation, no cost.
+
+The outputs of the two selected experts are then weighted by the router's scores and summed. It's elegant and simple.
+
+Concretely:
+- **32 layers** of Transformer
+- **47B total parameters**
+- **13B parameters activated** per token (the 2 experts out of 8, plus the shared attention blocks)
+- **Context window**: 32K tokens
+
+To give an analogy: it's like a restaurant with 8 specialized chefs. For each dish ordered, the head chef selects the 2 most relevant chefs. You get the quality of a restaurant with 8 chefs, but you only pay the salary of 2 at any given time.
+
+## Results: The Proof in Numbers
+
+The results are impressive when put in perspective:
+
+- **Outperforms LLaMA 2 70B** on nearly all standard benchmarks
+- **Rivals GPT-3.5** on conversational tasks
+- **Excellent at code and math**, two domains where expert specialization particularly helps
+- **Very good at multilingual tasks**: routing naturally directs tokens to experts who "know" certain languages
+
+**In inference**, that's where the gain is spectacular: **6x more throughput** than LLaMA 2 70B for similar performance. In production, that means 6x fewer GPUs to serve the same number of users.
+
+The **Instruct version** of Mixtral (fine-tuned for dialogue) achieved ELO scores on Chatbot Arena surpassing GPT-3.5-Turbo and Claude 2.1 at the time of its release. For an open-source model, that was unprecedented.
+
+<Callout type="tip" title="Total vs Active: The Crucial Distinction">
+When you compare MoE models, pay attention to what you're comparing. Mixtral has 47B **total** parameters but only 13B **active** parameters. Comparing 47B total with LLaMA 70B total isn't fair. The right comparison is inference cost: 13B active vs 70B active. That's where Mixtral wins.
+</Callout>
+
+## Routing Analysis: Do the Experts Specialize?
+
+A fascinating question: do the experts learn to specialize? Analysis of routing patterns in Mixtral shows that yes, partially.
+
+Similar tokens (same domain, same syntactic type) tend to be routed to the same experts. Domain-specific patterns are observed. But the specialization isn't absolute: an expert doesn't handle "only" math, for example. It's more subtle, more distributed.
+
+A classic problem with MoE architectures is **routing collapse**: all tokens end up routed to the same 1-2 experts, and the others are useless. To prevent this, Mixtral uses an **auxiliary load-balancing penalty** that forces the router to distribute tokens more evenly across experts.
+
+## Impact: MoE Becomes the Norm
+
+Mixtral triggered a wave. After January 2024, MoE architecture became unavoidable:
+
+- **DeepSeek V2/V3**: MoE with innovations on attention (Multi-Head Latent Attention)
+- **Grok-1** (xAI): 314B parameters in MoE architecture, made open-source
+- **LLaMA 4** (Meta): adopts MoE with the Scout and Maverick models
+- **Qwen 2.5 MoE** (Alibaba): MoE variant of the Qwen family
+- **Gemini** (Google): also uses MoE internally
+
+MoE is now an industry standard. The intuition is simple: why pay to activate parameters that aren't useful for the current query? That's waste. Intelligent routing solves this problem.
+
+<Callout type="warning" title="The Challenges of MoE in Practice">
+MoE isn't without drawbacks. **Total memory** remains high (all experts must be loaded in VRAM, even if only 2 are active). **Load balancing** is tricky and can degrade performance if poorly calibrated. And **communication overhead** between GPUs for routing can become a bottleneck on very large clusters. But for inference, the gains are undeniable.
+</Callout>

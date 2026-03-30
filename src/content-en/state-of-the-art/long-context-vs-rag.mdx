@@ -1,0 +1,97 @@
+---
+title: "Long Context vs RAG: When to Use What?"
+description: "Models with extended context windows (128K-1M tokens) call into question the need for RAG. Comparative analysis of both approaches and a decision guide."
+---
+
+## The Twist: Models Now Read Thousands of Pages
+
+GPT-5.4: 1M tokens. Claude Sonnet 4.6: 1M tokens. Gemini 3.1 Pro: 1M tokens. Llama 4 Scout: up to 10M tokens.
+
+With 1M tokens (or even 10M for Llama 4 Scout), you can stuff **hundreds of pages** directly into the prompt. Why still build a complicated RAG pipeline with chunking, embeddings, vector databases, reranking, and all the plumbing that comes with it?
+
+It's a serious question. A few years ago, the context window was 4K tokens and RAG was indispensable. In 2026, with 1M token windows (or even 10M), the landscape has fundamentally changed. But the answer isn't as simple as you might think.
+
+<Callout type="info" title="The Real Question">
+Long context vs RAG isn't a philosophical debate — it's a **concrete tradeoff** between costs, latency, quality, and maintenance complexity. The best choice depends on YOUR numbers, not Twitter opinions.
+</Callout>
+
+## Advantages of Long Context
+
+**Radical simplicity**: zero RAG pipeline. No chunking to calibrate, no embeddings to choose, no vector database to maintain, no reranking to optimize. You dump the docs into the prompt, the model does the rest. Development time goes from weeks to minutes. Maintenance? Nearly nonexistent.
+
+**Complete and simultaneous access**: the model sees ALL the corpus at the same time. It can identify subtle patterns, cross-reference information from different sections, detect contradictions, synthesize an overview. It's perfect for questions that require seeing the **big picture** — for example, "summarize the main trends of this 200-page report" or "are there contradictions between chapters 3 and 7?"
+
+**Zero retrieval loss**: RAG can miss relevant documents. If your query doesn't match well with the embeddings of important passages, those passages aren't retrieved. Retrieval recall is never 100%. With long context, everything is there — no risk of missing a crucial passage.
+
+**Zero configuration**: no embedding model to choose, no chunk size to optimize, no overlap to calibrate, no top-k to tune. All those design decisions of a RAG pipeline disappear.
+
+## Advantages of RAG
+
+**Massive scalability**: long context is limited to a few million tokens at most. RAG can index **billions** of tokens without issue. An enterprise knowledge base with thousands of documents, a scientific corpus of millions of articles — only RAG can handle these volumes.
+
+**Costs**: this is often the decisive argument.
+
+| Approach | Input tokens | Cost per query (GPT-5.4) |
+|---|---|---|
+| RAG (5 passages) | 2,000 | ~$0.01 |
+| Long context 50K | 50,000 | ~$0.25 |
+| Long context 200K | 200,000 | ~$1.00 |
+| Long context 1M | 1,000,000 | ~$5.00 |
+
+(2026 update: prices have dropped compared to 2024, but the long-context/RAG ratio remains similar.)
+
+Sending 1M tokens per query? With 1,000 queries per day, that's **$10,000 per day**. RAG at $0.02 per query costs $20 per day. The factor is 500x. For high-volume applications, long context is simply financially impractical.
+
+**Latency**: every input token must be processed by the model before it starts generating.
+- RAG: ~200ms (vector search) + ~50ms (prefill 2K tokens) = **~250ms** before the first token
+- Long context 200K: **5-15 seconds** just for prefill, before even starting to answer
+- Long context 1M: **30-60 seconds** of prefill
+
+For an interactive application (chatbot, assistant), 15 seconds of waiting is an eternity.
+
+**Focused precision**: RAG returns EXACTLY the relevant passages, focusing the model's attention. With a 500-page long context, the model has to find the needle in a haystack — and it's not always good at that.
+
+<Callout type="paper" title="Lost in the Middle">
+A well-documented phenomenon: LLMs pay less attention to information located in the **middle** of a long context. Beginning and end? Well retained. Middle? Partially forgotten. This is an attentional bias related to the position distribution seen during training. RAG elegantly works around this problem by only returning relevant passages, placing them in a high-attention position.
+</Callout>
+
+**Data freshness**: adding a new document to RAG = a few seconds (embed + index). With long context, you need to retransmit the entire corpus with each query — no notion of incrementality.
+
+## Practical Decision Table
+
+**Use long context if:**
+- Small corpus (< 50K tokens, roughly 30-40 pages)
+- Questions requiring an overview or cross-referencing information
+- Development simplicity = absolute priority
+- Budget allows the per-query cost
+- Few queries per day (< 100)
+- Quick prototype or proof of concept
+
+**Use RAG if:**
+- Large corpus (> 100K tokens)
+- Targeted questions calling for precise answers
+- High query volume (hundreds/thousands per day)
+- Critical latency (< 1 second)
+- Tight budget
+- Documents that change frequently
+
+**Use a hybrid approach if:**
+- Varied questions (some local, some global)
+- Need for maximum precision
+- RAG identifies relevant documents, long context allows reading them in full
+
+<Callout type="tip" title={"The Smart Hybrid Approach"}>
+The best strategy is often: use RAG to **find** the relevant documents (retrieval), then inject the **complete documents** (not just 512-token chunks) in long context. You combine retrieval precision (finding the right docs) with expanded context (reading the entire document, not just an excerpt). It's the best of both worlds.
+</Callout>
+
+## The Future Will Bring Them Closer
+
+Inference costs are dropping exponentially (what costs $10 today will probably cost $0.10 in 2-3 years). Models are developing better attention over long contexts (the "lost in the middle" problem is fading). RAG is enriched with Graph RAG, agents, and multi-modal retrieval.
+
+The tension will likely resolve through **convergence**: future models will have native retrieval built into the architecture (some research is heading in this direction), and RAG systems will use increasingly long contexts for post-retrieval reasoning.
+
+<Callout type="warning" title="No Universal Solution">
+Analyze YOUR numbers: data volume, budget, acceptable latency, question types, update frequency. A well-optimized simple RAG often remains faster and cheaper than poorly used long context. Conversely, long context on a small corpus is unbeatable in simplicity. Don't follow trends — measure and decide.
+</Callout>
+
+The real lesson: long context and RAG aren't enemies. They're two complementary tools with different strengths. Use whichever (or the hybrid approach) best answers YOUR specific use case.

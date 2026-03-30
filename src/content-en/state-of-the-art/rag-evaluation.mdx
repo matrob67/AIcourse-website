@@ -1,0 +1,152 @@
+---
+title: "RAG Evaluation: RAGAS and Metrics"
+description: "Complete methodology for evaluating a RAG system: the RAGAS framework, retrieval and generation metrics, and building evaluation benchmarks."
+---
+
+
+
+## The Problem: How Do You Know If Your RAG Actually Works?
+
+You've spent hours building your RAG pipeline. You've split your documents, chosen your embeddings, hooked up your LLM. You ask a question, you get an answer that looks correct. But "looks correct" isn't a metric.
+
+A RAG system is a chain with lots of weak links. And each link can break independently:
+- **Poor document splitting**: the retriever only finds incomplete fragments
+- **Unsuitable embeddings**: results are semantically off target
+- **The LLM hallucinates**: it invents facts that aren't in the retrieved documents
+- **Off-topic**: the answer is factually correct but doesn't address the question asked
+
+The worst part is that these problems are often invisible. The model answers with unshakeable confidence, even when it's talking nonsense. Without systematic evaluation, you're navigating blind in a fog of "looks okay."
+
+<Callout type="info" title="Three Dimensions to Measure">
+**Retrieval**: are the right docs found? **Faithfulness**: does the answer lie? **Relevance**: does it actually answer the question?
+</Callout>
+
+## RAGAS: The Standard Framework
+
+RAGAS (Retrieval-Augmented Generation Assessment) has become the open-source reference for evaluating RAG systems. Its central idea: use an LLM as an automatic judge to score 4 complementary metrics. It's "LLM-as-Judge" applied to RAG evaluation.
+
+### Faithfulness
+
+The question here: is the LLM's answer **grounded** in the retrieved documents, or is it making things up?
+
+Imagine a student taking an oral exam. The jury gives them reference documents. If they say something that isn't in any document, it's a hallucination.
+
+The concrete process:
+1. An LLM decomposes the answer into **individual claims** (factual assertions)
+2. For each claim, the LLM checks: "Does one of the retrieved documents support this assertion?"
+3. Score = (number of supported claims) / (total number of claims)
+
+A score of 0.8 means 80% of assertions are supported by the documents. The remaining 20% are potential hallucinations.
+
+### Answer Relevancy
+
+The answer can be perfectly faithful to the documents... but completely off-topic. You ask "What is the price of product X?" and the RAG responds with technical specifications. Faithful, but useless.
+
+RAGAS measures relevancy in a clever way:
+1. The LLM generates **hypothetical questions** that the answer could satisfy
+2. You compare these hypothetical questions with the original question (via cosine similarity)
+3. Score = average similarity between generated questions and the real question
+
+If the answer is relevant, the generated questions will resemble the original question. If it's off-topic, the hypothetical questions will be very different.
+
+### Context Precision
+
+Are the relevant documents well-ranked at the top of the ranking? Because the LLM pays more attention to the first documents in the context.
+
+| Rank | Relevance |
+|---|---|
+| Top 1 | Relevant |
+| Top 2 | Not relevant |
+| Top 3 | Relevant |
+
+A relevant document at position 1 is worth more than a relevant document at position 10. Context Precision captures this notion: relevant documents at the beginning count more.
+
+### Context Recall
+
+Did you retrieve **everything** needed to answer correctly? This metric requires a human-annotated reference answer (which is what makes it more costly). The LLM checks: for each element of the reference answer, does at least one retrieved document support it?
+
+```python
+from ragas import evaluate
+from ragas.metrics import faithfulness, answer_relevancy
+
+results = evaluate(
+    dataset=eval_dataset,
+    metrics=[faithfulness, answer_relevancy],
+)
+```
+
+<Callout type="tip" title="Start with Faithfulness and Relevancy">
+These two metrics don't require manually annotated answers. Context Recall does. Deploy the two easy ones first for quick feedback, then invest in human annotation if your use case justifies it.
+</Callout>
+
+## Classic Retrieval Metrics
+
+Beyond RAGAS, classic Information Retrieval metrics remain very useful for evaluating the retriever alone, independently of the LLM.
+
+**Recall@K**: what proportion of relevant documents appears in the top K results?
+
+$$\text{Recall@10} = \frac{\text{relevant docs found in top 10}}{\text{total relevant docs}}$$
+
+A Recall@10 of 0.9 means 90% of relevant documents are in your top 10 results. It's the most important metric for the retriever.
+
+**MRR** (Mean Reciprocal Rank): at what rank on average does the first good document appear? If the first relevant document is always at position 1, MRR = 1. If it's at position 3 on average, MRR = 1/3.
+
+**NDCG@K** (Normalized Discounted Cumulative Gain): a more sophisticated metric that accounts for the complete quality of the ranking, not just the first relevant result. It weights each result by its position: a relevant document at the top of the ranking contributes more to the score than a relevant document at the bottom.
+
+## Building a Solid Benchmark
+
+A good RAG benchmark is like a good exam: it must cover simple cases, ambiguous cases, and trick cases.
+
+### Step 1: Collect Diverse Questions
+
+- **Real questions** from production logs (the best ones, as they're representative)
+- **Synthetic questions** generated by an LLM from your documents
+- **Expert questions** from domain specialists (for subtle cases)
+- **Adversarial questions** (to test limits: out-of-scope, ambiguous, multi-hop questions)
+
+### Step 2: Annotation
+
+For each question, annotate:
+- The **expected answer** (ground truth)
+- The **relevant passages** in the document base
+- The **difficulty level** (simple / medium / complex)
+
+### Step 3: Benchmark Size
+
+- **Minimal**: 50 questions (sufficient to detect major problems)
+- **Recommended**: 200-500 questions (statistically reliable results)
+- **Complete**: 1000+ (exhaustive coverage, necessary for production)
+
+<Callout type="paper" title="Automatic Benchmark Generation">
+RAGAS and DeepEval can automatically generate evaluation questions from your documents. It's an excellent starting point, but always supplement with manual questions to cover edge cases that the LLM won't anticipate.
+</Callout>
+
+## Production Monitoring
+
+A static benchmark is great for development. But in production, your documents change, user questions evolve, and quality can degrade silently. You need continuous monitoring.
+
+| Metric | Source | Frequency |
+|---|---|---|
+| Faithfulness | RAGAS on sample | Daily |
+| "I don't know" rate | Production logs | Real-time |
+| User feedback | Thumbs up/down | Continuous |
+| P50/P99 latency | Infra monitoring | Real-time |
+
+### A/B Testing
+
+Want to compare two RAG configurations (different chunking, different embeddings, different prompt)? Run them in parallel in production, measure metrics on each variant, verify statistical significance, then gradually deploy the winner.
+
+<Callout type="warning" title="LLM-as-Judge Has Its Biases">
+RAGAS uses an LLM to evaluate. This judge LLM isn't neutral: it tends to favor long, well-formatted answers, or answers written in a style similar to its own. Regularly cross-check with human evaluations to calibrate and detect blind spots.
+</Callout>
+
+## Other Evaluation Frameworks
+
+RAGAS isn't the only tool. The ecosystem has grown:
+
+- **DeepEval**: comprehensive framework with customizable metrics and CI/CD integration
+- **TruLens**: evaluation + monitoring with detailed pipeline tracing
+- **Phoenix (Arize)**: LLM observability with embedding visualization
+- **LangSmith**: evaluation platform integrated into the LangChain ecosystem
+
+Evaluating a RAG isn't a one-time event you do before deployment. It's a continuous process. A RAG in production requires an automated evaluation pipeline that detects regressions over time and guides iterative improvements.

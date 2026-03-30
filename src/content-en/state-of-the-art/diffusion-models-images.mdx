@@ -1,0 +1,145 @@
+---
+title: "Diffusion Models: DDPM, DDIM, CFG"
+description: "Understanding the mathematical foundations of diffusion models: the noising/denoising process, DDPM and DDIM schedulers, and Classifier-Free Guidance."
+---
+
+## The Core Idea: Learning to "De-noise"
+
+**Picture this**: you start with pure white noise --- a completely random image, like static on an old TV. Then you show a neural network how to remove a tiny bit of noise at each step, until you get a coherent image. That's diffusion.
+
+It's counterintuitive but brilliant. Instead of learning to directly generate an image ("draw a cat"), you learn to progressively remove noise ("remove the noise that isn't a cat"). This reformulation of the problem is the key to the entire paradigm.
+
+<Callout type="info" title={"The Sculptor Analogy"}>
+Diffusion models work like a sculptor standing before a shapeless block of marble (the white noise). With each chisel strike (denoising step), they remove a bit of material. After 50 strikes, a statue emerges. The neural network learns exactly which "piece of noise" to remove at each step to reveal the image hidden in the chaos.
+</Callout>
+
+## DDPM (Denoising Diffusion Probabilistic Models): The Founder
+
+### The Forward Process (Progressive Noising)
+
+At each step t, we add a little bit of Gaussian noise to the image:
+
+$$q(x_t \mid x_{t-1}) = \mathcal{N}(x_t;\ \sqrt{1 - \beta_t} \cdot x_{t-1},\ \beta_t \cdot I)$$
+
+In simple terms: x_t is the image at step t, and beta_t controls how much noise we add. It's like adding a layer of snow on a landscape: at each step, the landscape is a little more covered. After 1,000 steps, you see nothing but snow --- the original image has completely disappeared into pure Gaussian noise.
+
+### The Reverse Process (Denoising)
+
+The model (a UNet or a Transformer) learns to do the reverse: predict how to remove noise step by step:
+
+$$p_\theta(x_{t-1} \mid x_t) = \mathcal{N}(x_{t-1};\ \mu_\theta(x_t, t),\ \sigma_t^2 \cdot I)$$
+
+### Training: Elegant and Simple
+
+The training objective is remarkably simple:
+
+$$\mathcal{L} = \mathbb{E}\left[\|\varepsilon - \varepsilon_\theta(x_t, t)\|^2\right]$$
+
+epsilon is the noise that was added to the image, and epsilon_theta is the model's prediction. Concretely, during training: we take an image, add noise at a random step t, and ask the model to predict what noise was added. If its prediction is good, it can remove that noise at inference time. It's just an L2 norm regression --- no complicated loss.
+
+### The Problem: Slowness
+
+The original DDPM requires about 1,000 sequential denoising steps to produce a quality image. At one forward pass of the network per step, that takes several minutes. Completely impractical for interactive use or production.
+
+
+
+## DDIM: The Revolutionary Speedup
+
+### The Fundamental Insight
+
+DDIM (Denoising Diffusion Implicit Models) makes a crucial observation: the denoising process doesn't have to be **stochastic** (i.e., random at each step). You can make it **deterministic** and **skip steps** without losing much quality.
+
+Instead of 1,000 steps, you can use 20-50 steps and get an image that's almost as good. Going from several minutes to 10-20 seconds --- a 20-50x speedup without retraining the model.
+
+### Remarkable Properties
+
+- **Deterministic**: same initial noise = same generated image every time (perfect reproducibility)
+- **Step skipping**: you choose how many steps to use after training, without modifying the model
+- **Inversion**: you can "invert" a real image back into noise, which opens the door to image editing (you invert, change the prompt, and regenerate)
+
+<Callout type="paper" title={"DDIM's Key Insight"}>
+DDIM shows that the denoising process doesn't need to be random. By making it deterministic, you get a direct and reproducible mapping: noise to image. And since this mapping is continuous, you can skip intermediate steps without major degradation. It's like discovering you don't need 1,000 drafts to write a good text --- 20 well-targeted revisions are enough.
+</Callout>
+
+## Noise Schedules: Controlling the Speed of Noise
+
+The noise schedule beta_t defines how fast noise is added in the forward process. It's a crucial design choice:
+
+- **Linear**: beta increases linearly from 0.0001 to 0.02. Simple but not optimal --- noise accumulates too fast in the middle of the process.
+- **Cosine**: beta follows a cosine curve, which adds noise more uniformly. Better for high-quality images, because the model has more "time" to work on fine details.
+- **Scaled Linear**: an adjusted variant used by Stable Diffusion, a compromise between simplicity and quality.
+
+The choice of schedule significantly affects image quality and diversity. A bad schedule can produce blurry images (too much noise too fast) or images lacking detail (not enough noise --- the model doesn't destroy the image enough to learn to reconstruct it).
+
+## Classifier-Free Guidance (CFG): Making the Model Obedient
+
+### The Problem Without Guidance
+
+Without guidance, the model generates images vaguely related to the prompt but without precision. You ask for "a ginger cat on a roof" and you get... something blurry that vaguely resembles an animal. The model is too "free" and produces generic results.
+
+### The Solution: Training With and Without Text
+
+During training, the conditional text is randomly replaced with an empty token (10-20% of the time). The model thus learns to generate in two modes:
+- **With** the text (epsilon_cond): generation guided by the prompt
+- **Without** the text (epsilon_uncond): free, unconditioned generation
+
+At inference, the two predictions are combined:
+
+$$\varepsilon_{\text{guided}} = \varepsilon_{\text{uncond}} + w \times (\varepsilon_{\text{cond}} - \varepsilon_{\text{uncond}})$$
+
+**The intuition**: epsilon_uncond is what the model would naturally generate without constraints. epsilon_cond is what it generates while following the prompt. The difference (epsilon_cond - epsilon_uncond) represents the "direction" that brings the image closer to the prompt. The factor w amplifies this direction. The larger w is, the more you force the model to stick to the prompt.
+
+### Tuning the Guidance Scale
+
+- **w=1**: no additional guidance (the model naturally follows the prompt, without amplification)
+- **w=7-12**: standard guidance (good compromise between prompt fidelity and visual quality)
+- **w>15**: guidance too strong (the model sticks to the prompt but produces saturated colors, artifacts, repetitive textures)
+
+<Callout type="tip" title="Tuning the Guidance Scale in Practice">
+Start with **w=7.5** for Stable Diffusion and **w=3.5** for Flux. If the image is too generic and doesn't follow the prompt well, increase w. If the image has saturated colors or visual artifacts, decrease w. It's the hyperparameter with the biggest impact on perceived image quality --- it's the first one to adjust.
+</Callout>
+
+## Latent Diffusion: The Optimization That Changed Everything
+
+### The Problem: Diffusing in Pixel Space Is Too Expensive
+
+Running diffusion directly on pixels requires enormous computation. A 512x512 RGB image contains 512 x 512 x 3 = 786,432 values. Each denoising step has to process all of that with a heavy neural network.
+
+### The Solution: Compress First, Diffuse Later
+
+Instead of diffusing pixels, we operate in a **compressed latent space**:
+
+1. A **VAE (Variational Autoencoder) encoder** compresses the image: 512x512x3 -> 64x64x4 (16,384 values instead of 786,432)
+2. **Diffusion** operates in this compressed space (48x smaller)
+3. A **VAE decoder** reconstructs the image from the latent space
+
+Result: **48x less computation** per diffusion step, with nearly imperceptible quality loss. It's this innovation that made Stable Diffusion usable on a consumer GPU --- without it, only datacenter clusters could generate images.
+
+## Flow Matching: The Modern Alternative
+
+### A More Elegant Formulation
+
+Flow Matching (used by Flux and SD3) reformulates diffusion as an **optimal flow** between the noise distribution and the image distribution. Instead of noising then denoising in 1,000 small stochastic steps, you learn a direct and optimal path between the two distributions.
+
+Concrete advantages:
+- More stable to train (fewer numerical instabilities and exploding losses)
+- Better quality with very few steps (1-4 for Flux schnell)
+- Cleaner mathematical formulation that's easier to analyze
+
+This is the direction research is heading: replacing DDPM with Flow Matching as the standard training paradigm for image generation.
+
+<Callout type="warning" title={"The Hidden Complexity Behind Ease of Use"}>
+Behind the apparent simplicity of Stable Diffusion ("I type a prompt, I get an image") lies sophisticated mathematics. Understanding the foundations --- noise schedule, sampling methods, guidance scale --- is essential for fine-tuning, debugging, and optimization. But for an end user, this complexity is fortunately abstracted away.
+</Callout>
+
+## The Evolution of the Field
+
+Diffusion models are evolving rapidly on several fronts:
+
+- **Speed**: generation in 1-4 steps with Flux schnell and distillation methods
+- **Quality**: 2K+ resolutions with impressive fine details
+- **Control**: ControlNet for guiding pose, IP-Adapter for maintaining character consistency
+- **Architectures**: Diffusion Transformers (DiT) are progressively replacing traditional U-Nets
+- **Training**: Flow Matching is supplanting classic DDPM
+
+The field has reached a "quality plateau" for static images, but continues to optimize speed, control, and efficiency. The next major advances will likely come from extending to multimodal (video, 3D, audio).

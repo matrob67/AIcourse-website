@@ -1,0 +1,125 @@
+---
+title: "QAT: Quantization-Aware Training"
+description: "Unlike post-training quantization (GPTQ, AWQ), QAT simulates quantization during training so the model learns to compensate for precision errors."
+---
+
+## The Fundamental Problem with Post-Training Quantization
+
+With post-training quantization (PTQ) methods like GPTQ or AWQ, the process is straightforward: you take an already trained model, compress its weights to reduced precision (typically 4 bits), and hope quality holds up. These methods are clever — GPTQ compensates errors via the Hessian, AWQ protects important channels — but they share a fundamental limitation: **the model was never trained to work with quantized weights**. It discovers quantization after the fact, like a musician who finds out on concert day that their piano only has half its keys left.
+
+QAT (Quantization-Aware Training) reverses this logic: instead of quantizing after training, you **simulate quantization during training** so the model learns to function with reduced-precision weights. The musician rehearses with the broken piano, and they learn to play beautiful pieces despite the missing keys.
+
+## PTQ vs QAT: Two Philosophies
+
+| | **PTQ** (Post-Training Quantization) | **QAT** (Quantization-Aware Training) |
+|---|---|---|
+| **When** | After training | During training |
+| **Principle** | Compress a frozen model | Train the model to tolerate compression |
+| **4-bit quality** | Good (slight degradation) | Excellent (nearly lossless) |
+| **2-bit quality** | Mediocre to unusable | Still usable |
+| **GPU cost** | Low (a few hours of calibration) | High (full training or fine-tuning) |
+| **Speed** | Fast (minutes to hours) | Slow (hours to days) |
+| **Data required** | 128-256 calibration examples | Complete training dataset |
+| **Use case** | Fast deployment, prototyping | Demanding production, embedded devices |
+| **Examples** | GPTQ, AWQ, NF4 | BitNet, Mistral Forge |
+
+<Callout type="info" title={"In summary"}>
+PTQ = quantize a finished model. It's fast and practical, but the model endures quantization.
+QAT = train a model that knows it will be quantized. It's slower, but the model actively adapts.
+</Callout>
+
+## How QAT Works
+
+### Fake Quantization Nodes
+
+The core of QAT relies on a mechanism called **fake quantization** (simulated quantization). During the forward pass, you insert special operations that simulate the effect of quantization on weights and activations:
+
+1. **Quantize**: convert the FP32/FP16 weight to INT4 (round to the 16 available discrete levels)
+2. **Dequantize**: immediately convert back to FP32/FP16
+
+$$w_q = \text{Dequant}(\text{Quant}(w)) = \Delta \cdot \text{round}\left(\frac{w}{\Delta}\right)$$
+
+Where $\Delta$ is the quantization step (the gap between two discrete levels). The result $w_q$ is still a floating-point number, but it can only take a limited number of distinct values — exactly like a real quantized weight.
+
+The model thus "sees" the rounding errors during training. Its gradients account for this quantization noise, and the weights adjust to compensate. It's like training to aim with a rifle whose sight is slightly off: after a while, you internalize the offset and still hit the target.
+
+<Callout type="tip" title={"Why 'fake'?"}>
+It's called "fake" quantization because the computations remain in floating point during training. You're only simulating the effects of quantization (rounding errors) without actually switching to integer arithmetic. The model thinks it's running in INT4, but the computations are still in FP32. It's at deployment time that you apply real quantization.
+</Callout>
+
+### The Straight-Through Estimator (STE)
+
+Here's the main technical problem with QAT: the `round()` function is **non-differentiable**. Its derivative is zero almost everywhere, and undefined at transition points. In other words, gradients can't flow through the quantization operation. Without gradients, no backpropagation, and without backpropagation, no learning.
+
+The solution is the **Straight-Through Estimator** (STE), a mathematical trick proposed by Bengio et al. (2013). The principle is brutal but effective: **during backpropagation, you act as if quantization doesn't exist**. You let the gradient pass straight through, without modification.
+
+$$\frac{\partial w_q}{\partial w} \approx 1$$
+
+Concretely:
+- **Forward pass**: weights are quantized then dequantized → the model sees quantization noise
+- **Backward pass**: gradients pass through the quantization operation as if it were a simple identity function → weights can update normally
+
+It's a rough approximation in theory, but it works remarkably well in practice. The model receives gradients that tell it "move this weight in this direction," and even though these gradients don't exactly account for the rounding, the overall movement pushes weights toward values that survive quantization well.
+
+<Callout type="warning" title={"The limits of STE"}>
+The STE is a heuristic, not an exact solution. At very low precisions (1-2 bits), the approximation becomes less reliable and training can become unstable. More sophisticated variants exist (like LSQ — Learned Step Size Quantization), which also learn the quantization step $\Delta$ with dedicated gradients.
+</Callout>
+
+### The Complete Pipeline
+
+Here are the typical steps of QAT training:
+
+1. **Start from a pre-trained model** in full precision (FP16/FP32)
+2. **Insert fake quantization nodes** after each linear layer (and optionally on activations)
+3. **Fine-tune the model** on a dataset, with a reduced learning rate (typically 10x to 100x lower than pre-training) — the weights gradually adapt to quantization noise
+4. **Export the model** by replacing fake quantization with real INT4 operations — this is the final deployable model
+
+## Why QAT Outperforms PTQ
+
+### At 4 Bits: The Difference Is Measurable
+
+In INT4, PTQ methods like GPTQ and AWQ already produce impressive results — the degradation is often on the order of 1-2% on benchmarks. But QAT does better: it nearly eliminates this degradation entirely. The learned weights have converged to values that "land right" on quantization levels, instead of suffering forced rounding.
+
+### At 2 Bits: The Gulf
+
+It's at very low precision that the gap becomes dramatic. At 2 bits, each weight can only take 4 distinct values. PTQ at this precision produces practically unusable models: perplexity explodes, responses become incoherent. QAT, on the other hand, can maintain still-usable quality at 2 bits, because the model learned during thousands of steps to function with this extreme constraint.
+
+### Mistral Forge: QAT at Industrial Scale
+
+Mistral AI uses its Mistral Forge tool to offer models quantized to 4 bits with quality described as nearly lossless. This performance is only possible with QAT: a quantization pipeline that integrates training into the loop, not just post-hoc compression. Mistral Forge combines a state-of-the-art quantization stack with optimized fine-tuning to produce 4-bit models that rival their full-precision versions on benchmarks.
+
+<Callout type="info" title={"Why providers invest in QAT"}>
+QAT is expensive in GPU, but for a model provider, the math is simple: quantize a model once with QAT, and you pay the training cost once to then serve millions of inferences with a smaller, faster model of better quality than PTQ. The extra cost of QAT is amortized at scale.
+</Callout>
+
+## The Drawbacks of QAT
+
+### 1. High GPU Cost
+
+QAT requires fine-tuning or full training, which demands powerful GPUs. For a 70B parameter model, even QAT fine-tuning can require multiple A100/H100 GPUs for hours or even days. By comparison, GPTQ quantization of the same model takes a few hours on a single GPU.
+
+### 2. Training Data Required
+
+Where PTQ only needs 128-256 calibration examples, QAT requires a real training dataset, large enough for fine-tuning to be meaningful. This means having the data, preparing it, and managing the training pipeline.
+
+### 3. Technical Complexity
+
+Setting up a QAT pipeline requires more expertise than simple PTQ quantization. You need to choose the learning rate, number of epochs, which layers to quantize, the warm-up strategy, and monitor training stability. A PTQ, by comparison, is often a single command.
+
+## When to Use What?
+
+**Choose PTQ (GPTQ, AWQ, NF4) when:**
+- You want to quickly deploy an existing model
+- Standard 4-bit quantization is sufficient for your use case
+- You don't have the GPU resources for fine-tuning
+- You're exploring different models and want to compare quickly
+
+**Choose QAT when:**
+- You need the best possible quality at low precision
+- You're targeting very low precisions (2-3 bits) where PTQ fails
+- The model will be deployed at scale (the training cost is amortized by inference savings)
+- You're deploying on embedded devices with strict memory constraints
+
+<Callout type="tip" title={"The winning combination"}>
+In practice, QAT is often used by model providers (Mistral, Meta, Google) who have the resources to train once and serve at scale. End users typically use PTQ to adapt models to their specific needs. If an official QAT model exists for your use case, it's almost always the best choice.
+</Callout>

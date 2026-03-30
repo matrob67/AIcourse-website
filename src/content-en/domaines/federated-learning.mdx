@@ -1,0 +1,67 @@
+---
+title: "Federated Learning: Distributed Training"
+description: "Federated learning enables training AI models on distributed data without centralizing it, preserving the confidentiality of medical data."
+---
+
+
+
+## The Dilemma: More Data = More Powerful, But the Data Is Confidential
+
+A hospital wants to train a breast cancer detection model. It has 10,000 annotated mammograms. Not bad, but a robust model needs 100,000. Ten hospitals together would have enough data, but none can send their patient records to a central server: GDPR in Europe and HIPAA in the United States forbid it, and patients haven't consented to such sharing. This is the fundamental dilemma of medical AI: the algorithm thirsts for massive data, but medicine demands strict confidentiality.
+
+**Federated learning** solves this dilemma with a simple but powerful idea: data stays at home, only model parameters travel. It's like an assembly where each participant votes locally and only transmits their vote (not their private opinions or motivations) to reach a global consensus. The data never leaves its hospital of origin.
+
+<Callout type="info" title="The Fundamental Problem">
+The best medical data is distributed across thousands of hospitals around the world. Centralizing this data is often legally impossible (GDPR, HIPAA), politically impractical (competition between hospitals), or technically unfeasible (volumes too large). Federated learning enables training a model on all this data without it ever leaving its hospital of origin.
+</Callout>
+
+## How It Works: The FedAvg Algorithm
+
+The fundamental federated learning algorithm, FedAvg (Federated Averaging), works in six steps:
+
+1. A **central server** distributes an identical initial model to all participating hospitals
+2. Each hospital **trains the model locally** on its own data for a few epochs (passes through the data)
+3. The **parameter updates** (the network weight changes, not the data itself) are sent to the central server
+4. The server computes the **weighted average** of all received updates (weighted by the number of data points from each participant)
+5. The updated model is **redistributed** to all participants
+6. **Repeat** until convergence
+
+The analogy: imagine 100 professors who each teach on their own, then regularly meet to share what they've learned (not their students' papers, just the lessons drawn). Collective knowledge progresses without anyone having access to the others' students.
+
+Variants improve FedAvg for difficult cases: **FedProx** handles data heterogeneity between participants (each hospital has different patients), **SCAFFOLD** corrects local model drift relative to the global model, and **FedBN** uses local batch normalization to adapt to each site's specificities.
+
+<Callout type="tip" title={"Communication Is the Bottleneck"}>
+In federated learning, the network is often slower than local computation. Sending millions of parameters at each round is bandwidth-expensive. Techniques like gradient compression, sparsification (only sending parameters that changed significantly), and selective exchange (only exchanging certain model layers) considerably reduce the required bandwidth.
+</Callout>
+
+## Real Medical Applications: It Works at Scale
+
+**FeTS** (Federated Tumor Segmentation): a brain tumor segmentation model trained in a federated manner on data from 71 institutions worldwide. The key result: performance is comparable to a model that would have been trained centrally on all the data combined. Confidentiality is preserved without sacrificing quality.
+
+**EXAM**: detection of critical oxygenation risk in COVID patients, trained on data from 20 hospitals during the pandemic. Speed of deployment was crucial. **Mammography**: federated breast cancer detection across screening centers, benefiting from population diversity without centralization.
+
+In pharma, the **MELLODDY** consortium brings together 10 major pharmaceutical companies (Amgen, AstraZeneca, Bayer, GSK...) that use federated learning for drug discovery. Each company benefits from collective knowledge without ever revealing its proprietary molecules to competitors. It's a unique case of coopetition enabled by technology.
+
+<Callout type="paper" title="FeTS: Large-Scale Proof of Concept">
+The Federated Tumor Segmentation Challenge demonstrated that a model trained in a federated manner across 71 institutions achieves performance comparable to a centralized model, while preserving data confidentiality. This is proof that federated learning works at scale in a real medical context.
+</Callout>
+
+## Security and Confidentiality: More Than Just "Distributed"
+
+Caution: not sending raw data doesn't automatically guarantee confidentiality. The **gradients** (parameter updates) exchanged during federated learning can theoretically reveal information about the local data. "Gradient inversion" attacks can reconstruct training images from the gradients. Additional layers of protection are therefore needed.
+
+**Differential privacy** (DP) adds calibrated noise to gradients before sending. This noise is sufficient to make it impossible to extract individual information, while preserving the statistical information useful for learning. The guarantee is mathematical: **(epsilon, delta)-DP** means the probability that an observer can distinguish whether a specific patient was in the data is bounded. The smaller epsilon is, the stronger the privacy, but the more noise degrades model performance. It's a fundamental trade-off.
+
+**Secure aggregation** uses cryptography so the central server never sees the individual contributions from each hospital, only their aggregate. Secret sharing protocols, homomorphic encryption (computing on encrypted data without decrypting it), and hardware trusted enclaves (SGX) are the tools of this protection layer.
+
+## Technical Challenges
+
+**Non-IID (data heterogeneity)**: each hospital's data differs significantly. A Parisian teaching hospital and a rural clinic in Brazil don't have the same patients, the same pathologies, or the same imaging protocols. This heterogeneity degrades performance and requires specially adapted algorithms.
+
+**System heterogeneity**: some hospitals have cutting-edge GPUs, others don't. Some have a fast connection, others a slow and intermittent one. The system must gracefully adapt to these disparities without penalizing the least well-equipped participants.
+
+**Frameworks**: **NVIDIA FLARE** (industrial production), **Flower** (academic research, very flexible), **PySyft** (privacy-focused), **Substra** (French framework developed by Owkin, certified for medical use).
+
+<Callout type="warning" title={"Federated Learning Is Not a Silver Bullet"}>
+It significantly reduces data leakage risks but doesn't completely eliminate them. Without differential privacy or secure aggregation, the exchanged gradients can potentially reveal sensitive information. A secure implementation requires multiple combined layers of protection: federated learning + differential privacy + secure aggregation. Each layer alone is insufficient.
+</Callout>

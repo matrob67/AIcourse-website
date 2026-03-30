@@ -1,0 +1,120 @@
+---
+title: "SqueezeLLM and Ultra-Deep Quantization"
+description: "Compressing to 2-3 bits by intelligently handling extreme values."
+---
+
+
+
+## The Outlier Problem: Why Naive Quantization Fails
+
+LLMs hide an embarrassing secret in their weights: **some channels have values 100 to 1000 times larger than the average**. These extreme values, called *outliers*, are rare (often less than 0.1% of weights) but they completely ruin classical quantization.
+
+To understand why, let's use an analogy. Imagine you need to arrange 1000 books on a shelf, and 999 of them are between 200 and 300 pages. One single book is 15,000 pages. If you create uniform categories ("small," "medium," "large," "huge"), you waste the "huge" category for just one book, and the other 999 end up all crammed into "small" and "medium," with no fine distinction between a 210-page book and a 290-page one.
+
+That's exactly what happens with uniform quantization of LLMs.
+
+<Callout type="info" title="Outliers kill quantization">
+In LLaMA-7B, only 0.1% of channels are outliers, but they occupy **75% of the dynamic range**. With uniform INT4 quantization (16 levels), 8 levels are wasted covering the outlier range, and the remaining 8 must represent 99.9% of the weights. The result: massive precision loss on the values that matter most.
+</Callout>
+
+## SqueezeLLM: Two Simple but Powerful Ideas
+
+SqueezeLLM attacks the outlier problem with a two-pronged strategy. The central idea: treat normal cases and extreme cases separately.
+
+### Idea 1: Non-Uniform Quantization
+
+Instead of spacing quantization levels evenly (0, 1, 2, ..., 15 for INT4), SqueezeLLM places them **where the weights are actually concentrated**. If 80% of weights are between -0.1 and +0.1, then the majority of quantization levels are placed in that interval.
+
+| Real weights | -0.1 | -0.05 | 0.0 | 0.05 | 0.1 | 0.5 | 5.0 |
+|---|---|---|---|---|---|---|---|
+| **Uniform quantization** | 0 | 1 | 2 | 3 | 4 | 5 | 15 (wastes 8 levels) |
+| **Smart quantization** | 1 | 2 | 3 | 4 | 5 | 6 | 15 (uses every level) |
+
+Concretely, SqueezeLLM uses **k-means clustering** on the actual weight distribution to determine optimal levels. Each cluster becomes a quantization level, and each weight is rounded to the nearest cluster center. It's more expensive to compute than uniform quantization, but the precision gain is considerable, especially at low bitwidths (2-3 bits).
+
+### Idea 2: Store Outliers Separately in High Precision
+
+The second idea is even more elegant: **extract the outliers** and store them separately in full precision (FP16), in a sparse format (CSR — Compressed Sparse Row). The rest of the weights are aggressively quantized to INT3 or INT4.
+
+$$\text{Result} = \text{Dense MatMul (quantized weights)} + \text{Sparse MatMul (outliers)}$$
+
+It's like having two parallel channels: a compressed channel for the vast majority of weights, and a precision channel for the few critical values. Since outliers represent only 0.1% of weights, the memory overhead of sparse FP16 storage is negligible — but the quality gain is enormous.
+
+<Callout type="paper" title="Impressive results">
+SqueezeLLM 3-bit achieves **perplexity comparable to GPTQ 4-bit** while being significantly more compact. In other words, you get the same quality with 25% less memory. At 2-bit, SqueezeLLM remains usable where classical methods produce gibberish.
+</Callout>
+
+## Other Advanced Quantization Techniques
+
+SqueezeLLM isn't alone in the race for extreme compression. Several rival approaches tackle the same problem with very different philosophies.
+
+### QuIP: Eliminating Outliers Through Mathematical Transformation
+
+**QuIP** (Quantization with Incoherence Processing) takes the problem in reverse: rather than handling outliers after the fact, it **eliminates them before quantization**. How? By applying a mathematical transformation (multiplication by random orthogonal matrices) that "spreads" extreme values uniformly across all channels. After this transformation, there are no more outliers — the distribution is homogeneous and quantizes easily.
+
+- **QuIP#** improves on the idea by using Hadamard matrices, which are much faster to compute
+- Impressive results at **2-bit**, rivaling models quantized at 4-bit by classical methods
+- Slight computational overhead at inference, offset by optimized GPU kernels
+
+### AQLM: Codebook Quantization
+
+AQLM (Additive Quantization for Language Models) completely changes the paradigm. Instead of representing each weight by a single quantized number, it uses the **sum of vectors** drawn from learned codebooks:
+
+$$\text{Weight} \approx \text{Codebook}_1[\text{idx}_1] + \text{Codebook}_2[\text{idx}_2] + \text{Codebook}_3[\text{idx}_3]$$
+
+Think of it like a color system: instead of storing the exact color of each pixel, you store "base blue + a touch of green + a hint of gray." With a few well-chosen codebooks, you can represent an enormous variety of values with very few bits. AQLM currently gives the **best results at 2-bit**.
+
+### HQQ: Speed Above All
+
+HQQ (Half-Quadratic Quantization) sacrifices a bit of quality to gain massively in speed. It's a **zero-shot** method: no calibration dataset needed, the model quantizes solely from its own internal statistics.
+
+| | HQQ | GPTQ |
+|---|---|---|
+| **Quantization time** | A few seconds | Several hours |
+| **Quality** | Comparable | Reference |
+| **Data needed** | No | Yes (calibration) |
+
+<Callout type="tip" title={"HQQ: the prototyper's tool"}>
+If you need to quickly test a quantized model without waiting hours for calibration, HQQ is unbeatable. Quantizing LLaMA-7B in a few seconds is the kind of thing that changes your development workflow.
+</Callout>
+
+## FP8 Quantization: The Immediate Future
+
+On recent GPUs (H100, L40S, and beyond), the **FP8** (8-bit floating point) format is natively supported by the hardware. It's a quiet revolution:
+
+- **Quasi lossless**: quality loss below 0.1% on most benchmarks
+- **2x faster** than FP16 thanks to dedicated tensor cores
+- **No calibration** needed: just convert the weights
+- Supported by vLLM, TensorRT-LLM, and major serving frameworks
+
+FP8 is the "no compromise" format: you compress by 2x with virtually no loss. For any production deployment on a recent GPU, it's the first reflex to have.
+
+## Practical Guide: Which Method to Choose?
+
+| Method | Bits | Quantization speed | Quality | Best for |
+|---|---|---|---|---|
+| RTN | 4-8 | Instant | Average | Quick tests |
+| GPTQ | 3-4 | Hours | Good | Standard GPU production |
+| AWQ | 4 | Minutes | Very good | GPU production, good tradeoff |
+| HQQ | 2-4 | Seconds | Good | Rapid prototyping |
+| QuIP# | 2-4 | Minutes | Excellent | Extreme compression |
+| AQLM | 2-3 | Hours | Best at 2-bit | Ultra-compression research |
+| GGUF | 2-8 | Minutes | Good | CPU+GPU inference (Ollama) |
+
+<Callout type="warning" title="2-bit: exciting but not yet reliable">
+2-bit quantization produces fascinating results in research, but remains unstable in production. For demanding tasks (math, code, logical reasoning), 4-bit remains the reliable standard. Always test on your specific use case before deploying 2-3 bit.
+</Callout>
+
+## Emerging Trends: The Future of Compression
+
+### Mixed-Precision Quantization
+
+The idea: apply different precisions depending on the importance of each layer in the model. The first and last layers (often the most critical for quality) receive gentle quantization (Q5/Q6), middle layers receive standard quantization (Q4), and the least sensitive layers get aggressive compression (Q3). It's a smart tradeoff between size and quality.
+
+### Quantization-Aware Training
+
+Rather than quantizing after training, you **train the model knowing it will be quantized**. The model learns to be robust to precision loss. The most extreme example: **BitNet**, which trains models directly in 1-bit (ternary: -1, 0, +1). It's radical, but preliminary results are surprisingly good.
+
+### On-Device Quantization
+
+Formats like CoreML (Apple) and TFLite (Google) allow quantizing and running models directly on mobile and edge devices, without depending on the cloud. It's the last piece of the puzzle to democratize embedded AI.
