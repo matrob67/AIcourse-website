@@ -1,8 +1,12 @@
 import fs from "fs";
 import path from "path";
 import matter from "gray-matter";
+import type { Locale } from "./i18n";
 
-const contentDir = path.join(process.cwd(), "src/content");
+function getContentDir(locale: Locale = "fr"): string {
+  const dir = locale === "en" ? "src/content-en" : "src/content";
+  return path.join(process.cwd(), dir);
+}
 
 export interface LessonContent {
   slug: string;
@@ -16,7 +20,8 @@ export interface LessonContent {
   content: string;
 }
 
-export function getLessonContent(partId: string, slug: string): LessonContent | null {
+export function getLessonContent(partId: string, slug: string, locale: Locale = "fr"): LessonContent | null {
+  const contentDir = getContentDir(locale);
   const filePath = path.join(contentDir, partId, `${slug}.mdx`);
   if (!fs.existsSync(filePath)) return null;
 
@@ -30,7 +35,8 @@ export function getLessonContent(partId: string, slug: string): LessonContent | 
   };
 }
 
-export function getAllContentSlugs(): { partId: string; slug: string }[] {
+export function getAllContentSlugs(locale: Locale = "fr"): { partId: string; slug: string }[] {
+  const contentDir = getContentDir(locale);
   const slugs: { partId: string; slug: string }[] = [];
 
   if (!fs.existsSync(contentDir)) return slugs;

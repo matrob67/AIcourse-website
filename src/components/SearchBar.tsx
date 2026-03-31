@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { courseParts } from "@/lib/course-data";
+import { getCourseParts } from "@/lib/course-data";
+import { t } from "@/lib/i18n";
+import type { Locale } from "@/lib/i18n";
 
 interface SearchResult {
   lessonId: string;
@@ -19,26 +21,7 @@ interface SearchResult {
 interface SearchBarProps {
   open: boolean;
   onClose: () => void;
-}
-
-// Build a flat index of all lessons at module load time
-const searchIndex: SearchResult[] = [];
-for (const part of courseParts) {
-  for (const mod of part.modules) {
-    for (const lesson of mod.lessons) {
-      searchIndex.push({
-        lessonId: lesson.id,
-        lessonNumber: lesson.number,
-        lessonTitle: lesson.title,
-        moduleTitle: mod.title,
-        partTitle: part.shortTitle,
-        partId: part.id,
-        slug: lesson.slug,
-        href: `/${part.id}/${lesson.slug}`,
-        keywords: (lesson.keywords ?? []).join(" "),
-      });
-    }
-  }
+  locale: Locale;
 }
 
 function normalize(str: string): string {
@@ -48,26 +31,53 @@ function normalize(str: string): string {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-function search(query: string): SearchResult[] {
-  if (!query.trim()) return [];
-  const terms = normalize(query)
-    .split(/\s+/)
-    .filter((t) => t.length > 0);
-  return searchIndex.filter((item) => {
-    const haystack = normalize(
-      `${item.lessonTitle} ${item.moduleTitle} ${item.partTitle} ${item.keywords}`
-    );
-    return terms.every((term) => haystack.includes(term));
-  });
-}
-
-export default function SearchBar({ open, onClose }: SearchBarProps) {
+export default function SearchBar({ open, onClose, locale }: SearchBarProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const router = useRouter();
+
+  // Build search index per locale
+  const searchIndex = useMemo(() => {
+    const index: SearchResult[] = [];
+    const parts = getCourseParts(locale);
+    for (const part of parts) {
+      for (const mod of part.modules) {
+        for (const lesson of mod.lessons) {
+          index.push({
+            lessonId: lesson.id,
+            lessonNumber: lesson.number,
+            lessonTitle: lesson.title,
+            moduleTitle: mod.title,
+            partTitle: part.shortTitle,
+            partId: part.id,
+            slug: lesson.slug,
+            href: `/${locale}/${part.id}/${lesson.slug}`,
+            keywords: (lesson.keywords ?? []).join(" "),
+          });
+        }
+      }
+    }
+    return index;
+  }, [locale]);
+
+  const search = useCallback(
+    (q: string): SearchResult[] => {
+      if (!q.trim()) return [];
+      const terms = normalize(q)
+        .split(/\s+/)
+        .filter((term) => term.length > 0);
+      return searchIndex.filter((item) => {
+        const haystack = normalize(
+          `${item.lessonTitle} ${item.moduleTitle} ${item.partTitle} ${item.keywords}`
+        );
+        return terms.every((term) => haystack.includes(term));
+      });
+    },
+    [searchIndex]
+  );
 
   // Focus input when opened; reset when closed
   useEffect(() => {
@@ -85,7 +95,7 @@ export default function SearchBar({ open, onClose }: SearchBarProps) {
     const res = search(query);
     setResults(res);
     setActiveIndex(0);
-  }, [query]);
+  }, [query, search]);
 
   // Scroll active item into view
   useEffect(() => {
@@ -161,7 +171,7 @@ export default function SearchBar({ open, onClose }: SearchBarProps) {
           <input
             ref={inputRef}
             type="text"
-            placeholder="Rechercher une section…"
+            placeholder={t(locale, "search.placeholder")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -200,18 +210,18 @@ export default function SearchBar({ open, onClose }: SearchBarProps) {
               className="px-4 py-6 text-sm text-center"
               style={{ color: "var(--muted)" }}
             >
-              Tapez pour rechercher parmi les{" "}
+              {t(locale, "search.typeToSearch")}{" "}
               <span style={{ color: "var(--accent)" }}>
-                {searchIndex.length} sections
+                {searchIndex.length} {t(locale, "search.sections")}
               </span>{" "}
-              du cours
+              {t(locale, "search.ofCourse")}
             </div>
           ) : results.length === 0 ? (
             <div
               className="px-4 py-6 text-sm text-center"
               style={{ color: "var(--muted)" }}
             >
-              Aucun résultat pour{" "}
+              {t(locale, "search.noResults")}{" "}
               <span style={{ color: "var(--foreground)" }}>
                 &ldquo;{query}&rdquo;
               </span>
@@ -235,15 +245,12 @@ export default function SearchBar({ open, onClose }: SearchBarProps) {
                         : "transparent",
                     }}
                   >
-                    {/* Section number badge */}
                     <span
                       className="flex-shrink-0 mt-0.5 text-xs font-mono w-7 text-right"
                       style={{ color: "var(--accent)" }}
                     >
                       {item.lessonNumber}.
                     </span>
-
-                    {/* Titles */}
                     <div className="flex-1 min-w-0">
                       <div
                         className="text-sm font-medium truncate"
@@ -260,8 +267,6 @@ export default function SearchBar({ open, onClose }: SearchBarProps) {
                         {item.moduleTitle}
                       </div>
                     </div>
-
-                    {/* Arrow indicator when active */}
                     {isActive && (
                       <svg
                         className="flex-shrink-0 mt-1 w-3.5 h-3.5"
@@ -305,7 +310,7 @@ export default function SearchBar({ open, onClose }: SearchBarProps) {
               >
                 ↑↓
               </kbd>
-              naviguer
+              {t(locale, "search.navigate")}
             </span>
             <span>
               <kbd
@@ -318,10 +323,10 @@ export default function SearchBar({ open, onClose }: SearchBarProps) {
               >
                 ↵
               </kbd>
-              ouvrir
+              {t(locale, "search.open")}
             </span>
             <span className="ml-auto">
-              {results.length} résultat{results.length > 1 ? "s" : ""}
+              {results.length} {results.length > 1 ? t(locale, "search.results") : t(locale, "search.result")}
             </span>
           </div>
         )}

@@ -4,36 +4,43 @@ import { getLessonContent } from "@/lib/content";
 import { renderMDX } from "@/lib/mdx";
 import LessonNav from "@/components/LessonNav";
 import AdminImagePanel from "@/components/AdminImagePanel";
+import { locales, t } from "@/lib/i18n";
+import type { Locale } from "@/lib/i18n";
 
 interface Props {
-  params: Promise<{ partId: string; slug: string }>;
+  params: Promise<{ locale: string; partId: string; slug: string }>;
 }
 
 export async function generateStaticParams() {
-  return getAllLessons().map((l) => ({
-    partId: l.partId,
-    slug: l.slug,
-  }));
+  return locales.flatMap((locale) =>
+    getAllLessons(locale).map((l) => ({
+      locale,
+      partId: l.partId,
+      slug: l.slug,
+    }))
+  );
 }
 
 export async function generateMetadata({ params }: Props) {
-  const { partId, slug } = await params;
-  const result = getLessonBySlug(partId, slug);
+  const { locale, partId, slug } = await params;
+  const loc = locale as Locale;
+  const result = getLessonBySlug(partId, slug, loc);
   if (!result) return { title: "Not Found" };
   return {
     title: `${result.lesson.number}. ${result.lesson.title} — AI State of the Art`,
-    description: `Section ${result.lesson.number} du cours AI State of the Art : ${result.lesson.title}`,
+    description: `${t(loc, "nav.section")} ${result.lesson.number} : ${result.lesson.title}`,
   };
 }
 
 export default async function LessonPage({ params }: Props) {
-  const { partId, slug } = await params;
-  const result = getLessonBySlug(partId, slug);
+  const { locale, partId, slug } = await params;
+  const loc = locale as Locale;
+  const result = getLessonBySlug(partId, slug, loc);
   if (!result) notFound();
 
   const { lesson, module, part } = result;
-  const { prev, next } = getAdjacentLessons(partId, slug);
-  const content = getLessonContent(partId, slug);
+  const { prev, next } = getAdjacentLessons(partId, slug, loc);
+  const content = getLessonContent(partId, slug, loc);
 
   // Render MDX if content exists, with error handling
   let MDXContent: React.ComponentType | null = null;
@@ -42,7 +49,7 @@ export default async function LessonPage({ params }: Props) {
     try {
       MDXContent = await renderMDX(content.content);
     } catch (e) {
-      mdxError = e instanceof Error ? e.message : "Erreur de rendu MDX";
+      mdxError = e instanceof Error ? e.message : "MDX render error";
     }
   }
 
@@ -58,7 +65,7 @@ export default async function LessonPage({ params }: Props) {
       {/* Header */}
       <div className="mb-8">
         <div className="text-sm text-accent font-medium mb-2">
-          Section {lesson.number}
+          {t(loc, "nav.section")} {lesson.number}
         </div>
         <h1 className="text-3xl font-extrabold mb-3">{lesson.title}</h1>
 
@@ -97,27 +104,22 @@ export default async function LessonPage({ params }: Props) {
           <MDXContent />
         ) : mdxError ? (
           <div className="callout callout-warning">
-            <p className="font-semibold mb-1">Erreur de rendu du contenu</p>
-            <p className="text-sm">Le contenu de cette section contient une erreur de formatage et sera corrigé prochainement.</p>
+            <p className="font-semibold mb-1">{t(loc, "lesson.renderError")}</p>
+            <p className="text-sm">{t(loc, "lesson.renderErrorDesc")}</p>
           </div>
         ) : (
           <div className="callout callout-info">
-            <p className="font-semibold mb-1">📝 Contenu en cours de rédaction</p>
-            <p className="text-sm">
-              Cette section sera bientôt disponible avec des explications détaillées,
-              des illustrations sourcées et des liens vers les papers de référence.
-            </p>
+            <p className="font-semibold mb-1">{t(loc, "lesson.pending")}</p>
+            <p className="text-sm">{t(loc, "lesson.pendingDesc")}</p>
           </div>
         )}
       </div>
 
       {/* Navigation */}
-      <LessonNav prev={prev} next={next} />
+      <LessonNav prev={prev} next={next} locale={loc} />
 
-      {/* Admin: insert image (dev only) */}
-      {process.env.NODE_ENV === "development" && (
-        <AdminImagePanel partId={partId} slug={slug} />
-      )}
+      {/* Admin: insert image */}
+      <AdminImagePanel partId={partId} slug={slug} />
     </div>
   );
 }

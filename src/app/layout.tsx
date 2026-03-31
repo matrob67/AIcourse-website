@@ -39,7 +39,7 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider>
-      <html lang="fr">
+      <html lang="fr" suppressHydrationWarning>
         <head>
           <link rel="manifest" href="/manifest.json" />
           <meta name="theme-color" content="#6366f1" />

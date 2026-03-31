@@ -701,10 +701,37 @@ export const courseParts: Part[] = [
   },
 ];
 
+// ─── i18n support ───────────────────────────────────────────────
+import type { Locale } from "./i18n";
+import { partTitlesEn, moduleTitlesEn, lessonTitlesEn } from "./course-titles-en";
+
+/**
+ * Returns course parts with translated titles for the given locale.
+ * Structure (IDs, slugs, ordering) is always the same — only display strings change.
+ */
+export function getCourseParts(locale: Locale = "fr"): Part[] {
+  if (locale === "fr") return courseParts;
+
+  return courseParts.map((part) => ({
+    ...part,
+    title: partTitlesEn[part.id]?.title ?? part.title,
+    shortTitle: partTitlesEn[part.id]?.shortTitle ?? part.shortTitle,
+    description: partTitlesEn[part.id]?.description ?? part.description,
+    modules: part.modules.map((mod) => ({
+      ...mod,
+      title: moduleTitlesEn[mod.id] ?? mod.title,
+      lessons: mod.lessons.map((lesson) => ({
+        ...lesson,
+        title: lessonTitlesEn[lesson.id] ?? lesson.title,
+      })),
+    })),
+  }));
+}
+
 // Helper functions
-export function getAllLessons(): (Lesson & { partId: string; moduleId: string })[] {
+export function getAllLessons(locale: Locale = "fr"): (Lesson & { partId: string; moduleId: string })[] {
   const lessons: (Lesson & { partId: string; moduleId: string })[] = [];
-  for (const part of courseParts) {
+  for (const part of getCourseParts(locale)) {
     for (const module of part.modules) {
       for (const lesson of module.lessons) {
         lessons.push({ ...lesson, partId: part.id, moduleId: module.id });
@@ -714,8 +741,9 @@ export function getAllLessons(): (Lesson & { partId: string; moduleId: string })
   return lessons;
 }
 
-export function getLessonBySlug(partId: string, slug: string) {
-  const part = courseParts.find((p) => p.id === partId);
+export function getLessonBySlug(partId: string, slug: string, locale: Locale = "fr") {
+  const parts = getCourseParts(locale);
+  const part = parts.find((p) => p.id === partId);
   if (!part) return null;
   for (const module of part.modules) {
     const lesson = module.lessons.find((l) => l.slug === slug);
@@ -724,8 +752,8 @@ export function getLessonBySlug(partId: string, slug: string) {
   return null;
 }
 
-export function getAdjacentLessons(partId: string, slug: string) {
-  const allLessons = getAllLessons();
+export function getAdjacentLessons(partId: string, slug: string, locale: Locale = "fr") {
+  const allLessons = getAllLessons(locale);
   const idx = allLessons.findIndex((l) => l.partId === partId && l.slug === slug);
   return {
     prev: idx > 0 ? allLessons[idx - 1] : null,
@@ -733,6 +761,6 @@ export function getAdjacentLessons(partId: string, slug: string) {
   };
 }
 
-export function getTotalLessons(): number {
-  return getAllLessons().length;
+export function getTotalLessons(locale: Locale = "fr"): number {
+  return getAllLessons(locale).length;
 }

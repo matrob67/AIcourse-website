@@ -1,18 +1,23 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { courseParts } from "@/lib/course-data";
+import { getCourseParts } from "@/lib/course-data";
+import { t } from "@/lib/i18n";
+import type { Locale } from "@/lib/i18n";
 import SearchBar from "@/components/SearchBar";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 
 interface SidebarProps {
+  locale: Locale;
   onNavigate?: () => void;
 }
 
-export default function Sidebar({ onNavigate }: SidebarProps) {
+export default function Sidebar({ locale, onNavigate }: SidebarProps) {
   const pathname = usePathname();
   const [searchOpen, setSearchOpen] = useState(false);
+  const courseParts = useMemo(() => getCourseParts(locale), [locale]);
 
   // Global Cmd+K / Ctrl+K shortcut
   useEffect(() => {
@@ -29,7 +34,7 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
   const [openParts, setOpenParts] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
     for (const part of courseParts) {
-      if (pathname.startsWith(`/${part.id}`)) {
+      if (pathname.includes(`/${part.id}`)) {
         initial[part.id] = true;
       }
     }
@@ -40,7 +45,7 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
     for (const part of courseParts) {
       for (const mod of part.modules) {
         for (const lesson of mod.lessons) {
-          if (pathname === `/${part.id}/${lesson.slug}`) {
+          if (pathname === `/${locale}/${part.id}/${lesson.slug}`) {
             initial[mod.id] = true;
             break;
           }
@@ -60,15 +65,18 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
 
   return (
     <>
-      <SearchBar open={searchOpen} onClose={() => setSearchOpen(false)} />
+      <SearchBar open={searchOpen} onClose={() => setSearchOpen(false)} locale={locale} />
     <aside className="w-72 min-w-72 h-screen bg-sidebar-bg border-r border-sidebar-border flex flex-col overflow-hidden">
-      {/* Logo */}
+      {/* Logo + Language */}
       <div className="p-4 border-b border-sidebar-border">
-        <Link href="/" className="flex items-center gap-2 text-lg font-bold" onClick={onNavigate}>
-          <span className="text-2xl">🧠</span>
-          <span>AI State of the Art</span>
-        </Link>
-        <p className="text-xs text-muted mt-1">307 sections &middot; Du niveau 0 au SOTA</p>
+        <div className="flex items-center justify-between">
+          <Link href={`/${locale}`} className="flex items-center gap-2 text-lg font-bold" onClick={onNavigate}>
+            <span className="text-2xl">🧠</span>
+            <span>AI State of the Art</span>
+          </Link>
+          <LanguageSwitcher locale={locale} />
+        </div>
+        <p className="text-xs text-muted mt-1">{t(locale, "sidebar.tagline")}</p>
       </div>
 
       {/* Search trigger */}
@@ -81,7 +89,7 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
           <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
           </svg>
-          <span className="flex-1 text-left">Rechercher…</span>
+          <span className="flex-1 text-left">{t(locale, "sidebar.search")}</span>
           <kbd className="text-xs px-1 py-0.5 rounded hidden sm:inline-block" style={{ background: "var(--sidebar-bg)", border: "1px solid var(--sidebar-border)", fontFamily: "var(--font-mono)" }}>
             ⌘K
           </kbd>
@@ -96,7 +104,7 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
             <button
               onClick={() => togglePart(part.id)}
               className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold hover:bg-accent-light transition-colors ${
-                pathname.startsWith(`/${part.id}`) ? "bg-accent-light text-accent" : ""
+                pathname.includes(`/${part.id}`) ? "bg-accent-light text-accent" : ""
               }`}
             >
               <span>{part.icon}</span>
@@ -135,7 +143,7 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
                     {openModules[mod.id] && (
                       <div className="ml-3 border-l border-sidebar-border">
                         {mod.lessons.map((lesson) => {
-                          const href = `/${part.id}/${lesson.slug}`;
+                          const href = `/${locale}/${part.id}/${lesson.slug}`;
                           const isActive = pathname === href;
                           return (
                             <Link
